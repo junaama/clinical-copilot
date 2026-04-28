@@ -1,0 +1,88 @@
+<?php
+
+/**
+ * Controller for fee sheet justification AJAX requests
+ *
+ * @package   OpenEMR
+ * @link      https://www.open-emr.org
+ * @link      https://www.open-emr.org/wiki/index.php/OEMR_wiki_page OEMR
+ * @author    Kevin Yeh <kevin.y@integralemr.com>
+ * @copyright Copyright (c) 2013 Kevin Yeh <kevin.y@integralemr.com>
+ * @copyright Copyright (c) 2013 OEMR
+ * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
+ */
+
+require_once("../../../globals.php");
+require_once("fee_sheet_queries.php");
+
+use OpenEMR\Common\Acl\AccessDeniedHelper;
+use OpenEMR\Common\Acl\AclMain;
+use OpenEMR\Forms\FeeSheet\Review\CodeInfo;
+
+if (!AclMain::aclCheckCore('acct', 'bill')) {
+    AccessDeniedHelper::deny('Unauthorized access to fee sheet justification');
+}
+
+
+if (isset($_REQUEST['pid'])) {
+    $req_pid = $_REQUEST['pid'];
+}
+
+if (isset($_REQUEST['encounter'])) {
+    $req_encounter = $_REQUEST['encounter'];
+}
+
+if (isset($_REQUEST['task'])) {
+    $task = $_REQUEST['task'];
+}
+
+if (isset($_REQUEST['billing_id'])) {
+    $billing_id = $_REQUEST['billing_id'];
+}
+
+if ($task == 'retrieve') {
+    $retval = [];
+    $patient = issue_diagnoses($req_pid, $req_encounter);
+    $common = common_diagnoses();
+    $retval['patient'] = $patient;
+    $retval['common'] = $common;
+    $fee_sheet_diags = [];
+    $fee_sheet_procs = [];
+    fee_sheet_items($req_pid, $req_encounter, $fee_sheet_diags, $fee_sheet_procs);
+    $retval['current'] = $fee_sheet_diags;
+    echo json_encode($retval);
+    return;
+}
+
+if ($task == 'update') {
+    $skip_issues = false;
+    if (isset($_REQUEST['skip_issues'])) {
+        $skip_issues = $_REQUEST['skip_issues'] == 'true';
+    }
+
+    $diags = [];
+    if (isset($_REQUEST['diags'])) {
+        $json_diags = json_decode((string) $_REQUEST['diags']);
+    }
+
+    foreach ($json_diags as $diag) {
+        $new_diag = new CodeInfo($diag->{'code'}, $diag->{'code_type'}, $diag->{'description'});
+        if (isset($diag->{'prob_id'})) {
+            $new_diag->db_id = $diag->{'prob_id'};
+        } else {
+            $new_diag->db_id = null;
+            $new_diag->create_problem = $diag->{'create_problem'};
+        }
+
+        $diags[] = $new_diag;
+    }
+
+    $database->StartTrans();
+    create_diags($req_pid, $req_encounter, $diags);
+    if (!$skip_issues) {
+        update_issues($req_pid, $req_encounter, $diags);
+    }
+
+    update_justify($req_pid, $req_encounter, $diags, $billing_id);
+    $database->CompleteTrans();
+}
