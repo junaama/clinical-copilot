@@ -1,0 +1,33 @@
+{#
+  Co-Pilot iframe host. Rendered by public/embed.php after the SMART EHR
+  launch handshake has produced a launchCode and issuer URL.
+
+  Variables expected:
+    - copilot_app_url     The absolute URL of the Co-Pilot frontend.
+    - launch_code         The serialized SMART launch token.
+    - issuer              The OpenEMR FHIR base URL (iss + aud).
+    - patient_uuid        The patient UUID context for the launch.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Clinical Co-Pilot</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; background: #fff; }
+        iframe.copilot { width: 100%; height: 100vh; border: 0; }
+    </style>
+</head>
+<body>
+    {% set qs = '?iss=' ~ issuer|url_encode
+        ~ '&launch=' ~ launch_code|url_encode
+        ~ '&aud=' ~ issuer|url_encode
+        ~ '&patient=' ~ patient_uuid|url_encode
+        ~ '&surface=panel' %}
+    <iframe class="copilot"
+            src="{{ copilot_app_url|trim('/', 'right') ~ '/launch' ~ qs }}"
+            title="Clinical Co-Pilot"
+            allow="clipboard-write"></iframe>
+</body>
+</html>
