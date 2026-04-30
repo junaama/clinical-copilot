@@ -25,7 +25,11 @@ _handler_settings_fingerprint: str = ""
 
 
 def _fingerprint(settings: Settings) -> str:
-    return f"{settings.langfuse_host}|{settings.langfuse_public_key}|{settings.langfuse_project}"
+    return (
+        f"{settings.langfuse_host}|"
+        f"{settings.langfuse_public_key.get_secret_value()}|"
+        f"{settings.langfuse_project}"
+    )
 
 
 def get_callback_handler(settings: Settings | None = None) -> Any | None:
@@ -48,8 +52,8 @@ def get_callback_handler(settings: Settings | None = None) -> Any | None:
 
     # Apply env vars so the SDK's get_client() picks them up.
     os.environ.setdefault("LANGFUSE_HOST", settings.langfuse_host)
-    os.environ.setdefault("LANGFUSE_PUBLIC_KEY", settings.langfuse_public_key)
-    os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key)
+    os.environ.setdefault("LANGFUSE_PUBLIC_KEY", settings.langfuse_public_key.get_secret_value())
+    os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key.get_secret_value())
 
     try:
         from langfuse.langchain import CallbackHandler
