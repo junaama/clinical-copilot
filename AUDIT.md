@@ -3,7 +3,9 @@
 **Project:** AgentForge / Clinical Co-Pilot
 **Scope:** OpenEMR fork at this repo, deployed at `https://openemr-production-c5b4.up.railway.app`.
 **Audit method:** Five parallel read-only audits — Security, Performance, Architecture, Data Quality, Compliance. Findings below are synthesized; full per-domain detail (≈250 findings, every one cited to a file path and line number) lives in [`agentforge-docs/audit-raw/`](./audit-raw/).
-**Severity legend:** **CRITICAL** = blocks real-PHI deployment or makes the agent untrustworthy / unusable. **HIGH** = serious gap; ship-blocker for production. **MEDIUM** / **LOW** = listed in the raw files, summarized here only when relevant.
+**Severity legend:** **CRITICAL** = blocks real-PHI deployment or makes the agent untrustworthy / unusable. 
+**HIGH** = serious gap; ship-blocker for production. 
+**MEDIUM** / **LOW** = listed in the raw files, summarized here only when relevant.
 
 ---
 
@@ -22,7 +24,7 @@ OpenEMR is a real, large EHR. Its substantive business logic is roughly 100 k LO
 7. **Same clinical concept exists in multiple shapes.** `lists` is one table discriminated only by a free-text `type` (problem / allergy / medication / surgery / device / dental). Medications also live in `prescriptions`; both must be UNIONed and deduped on `lists_medication.prescription_id`. Diagnoses are stored as a delimited string (`ICD10:E11.9;SNOMED-CT:73211009`), not rows. Soft-delete uses eight different patterns. The agent must always quote the row+column it cited and never paper over inconsistency. *([Data Quality CRITICAL](#4-data-quality))*
 8. **The agent layer adds new compliance surface.** A new `agent_audit` / `agent_message` table pair is required (the existing `log` cannot represent prompt/response/model/decision). Minimum 4 net-new BAAs (LLM, embeddings, vector DB, observability). Existing patient delete cascade and audit purge UI must be patched to refuse deletion of agent-audit rows inside the retention window. *([Agent Design](#6-what-this-means-for-the-ai-agent-design))*
 
-**What we keep:** SQL injection surface is genuinely small (parameter binding is consistent), `CsrfUtils` itself is correctly built (the gap is coverage), OAuth2 + SMART-on-FHIR is production-ready, the event system gives clean integration hooks, and the codebase has a working audit-log primitive we can extend rather than rebuild. The agent should be a **custom module subscribing to events**, not a sidecar.
+**What we keep:** SQL injection surface is genuinely small (parameter binding is consistent), `CsrfUtils` itself is correctly built (the gap is coverage), OAuth2 + SMART-on-FHIR is production-ready (US Core 3.1.0/7.0.0, SMART v1/v2, PKCE S256, Inferno-tested in CI), the event system gives clean integration hooks, and the codebase has a working audit-log primitive we can extend rather than rebuild. The agent is a **separate SMART on FHIR app** that launches from the chart and reads patient data over OpenEMR's existing FHIR endpoints — no parallel data API, no upstream fork.
 
 ---
 
@@ -328,13 +330,13 @@ This section is the bridge to ARCHITECTURE.md. Every item below is something the
 
 ### 6.1 Architecture shape
 
-**Decision (carried to ARCHITECTURE.md):** the agent is **a custom OpenEMR module** at `interface/modules/custom_modules/oe-module-clinical-copilot/` with three pieces:
+**Decision (carried to ARCHITECTURE.md):** the agent is a **SMART on FHIR app** — a separate service registered as an OAuth2 client in OpenEMR. The hospitalist launches it from the chart sidebar; OpenEMR initiates a SMART EHR launch that hands the agent a one-time launch token, the patient ID, and the user's identity; the service exchanges the launch token for a scoped OAuth2 access token and reads the chart over standard FHIR R4 US Core endpoints. The chat UI renders inside an iframe in the chart window.
 
-1. A `Bootstrap` that subscribes to `Patient\Summary\Card\RenderEvent`, `Main\Tabs\RenderEvent::EVENT_BODY_RENDER_PRE`, and `RestApiCreateEvent`.
-2. A new REST controller `src/RestControllers/CopilotRestController.php` registered via `RestApiCreateEvent::addToRouteMap('POST /api/copilot/chat', …)` and `'POST /api/copilot/tools/:tool_name'`.
-3. A frontend chat panel injected via `Main\Tabs\RenderEvent::EVENT_BODY_RENDER_POST`, reading `top.csrf_token_js` / `top.api_csrf_token_js` for AJAX auth.
+**Why this and not a custom OpenEMR PHP module:** an earlier draft (and the v1 architecture) proposed a custom module at `interface/modules/custom_modules/oe-module-clinical-copilot/` with a parallel `CopilotRestController` and event-subscribed UI injection. That path was rejected on review for three reasons: (1) it locks the agent into OpenEMR's PHP runtime and forces the agent ecosystem (LangGraph, langchain-anthropic, LangSmith) to live somewhere it doesn't belong; (2) it builds a parallel data API alongside FHIR, which fragments the security model and forks us away from upstream OpenEMR; (3) it loses portability — a SMART on FHIR app can be pointed at any FHIR-compliant EHR with no architectural change. SMART EHR launch is the same pattern Epic, Cerner, and the major EHR vendors expose for third-party apps; OpenEMR's implementation is production-ready and Inferno-tested in CI.
 
-This avoids the SMART-on-FHIR limitation (no encounter free-text, no proprietary tables) while keeping the agent inside OpenEMR's audit and security boundary.
+**What stays inside OpenEMR (optional thin module):** a small companion module is recommended but not required. Its only jobs are (1) injecting the "Open Co-Pilot" launch button into the chart sidebar and (2) hosting the new `agent_audit` / `agent_message` tables alongside the existing `log` so compliance has a single chronological record. This module hosts no data endpoints — all chart reads go through the standard FHIR layer.
+
+**FHIR coverage tradeoff.** US Core does not expose every OpenEMR proprietary table or every encounter free-text field. Genuine gaps are roadmapped — contributed back as FHIR profile extensions or accepted as degraded coverage in week 1 with a clear path to fix. This is the cost of standards compliance and the reason the decision is documented as a tradeoff in ARCHITECTURE.md §16, not as a free win.
 
 ### 6.2 Verification & trust (the AgentForge "Verification System" requirement)
 
@@ -347,52 +349,57 @@ Per the project brief: *"every claim the agent makes must be traceable back to a
 
 ### 6.3 Authorization (the missing "patient-scoping")
 
-The audit's #1 critical finding is that OpenEMR has no patient-level ACL. The agent cannot leak this gap further. Mitigation:
+The audit's #1 critical finding is that OpenEMR has no patient-level ACL. SMART scopes inherit this — the OAuth access token gates *role*, not *patient*. The agent service cannot leak that gap further. Mitigation:
 
-- Every tool call goes through `RestConfig::request_authorization_check($section, $value)` *and* a new patient-scope check that the agent module owns: `assertUserAuthorizedForPatient($userId, $pid)`. The check sources from the user's panel/care-team membership (`care_team_member`, `care_teams`), the user's facility scoping (when `gbl_fac_warehouse_restrictions=1`), and an explicit allow-list configurable per tenant.
-- Sensitive-encounter ACL (`AclExtended.php:54`, `sensitivities`) must be respected by the RAG layer. If a patient encounter is tagged `sensitivity=high`, the agent's retriever must NOT return that encounter for users without the corresponding grant.
-- Break-glass: `BreakglassChecker` (`src/Common/Logging/BreakglassChecker.php`) is reused. If the calling user is in the breakglass group, every agent audit row gets `breakglass=true` and a different log event type so the post-hoc review can pull just the breakglass-mode agent activity.
+- **Patient-scope middleware in the agent service.** Before any FHIR call, the Co-Pilot service runs its own check: is the requesting user a member of the launching patient's care team (derived from the `care_team_member` / `care_teams` relationships OpenEMR already records)? If not, does the user have a facility-scoped grant (`gbl_fac_warehouse_restrictions=1`) or active break-glass? Failure is a hard refusal, audited as `decision='denied_authz'`. The check runs in the agent service, not in OpenEMR — the SMART access token is necessary but not sufficient.
+- **Defense in depth at the tool layer.** Every tool call independently validates its `patient_id` parameter against the patient context bound to the active SMART access token. A mismatch returns `{ok: false, error: 'patient_context_mismatch'}` and never reaches the FHIR layer. This catches stale-context bleeds across patient switches even if the conversation-boundary rules fail. (See ARCHITECTURE.md §7.)
+- **Sensitive-encounter ACL.** Encounters tagged `sensitivity=high` (psychiatry, SUD, HIV) per `AclExtended.php:54-69` are filtered out in the agent service *before* responses enter the LLM context, so sensitive content never appears in a prompt, a token bill, or a LangSmith trace.
+- **Break-glass.** `BreakglassChecker` (`src/Common/Logging/BreakglassChecker.php`) is reused. When break-glass is active, the agent prompts the user for clinical justification, stores it in the audit row, and tags every subsequent tool call with `breakglass=true` and a distinct event type. Compliance review can pull break-glass sessions in isolation.
 
 ### 6.4 Observability (the AgentForge "Observability" requirement)
 
 Project brief minimum: *what did the agent do, in what order; how long did each step take; did any tools fail; how many tokens, what cost.* Layered design:
 
-- **Existing audit log**: every agent-initiated DB read/write goes through services that already audit via `EventAuditLogger`. Don't bypass.
-- **New `agent_audit` table** (full schema in `audit-raw/COMPLIANCE.md` §"What the AI Agent Layer Adds"): one row per tool call with `session_id`, `user_id`, `patient_id`, `turn_number`, `tool_name`, `tool_input_redacted`, `tool_output_redacted`, `prompt_token_count`, `completion_token_count`, `model`, `provider`, `latency_ms`, `decision`, `escalation_reason`, `created_time`, `checksum`. Linked back to a parent `log` row so the existing chain extends.
-- **Separate `agent_message` table** for raw prompt/response payloads, encrypted with `CryptoGen::encryptStandard`, retention-pruned independently (see 6.6 below).
-- **External tracing** via Langfuse self-hosted (no third-party BAA needed) for the agent loop, with PII scrubbing on the outbound side.
+- **Existing audit log**: every FHIR call the agent makes carries the SMART access token, hits OpenEMR's existing FHIR layer, and is logged via `EventAuditLogger` like any other API call — the agent does not bypass OpenEMR's audit chain.
+- **New `agent_audit` table** (full schema in `audit-raw/COMPLIANCE.md` §"What the AI Agent Layer Adds"): one row per tool call with `session_id`, `user_id`, `patient_id`, `turn_number`, `tool_name`, `tool_input_redacted`, `tool_output_redacted`, `prompt_token_count`, `completion_token_count`, `model`, `provider`, `latency_ms`, `decision`, `escalation_reason`, `workflow_id`, `classifier_confidence`, `created_time`, `checksum`. Linked back to a parent `log` row so the existing chain extends.
+- **Separate `agent_message` table** for raw prompt/response payloads, encrypted at the agent service before write, retention-pruned independently (see 6.6 below).
+- **External tracing.** **MVP: LangSmith** — fastest path to "I can see what the agent did," native LangGraph integration, synthetic-data only so no PHI leaves the boundary. **Pre-clinical-go-live: swap to self-hosted Langfuse** to drop the third-party dependency before any real PHI flows through. The swap point is on the roadmap (ARCHITECTURE.md §18).
 
 ### 6.5 Performance budget
 
 From the latency back-of-envelope in §2: a "minimal" Patient + 5 active resources fetch is ~600 ms – 3 s warm. The agent must therefore:
 
-- **Cache aggressively at the agent layer** (not at OpenEMR's). Per-session cache for patient-context data that doesn't change in a 90-second window. App-level cache (Redis) for `list_options`, code-system lookups, translation strings.
-- **Pre-fetch on `Patient\Summary\Card\RenderEvent`**: when a clinician opens a chart, the module fires async fetches of the patient's active problems, meds, and recent encounters before the clinician asks. The chat opens with that context already loaded.
-- **Avoid CCDA paths entirely.** Cold-start CCDA generation is 5–10 s synchronous. The agent reads structured tables directly via `*Service` classes (or new lighter-weight services) and synthesizes context in the LLM.
-- **Skip the audit chain for the agent's *own* read queries** by using `sqlStatementNoLog` or `ExecuteNoLog` *only on internal tool execution* — but every TOOL CALL itself produces an `agent_audit` row, so we trade fine-grained SELECT auditing for explicit tool-call auditing. This is a defensible compliance position because the agent's tool-call boundary is what HIPAA actually wants logged.
-- **Mitigate the bootstrap cost** by enabling opcache + realpath-cache in production php.ini and considering a long-running worker for the agent endpoint (so `composer/autoload.php` is loaded once).
+- **Cache aggressively at the agent service**, not inside OpenEMR. Per-session cache for patient-context data that doesn't change in a 90-second window (problem list, demographics, active meds). The agent service runs its own Redis or in-process cache keyed by `(conversation_id, fhir_ref)`.
+- **Pre-fetch on SMART launch.** When the clinician clicks "Open Co-Pilot" and OpenEMR initiates the SMART EHR launch, the agent service kicks off async FHIR fetches for the launching patient's active problems, active meds, and recent encounters before the chat UI has finished rendering. The chat opens with context already loaded.
+- **Two-stage triage flow for UC-1.** A naive 7-call-per-patient × 18-patient brute force is 126 FHIR calls per turn — impossible against OpenEMR's stock FHIR layer. Stage 1 fires lightweight `_summary=count` change-signal probes in parallel (4 queries × 18 patients ≈ ~1–2 s wall clock); Stage 2 deep-fetches only the patients flagged by stage 1. (Full design in ARCHITECTURE.md §10.)
+- **Avoid CCDA paths entirely.** Cold-start CCDA generation is 5–10 s synchronous. The agent uses FHIR R4 reads, never `/ccda` or the legacy CCDA service.
+- **FHIR `_include` to batch related resources** — a single `Encounter?_include=Encounter:diagnosis` round-trip beats two sequential calls.
+- **Upstream PRs against OpenEMR's slowest FHIR paths** (the N+1 patterns flagged in §2) are a roadmapped contribution path. Forking is rejected — it forfeits the standards-compliance benefit that drove the SMART on FHIR decision.
 
 ### 6.6 New compliance surface introduced by the agent
 
 The full schema specs and BAA inventory are in `audit-raw/COMPLIANCE.md`. Headlines:
 
-- **New tables**: `agent_audit` (metadata, 6-year retention), `agent_message` (raw prompts/responses, encrypted, 30-90 day hot + encrypted cold archive to S3-with-Object-Lock for the rest of the 6 years).
+- **New tables**: `agent_audit` (metadata, 6-year retention), `agent_message` (raw prompts/responses, encrypted, 30–90 day hot + encrypted cold archive to S3-with-Object-Lock for the rest of the 6 years). These live alongside OpenEMR's existing audit tables; the optional thin launch-and-audit module hosts them so they share the OpenEMR backup boundary.
 - **Patch the existing audit-purge UI** (`interface/main/backup.php:1045-1056`) to refuse deletion of agent-audit rows inside retention. Add a daily cron that verifies the sha3-512 chain on `log_comment_encrypt` (the verifier that doesn't exist today). Both are out of scope for week-1 MVP but go on the roadmap.
-- **New BAAs needed (minimum 4)**: LLM provider (Anthropic/OpenAI/Bedrock/Vertex), embeddings (often same vendor), vector store (or self-host Postgres+pgvector), observability (Langfuse self-hosted = no BAA needed). Optional: error tracker (Sentry SaaS + scrub-before-send, OR self-host).
-- **Fail-closed BAA check at startup**: agent module reads `agent_provider_baa` config and refuses to dispatch if the configured provider has no current BAA effective today. Hard-fails the startup; logs `agent_audit.decision='blocked_no_baa'`.
-- **PHI minimization passes** on prompt input (strip free-text fields the user did not explicitly include) and output filtering (a PHI-leak detector to catch hallucinated PHI from another patient if RAG retrieval mis-fires).
+- **BAAs needed for the MVP architecture**: **Anthropic** (LLM inference — Sonnet, Opus, Haiku), and **LangSmith** for observability during the synthetic-data MVP. Pre-clinical-go-live, LangSmith is replaced by self-hosted Langfuse and that BAA goes away. **Not in MVP**: no embeddings vendor, no managed vector store (week-1 retrieval is time-windowed FHIR queries, not semantic — see ARCHITECTURE.md §16). **Documented escape hatch**: AWS Bedrock for provider failover if Anthropic-only resilience becomes insufficient.
+- **Fail-closed BAA check at startup**: the agent service reads its `agent_provider_baa` config and refuses to dispatch if the configured provider has no current BAA effective today. Hard-fails the startup; logs `agent_audit.decision='blocked_no_baa'`.
+- **PHI minimization at the wrapper layer.** Tool wrappers run a fixed field allowlist per FHIR resource type (ARCHITECTURE.md §15) — MRN, SSN, full address, telecom never enter the prompt; only the demographics relevant to clinical workflow (name, DOB, gender) do. Free-text bodies are length-capped (4 k tokens for `DocumentReference`, 1 k for `Observation.note`) with a `[truncated]` marker; the full text remains accessible to the clinician via the FHIR ref but is not in the prompt. Net effect: ~30–50% prompt-token reduction vs raw FHIR JSON, plus far less PHI leaving the boundary.
 
 ### 6.7 Demo data
 
-Loading the test fixtures gets us 2 allergies + 1 care plan + 1 encounter across 2 patients — not enough. Recommendation for week 1: generate Synthea-derived synthetic patient records and import them via the FHIR API into the deployed instance. This gives the agent realistic problems / meds / labs / encounters at zero PHI risk and zero BAA scope. USERS.md will pick a single demo persona (likely Eduardo Perez, pid=4, fixture-loaded) and one or two synthetic patients.
+Loading the test fixtures gets us 2 allergies + 1 care plan + 1 encounter across 2 patients — not enough for any of the use cases in USERS.md. Recommendation for week 1: generate Synthea-derived synthetic patient records and import them via OpenEMR's standard FHIR endpoints — the same endpoints the agent reads from. This gives the agent realistic problems, meds, labs, encounters, and notes at zero PHI risk and zero BAA scope, and exercises the same FHIR write+read paths a real deployment would. USERS.md picks a single demo persona plus a small panel of Synthea-generated patients to hit the cross-patient triage flow (UC-1).
 
 ### 6.8 Failure modes the agent must handle
 
-- **Tool failure**: every tool returns `{ok: bool, data?, error?, evidence?}`. On `ok=false` the verification layer surfaces the failure to the clinician with the tool name; the LLM does not silently retry on patient-data tools (only on non-PHI ones).
-- **Empty data**: the agent says "no record found in `<source>`" and surfaces *which sources it checked* — not "the patient has no allergies." This is the data-quality CRITICAL #1 rule applied to absences.
-- **LLM provider 5xx / timeout**: agent surfaces "AI temporarily unavailable" without failing the parent chart view. Module's events listeners must not throw.
-- **BAA expiry**: hard-fail at startup as above.
-- **Refusal / safety-block from provider**: log `decision='refused'`, surface to clinician with the refusal reason, do not attempt to bypass.
+- **Tool failure**: every tool returns `{ok, rows, sources_checked, error, latency_ms}`. On `ok=false` the failure is surfaced to the clinician with the tool name; the LLM does not silently retry on patient-data tools.
+- **Empty data**: the agent says "no record found in `<sources_checked>`" and enumerates which sources it checked — never "the patient has no allergies" without naming where it looked. This is the data-quality CRITICAL #1 rule applied to absences.
+- **Patient-context mismatch at the tool layer**: any tool call whose `patient_id` parameter doesn't match the patient bound to the active SMART access token returns `{ok: false, error: 'patient_context_mismatch'}` and audits `decision='denied_authz'`. This is the defense-in-depth check that catches stale-context bleeds across patient switches even if the conversation-boundary rules upstream fail.
+- **Classifier low confidence**: the Haiku workflow classifier emits `{workflow_id, confidence}`; below the 0.8 threshold the agent routes to a clarify node and asks the user a disambiguating question rather than guessing the workflow. The `workflow_id` and `confidence` are written to `agent_audit` per turn so the threshold can be tuned from real usage.
+- **LLM provider 5xx / timeout**: agent surfaces "AI temporarily unavailable" without failing the parent OpenEMR chart view. The iframe contains the failure; the chart underneath stays alive.
+- **SMART access token expiry mid-conversation**: agent surfaces "session expired, please re-open the Co-Pilot from the chart" rather than silently auto-refreshing. Re-launch produces a new `conversation_id`; conversations cannot be merged across launches (see ARCHITECTURE.md §7).
+- **BAA expiry**: hard-fail at startup; logs `agent_audit.decision='blocked_no_baa'`.
+- **Refusal / safety-block from provider**: log `decision='refused'`, surface to clinician with the provider's reason verbatim, do not attempt to bypass.
 
 ---
 
