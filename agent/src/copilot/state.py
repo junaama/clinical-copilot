@@ -8,7 +8,7 @@ bookkeeping (fetched refs, regen count, feedback, decision label).
 from __future__ import annotations
 
 import operator
-from typing import Annotated
+from typing import Annotated, Any
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
@@ -33,3 +33,12 @@ class CoPilotState(TypedDict, total=False):
     regen_count: int
     verifier_feedback: str
     decision: str
+
+    # Categories for fetched Observation refs, populated by the agent/triage
+    # nodes during synthesis. Used to disambiguate ``vitals`` vs ``labs``
+    # citation cards (CHAT-API-CONTRACT.md).
+    observation_categories: dict[str, str]
+
+    # Structured wire block emitted by the synthesis node, carried through
+    # to server.py so it can be returned in ChatResponse.
+    block: dict[str, Any]
