@@ -73,8 +73,9 @@ It is **not**: a clinical decision support system, a recommendation engine, an o
 └──────────────────────────────────────────────────────────────────┘
 
 Out-of-band:
-   Anthropic API   ◄── LangGraph LLM calls (Sonnet, Opus, Haiku)
-   LangSmith       ◄── traces, tokens, latencies, costs
+   Anthropic API         ◄── LangGraph LLM calls (Sonnet, Opus, Haiku)
+   Langfuse self-hosted  ◄── traces, tokens, latencies, costs
+                              (runs as a Railway service alongside the others)
 ```
 
 The Co-Pilot is a SMART on FHIR app. It runs as its own service, registered as an OAuth2 client in OpenEMR. The hospitalist launches it from the chart; the launch hands the agent a patient context and an access token; the agent uses the token to read the chart over standard FHIR endpoints. OpenEMR's existing SMART implementation is production-ready, has Inferno conformance tests in CI, and is the same API surface large EHR vendors expose. We add no parallel data API.
@@ -87,12 +88,12 @@ A small companion module inside OpenEMR is optional but recommended. Its only jo
 |---|---|---|
 | **Anthropic API** | LLM inference. Three models used: Sonnet 4.6 for tool-call planning, Opus 4.7 for final synthesis, Haiku 4.5 for cheap classifiers (e.g., "is this a single-patient question or a list-wide one?"). | Strongest tool-use model class in 2026. One vendor, one BAA. Bedrock is the documented multi-vendor failover path if we ever need resilience. |
 | **LangGraph** (library, runs in our Python service) | The agent state machine — manages the multi-turn loop, parallel tool dispatch, retries, verification regeneration. | Stateful conversation across turns, parallel tool calls when the planner emits more than one, mature ecosystem. |
-| **LangSmith** | Observability for the agent loop — every turn's tool calls, latencies, token counts, costs, prompts and responses, retries, verification decisions are visible as a trace. | Native LangGraph integration, fastest path to "I can see what the agent did." Synthetic-data MVP only; pre-clinical-go-live we swap to self-hosted Langfuse to drop the third-party dependency. |
+| **Langfuse** (self-hosted) | Observability for the agent loop — every turn's tool calls, latencies, token counts, costs, prompts and responses, retries, verification decisions are visible as a trace. Also hosts the eval datasets and experiment results (see EVAL.md). | Self-hosted from day 1 to keep all traces inside our infrastructure boundary; no third-party PHI exposure even on synthetic data; no LangSmith→Langfuse migration tax later. Runs as a Railway service with its own Postgres. Native LangChain/LangGraph integration. |
 | **Synthea** (offline tool) | Generates synthetic patient data with realistic encounter histories. Used once, before the demo, to populate the OpenEMR FHIR store. | OpenEMR's stock seed has 14 patients and zero clinical rows. Synthea exports FHIR bundles that import directly via the same FHIR endpoints the agent reads. |
-| **Railway** | Hosting for OpenEMR + MariaDB + the Co-Pilot service. | Already chosen for the OpenEMR deploy; the agent service runs as a third app in the same project; same internal network, no cross-cloud egress, single dashboard. |
-| **Postgres** (Railway-managed) | LangGraph checkpointer storage — holds the multi-turn conversation state across turns. | LangGraph's officially supported checkpointer backend. Separate from OpenEMR's MariaDB so agent state doesn't pollute the EHR database. |
+| **Railway** | Hosting for OpenEMR + MariaDB + the Co-Pilot service + Langfuse + the two Postgres instances. | Already chosen for the OpenEMR deploy; everything runs on the same internal network, no cross-cloud egress, single dashboard. |
+| **Postgres** (Railway-managed, ×2) | (1) LangGraph checkpointer — multi-turn conversation state. (2) Langfuse storage — traces, datasets, scores. | Two separate instances because the data has different lifecycles (conversation state is session-scoped; Langfuse data is project-lifetime audit + analytics). Both use LangGraph's / Langfuse's officially supported Postgres backends. |
 
-OpenEMR itself is the seventh service in the system, but it's the project we're building inside, not a third-party dependency.
+OpenEMR itself is part of the system, but it's the project we're building inside, not a third-party dependency.
 
 ## 6. How the agent is embedded in OpenEMR
 
@@ -169,7 +170,7 @@ class Row:
     raw_excerpt: dict             # field-allowlisted excerpt (see §15)
 ```
 
-The LLM sees `fhir_ref`, `resource_type`, and `fields`. The `raw_excerpt` is for downstream debugging in LangSmith traces, not for the prompt.
+The LLM sees `fhir_ref`, `resource_type`, and `fields`. The `raw_excerpt` is for downstream debugging in Langfuse traces, not for the prompt.
 
 ## 9. End-to-end request flow
 
@@ -217,7 +218,7 @@ Step by step, what actually moves:
 
 12. **Response to the browser.** The chat UI renders the brief. Citations are interactive — clicking one opens the source record in the OpenEMR chart.
 
-13. **LangSmith trace.** All of the above is captured as a single trace, including each tool call's latency and each model call's tokens and cost. The engineer debugging a regression can see exactly what happened.
+13. **Langfuse trace.** All of the above is captured as a single trace, including each tool call's latency and each model call's tokens and cost. The engineer debugging a regression can see exactly what happened.
 
 A follow-up question — "tell me more about the 3 AM hypotensive episode" — runs the same pipeline against the conversation state, with most tool calls cached and the synthesis scoped to the relevant slice.
 
@@ -481,7 +482,7 @@ FHIR resources are large. A full `Patient` bundle includes addresses, identifier
 
 **Free-text length caps.** A nursing note can be thousands of words. Wrappers truncate at a per-resource cap (4 k tokens for `DocumentReference.body`, 1 k tokens for `Observation.note`) and append a `[truncated]` marker. The full text remains available via the `fhir_ref` for the clinician to verify directly in OpenEMR; the agent's context only carries the truncated head.
 
-**Identifier suppression.** The wrappers do not include MRN, SSN, full address, or telecom fields in the prompt context. Demographics relevant to clinical workflow (name, DOB, gender) are kept. Identifiers go in the `raw_excerpt` field of the row (visible only in LangSmith traces, not in the prompt).
+**Identifier suppression.** The wrappers do not include MRN, SSN, full address, or telecom fields in the prompt context. Demographics relevant to clinical workflow (name, DOB, gender) are kept. Identifiers go in the `raw_excerpt` field of the row (visible only in Langfuse traces, not in the prompt).
 
 **Why.** Privacy-by-design (don't pass PHI we don't need) and cost-by-design (~30–50% prompt-token reduction vs raw FHIR Bundle JSON, compounding across 11 tools and 5–15 turns per session).
 
@@ -491,7 +492,7 @@ FHIR resources are large. A full `Patient` bundle includes addresses, identifier
 
 **Free-text coverage.** Some clinical free text in OpenEMR doesn't map cleanly to FHIR US Core resources today. We use `DocumentReference`, `Observation.note`, and `ClinicalImpression` where they fit. Genuine gaps are roadmapped — either contributed back as FHIR profile extensions or accepted as degraded coverage in week 1 with a clear path to fix.
 
-**Two services to operate.** OpenEMR is one deploy, the Co-Pilot service is another, and they communicate over the network. The cost is operational complexity. The benefit is that the agent's runtime can use Python's mature agent ecosystem (LangGraph, LangSmith, langchain-anthropic) without forcing PHP into a role it isn't built for, and the agent can be detached and pointed at a different FHIR-compliant EHR with no architectural change.
+**Two services to operate.** OpenEMR is one deploy, the Co-Pilot service is another, and they communicate over the network. The cost is operational complexity. The benefit is that the agent's runtime can use Python's mature agent ecosystem (LangGraph, Langfuse, langchain-anthropic) without forcing PHP into a role it isn't built for, and the agent can be detached and pointed at a different FHIR-compliant EHR with no architectural change.
 
 **Single LLM vendor.** Anthropic-only for the MVP. The cost is no failover when Anthropic has an outage. The benefit is one BAA, one prompt-engineering surface, one eval suite. Bedrock is the documented escape hatch when production resilience matters more than simplicity.
 
@@ -511,10 +512,10 @@ FHIR resources are large. A full `Patient` bundle includes addresses, identifier
 ## 18. Open questions
 
 - **Free-text gaps.** A small list of OpenEMR free-text fields don't have a clean FHIR US Core mapping today. Two paths: contribute upstream FHIR profile extensions, or accept degraded coverage. Need to enumerate the gaps and decide before final submission.
-- **LangSmith → Langfuse swap timing.** LangSmith is fastest to wire; self-hosted Langfuse is required before any real PHI. Currently roadmapped between MVP and production rollout — exact trigger to be defined.
 - **N+1 paths in OpenEMR's FHIR services.** Audit identified specific bottlenecks. Decision pending: contribute upstream PRs (slow but right) versus run a forked OpenEMR with the patches applied (fast but a maintenance burden).
 - **Iframe vs separate window for the SMART app.** Iframe gives tighter chart integration; separate window gives more screen real estate. User testing required.
 - **`Consent` resource enforcement timing.** Tied to OpenEMR upstream maturity; see §14.
+- **Langfuse v2 → v3 migration.** Self-hosted Langfuse v2 is the MVP choice (single Postgres, simpler ops). v3 adds Clickhouse + Redis + S3 for analytics scale; the migration trigger is when v2 hits the trace-volume ceiling (millions of traces).
 
 ---
 
@@ -540,10 +541,191 @@ Four tiers run independently. Smoke (5–10 cases, every push) verifies the agen
 
 ## Appendix C — Scaling at higher tiers
 
-**100 users (pilot).** Current infrastructure: OpenEMR + MariaDB + Co-Pilot service + Postgres for agent state. One Anthropic account. LangSmith.
+**100 users (pilot).** Current infrastructure: OpenEMR + MariaDB + Co-Pilot service + Postgres (LangGraph state) + Langfuse + Postgres (Langfuse storage). One Anthropic account.
 
-**1 000 users (single hospital).** Add Redis for session caching, scale the Co-Pilot service horizontally behind a load balancer, enable Anthropic prompt caching to drop repeated-prompt costs, add a MariaDB read replica for OpenEMR's read-heavy FHIR paths.
+**1 000 users (single hospital).** Add Redis for session caching, scale the Co-Pilot service horizontally behind a load balancer, enable Anthropic prompt caching to drop repeated-prompt costs, add a MariaDB read replica for OpenEMR's read-heavy FHIR paths. Langfuse v2 still sufficient at this volume.
 
-**10 000 users (multi-hospital tenant).** Migrate off Railway to AWS. Aurora MySQL replaces MariaDB, ElastiCache Redis, ECS Fargate for both services, dedicated LLM gateway with provider failover, self-hosted Langfuse replaces LangSmith. Vector store likely added if longitudinal queries are in scope by then.
+**10 000 users (multi-hospital tenant).** Migrate off Railway to AWS. Aurora MySQL replaces MariaDB, ElastiCache Redis, ECS Fargate for the services, dedicated LLM gateway with provider failover. Langfuse migrates v2 → v3 (Clickhouse + Redis + S3) for trace-analytics scale. Vector store likely added if longitudinal queries are in scope by then.
 
-**100 000 users (multi-region SaaS).** Active-active multi-region. Async tool dispatch via a queue. Bedrock provisioned throughput for predictable LLM cost and latency. Per-region observability stack. Sensitive-encryption with separate keys per classification.
+**100 000 users (multi-region SaaS).** Active-active multi-region. Async tool dispatch via a queue. Bedrock provisioned throughput for predictable LLM cost and latency. Per-region Langfuse instances. Sensitive-encryption with separate keys per classification.
+
+---
+
+# Architecture Diagrams
+
+Three diagrams, each with one focus. They visualize the system described in `ARCHITECTURE.md`.
+
+---
+
+## 1. System overview
+
+Components, data stores, external services, and the calls between them.
+
+```mermaid
+flowchart TB
+    subgraph Browser["Hospitalist's browser"]
+        Chart["OpenEMR chart UI"]
+        Iframe["Co-Pilot chat iframe"]
+    end
+
+    subgraph CoPilot["Co-Pilot service — Python"]
+        direction TB
+        LG["LangGraph agent loop<br/>classifier · planner ·<br/>tools · verifier · synthesis"]
+        Tools["Typed Python tools<br/>~12 functions"]
+        Verifier["Verifier<br/>cite-or-refuse"]
+        Audit["Audit writer"]
+    end
+
+    subgraph OpenEMR["OpenEMR + MariaDB"]
+        FHIR["FHIR R4 endpoints<br/>SMART OAuth2"]
+        DB[("MariaDB<br/>+ agent_audit<br/>+ agent_message")]
+        Module["Thin launch module<br/>button + audit table only"]
+    end
+
+    subgraph External["External services"]
+        Anthropic{{"Anthropic API<br/>Sonnet · Opus · Haiku"}}
+        LangSmith{{"LangSmith<br/>traces"}}
+        PG[("Postgres<br/>LangGraph checkpointer")]
+    end
+
+    Chart -->|"SMART EHR launch<br/>(user, patient, scopes)"| Iframe
+    Iframe -->|"POST /api/chat"| LG
+    LG --> Tools
+    Tools -->|"FHIR R4 GETs<br/>SMART bearer token"| FHIR
+    FHIR --> DB
+    LG -->|"LLM calls"| Anthropic
+    LG --> Verifier
+    Verifier -.->|"regenerate up to 2x"| LG
+    Verifier --> Audit
+    Audit -->|"agent_audit row"| DB
+    Audit -->|"agent_message<br/>encrypted"| DB
+    LG -->|"checkpoint state"| PG
+    LG -.->|"trace turn"| LangSmith
+    Module -->|"injects launch button"| Chart
+
+    classDef store fill:#eef,stroke:#557
+    classDef external fill:#fef6e4,stroke:#a07
+    class DB,PG store
+    class Anthropic,LangSmith external
+```
+
+---
+
+## 2. Per-turn request flow
+
+What actually moves on the wire when the hospitalist asks a single question.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Doctor as Hospitalist
+    participant UI as Chat iframe
+    participant CP as Co-Pilot service
+    participant Cls as Classifier (Haiku)
+    participant Plan as Planner (Sonnet)
+    participant FHIR as OpenEMR FHIR
+    participant Syn as Synthesizer (Opus)
+    participant Ver as Verifier
+    participant DB as MariaDB
+
+    Doctor->>UI: "What happened to Eduardo overnight?"
+    UI->>+CP: POST /api/chat
+    CP->>+Cls: classify intent
+    Cls-->>-CP: { workflow: W-2, confidence: 0.93 }
+    Note over CP: ≥ 0.8 → route to W-2 planner
+    CP->>+Plan: plan tools for W-2
+    Plan-->>-CP: 7 parallel tool calls
+    par parallel FHIR fan-out
+        CP->>+FHIR: GET /Patient/4
+        and
+        CP->>FHIR: GET /Condition?…
+        and
+        CP->>FHIR: GET /MedicationRequest?…
+        and
+        CP->>FHIR: GET /Observation?vitals…
+        and
+        CP->>FHIR: GET /Observation?labs…
+        and
+        CP->>FHIR: GET /Encounter?…
+        and
+        CP->>FHIR: GET /DocumentReference?…
+    end
+    FHIR-->>-CP: FHIR Bundles (parsed, allowlisted, sentinel-wrapped)
+    CP->>+Syn: synthesize response with citations
+    Syn-->>-CP: response + <cite ref=…/> handles
+    CP->>+Ver: every claim cite-resolves?
+
+    alt unsourced claim found
+        Ver-->>CP: regenerate (max 2x)
+        CP->>+Syn: regenerate with feedback
+        Syn-->>-CP: revised response
+        CP->>Ver: re-check
+        Ver-->>-CP: allow or refuse
+    else all claims sourced
+        Ver-->>-CP: allow
+    end
+
+    CP->>DB: write agent_audit + agent_message
+    CP-->>-UI: response (with clickable citations)
+    UI-->>Doctor: rendered brief
+```
+
+---
+
+## 3. Agent loop state machine
+
+The LangGraph nodes, the conditions on each edge, and the terminal states (allow / refuse). This is what runs inside the Co-Pilot service for every turn.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Classify
+
+    Classify --> Clarify: confidence < 0.8
+    Classify --> Plan: confidence ≥ 0.8
+
+    Clarify --> [*]: ask user, wait for next turn
+
+    Plan --> Dispatch: tool list emitted
+
+    Dispatch --> ContextCheck: validate patient_id<br/>against SMART context
+
+    ContextCheck --> DenyAuthz: patient_id mismatch
+    ContextCheck --> FHIR: match
+
+    FHIR --> Synthesize: tool results returned
+    FHIR --> ToolFailure: 5xx / timeout / 4xx
+
+    Synthesize --> Verify
+
+    Verify --> Audit: all claims sourced
+    Verify --> Regenerate: unsourced claim
+
+    Regenerate --> Synthesize: retries < 2
+    Regenerate --> RefuseUnsourced: retries = 2
+
+    Audit --> [*]: decision = allow
+    DenyAuthz --> [*]: decision = denied_authz
+    ToolFailure --> [*]: decision = tool_failure
+    RefuseUnsourced --> [*]: decision = refused_unsourced
+
+    note right of ContextCheck
+        Defense in depth.
+        Even if SMART scope check
+        passed at the FHIR layer,
+        every tool call independently
+        re-validates patient_id.
+    end note
+
+    note left of Verify
+        Citation existence + resolution.
+        Does NOT catch value misreading,
+        omission, or causal-chain errors —
+        eval suite covers those.
+    end note
+```
+
+---
+
+## How to render
+
+Mermaid blocks render natively in GitHub previews, GitLab, VS Code (with the Mermaid extension), and most modern markdown viewers. For a quick one-off render, paste the block into <https://mermaid.live>.
