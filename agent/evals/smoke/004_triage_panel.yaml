@@ -1,0 +1,39 @@
+id: smoke-004-triage-panel
+tier: smoke
+description: >
+  UC-1 cross-patient triage. The classifier should route to W-1, the
+  triage_node should call get_my_patient_list once, fan out
+  get_change_signal across the 5-patient fixture panel, and rank flagged
+  vs stable. Eduardo (fixture-1, hypotensive event), Robert (fixture-3,
+  CHF decomp), and Linda (fixture-4, new admission with fever + WBC) all
+  have signals; Maya (fixture-2) and James (fixture-5) are stable.
+workflow: W-1
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1, fixture-2, fixture-3, fixture-4, fixture-5]
+
+session_context:
+  patient_id: ""    # triage spans the panel, no single active patient
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "Who do I need to see first this morning?"
+
+expected:
+  workflow_id: W-1
+  decision: allow
+  required_facts:
+    - "Perez"        # Eduardo flagged
+    - "Hayes"        # Robert flagged
+    - "Park"         # Linda flagged
+  required_citation_refs: []   # the count refs are constructed, not strictly required
+  forbidden_claims:
+    - "no patients need attention"
+    - "all patients stable"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 0.0
+  latency_ms_max: 60000
+  cost_usd_max: 0.50

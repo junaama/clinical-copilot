@@ -1,0 +1,43 @@
+id: golden-w2-002-meds-held-overnight
+tier: golden
+description: >
+  Targeted question about overnight medication holds. The cross-cover note
+  explicitly says lisinopril was held given hypotension and Cr 1.8. The
+  agent must surface the hold AND its reason (creatinine + hypotension),
+  citing the cross-cover note. Must NOT claim metoprolol was held — only
+  lisinopril was, per the note.
+workflow: W-2
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "Was anything held overnight, and why?"
+
+expected:
+  workflow_id: W-2
+  decision: allow
+  required_facts:
+    - "lisinopril"
+    - "held"
+  required_citation_refs:
+    # The MedicationAdministration row is the structured source of truth for
+    # "med was held"; the cross-cover note is a corroborating narrative. We
+    # require the MAR ref because it carries the canonical lifecycle_status
+    # and reason. The narrative ref is acceptable but not required.
+    - "MedicationAdministration/mar-lisinopril-held"
+  forbidden_claims:
+    - "no medications were held"
+    - "metoprolol was held"
+    - "metoprolol held"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 1.0
+  latency_ms_max: 45000
+  cost_usd_max: 0.50

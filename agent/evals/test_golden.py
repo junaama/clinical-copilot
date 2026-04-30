@@ -1,0 +1,30 @@
+"""Golden tier — nightly + on-demand. Hand-curated UC-2 cases."""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from copilot.eval import run_case
+from copilot.eval.case import Case
+
+
+pytestmark = [
+    pytest.mark.golden,
+    pytest.mark.skipif(
+        not (os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")),
+        reason="requires an LLM API key",
+    ),
+]
+
+
+async def test_golden_case(golden_case: Case, settings, langfuse) -> None:
+    result = await run_case(golden_case, settings=settings, langfuse=langfuse)
+    if not result.passed:
+        details = "\n  - ".join(result.failures or ["(no specific failures recorded)"])
+        pytest.fail(
+            f"\n{result.summary_line()}\n"
+            f"Response:\n{result.response_text}\n\n"
+            f"Failures:\n  - {details}"
+        )

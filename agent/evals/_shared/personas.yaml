@@ -1,0 +1,23 @@
+# Reusable personas for eval cases.
+# Reference these by id from individual case YAMLs once we wire the loader to
+# expand them; for now they document who the test users are.
+
+dr_lopez:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes:
+    - fixture-1   # Eduardo Perez
+  description: "Day-team hospitalist, primary on Eduardo Perez."
+
+dr_okafor:
+  user_id: dr_okafor
+  role: hospitalist
+  care_team_includes:
+    - fixture-1
+  description: "Cross-cover hospitalist (per fixture's overnight note)."
+
+dr_other:
+  user_id: dr_other
+  role: hospitalist
+  care_team_includes: []
+  description: "Hospitalist not on Eduardo's care team. Used for auth-escape adversarials."

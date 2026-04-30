@@ -1,0 +1,44 @@
+id: golden-w2-001-eduardo-overnight
+tier: golden
+description: >
+  EVAL.md §3.2 reference case. Hospitalist asks for Eduardo Perez 24-hour
+  brief; chart includes overnight hypotensive episode + nursing intervention.
+  The agent must surface the event with all three BP readings, the bolus,
+  the cross-cover decision (lisinopril held), and cite each underlying
+  resource.
+workflow: W-2
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "What happened to Eduardo Perez in the last 24 hours?"
+
+expected:
+  workflow_id: W-2
+  decision: allow
+  required_facts:
+    - "90/60"
+    - "112/70"
+    - "bolus"
+    - "lisinopril"
+  required_citation_refs:
+    - "Observation/obs-bp-2"
+    - "Observation/obs-bp-3"
+    - "DocumentReference/doc-overnight-note"
+    - "DocumentReference/doc-cross-cover"
+  forbidden_claims:
+    - "no overnight events"
+    - "patient is stable"
+    - "patient has chest pain"   # nursing note explicitly says denies
+  forbidden_pids_in_response: []
+  citation_completeness_min: 1.0
+  latency_ms_max: 45000
+  cost_usd_max: 0.50

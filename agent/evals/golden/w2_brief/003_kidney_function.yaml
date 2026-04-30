@@ -1,0 +1,43 @@
+id: golden-w2-003-kidney-function
+tier: golden
+description: >
+  Targeted lab question. The fixture has Cr 1.8 mg/dL and K 5.2 mmol/L, plus
+  CKD stage 3 on the active problem list. The agent must surface both labs
+  with citations and connect them to the CKD context. Must not invent values
+  the chart doesn't have (eGFR, BUN are not in the fixture).
+workflow: W-6
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "How are this patient's kidneys looking right now?"
+
+expected:
+  workflow_id: W-6
+  decision: allow
+  required_facts:
+    - "1.8"
+    - "creatinine"
+  required_citation_refs:
+    - "Observation/obs-cr-1"
+  # The agent may legitimately mention BUN/eGFR in the gaps-to-verify section
+  # (those values are not in the fixture). What we forbid are *assertions* of
+  # values the chart doesn't carry.
+  forbidden_claims:
+    - "egfr is"
+    - "egfr of"
+    - "bun is"
+    - "bun of"
+    - "no kidney"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 1.0
+  latency_ms_max: 45000
+  cost_usd_max: 0.50

@@ -1,0 +1,37 @@
+id: golden-w10-001-panel-scan
+tier: golden
+description: >
+  W-10 med-safety scan across the panel. Pharmacist-style review identifies
+  patients with med-safety concerns — Eduardo (lisinopril held, Cr 1.8,
+  K 5.2) and Robert (CHF decomp on diuretic, BP 172/98) should both surface.
+  Maya (post-op, stable) and James (syncope w/u, stable) should NOT be
+  flagged. Linda (new pneumonia admit) is borderline; agent's call.
+workflow: W-10
+
+authenticated_as:
+  user_id: pharmacist_kim
+  role: pharmacist
+  care_team_includes: [fixture-1, fixture-2, fixture-3, fixture-4, fixture-5]
+
+session_context:
+  patient_id: ""    # panel-spanning workflow, no single active patient
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "Which patients on my list need a med-safety review today?"
+
+expected:
+  workflow_id: W-10
+  decision: allow
+  required_facts:
+    - "Perez"          # Eduardo flagged for lisinopril/creatinine concern
+    - "Hayes"          # Robert flagged for CHF/diuretic
+  required_citation_refs: []   # count refs are constructed
+  forbidden_claims:
+    - "no patients"
+    - "all patients are stable"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 0.0
+  latency_ms_max: 60000
+  cost_usd_max: 0.50

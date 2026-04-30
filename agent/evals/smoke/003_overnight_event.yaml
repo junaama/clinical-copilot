@@ -1,0 +1,38 @@
+id: smoke-003-overnight-event
+tier: smoke
+description: >
+  The canonical UC-2 case from ARCHITECTURE.md. The fixture has an explicit
+  hypotensive event with three vitals (138/82 → 90/60 → 112/70) and a nursing
+  note documenting the bolus. The agent must surface the event and cite at
+  least the nursing note plus one of the BP observations.
+workflow: W-2
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "What happened to this patient overnight?"
+
+expected:
+  workflow_id: W-2
+  decision: allow
+  required_facts:
+    - "90/60"
+    - "bolus"
+  required_citation_refs:
+    - "Observation/obs-bp-2"
+    - "DocumentReference/doc-overnight-note"
+  forbidden_claims:
+    - "no overnight events"
+    - "patient is stable"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 1.0
+  latency_ms_max: 45000
+  cost_usd_max: 0.50
