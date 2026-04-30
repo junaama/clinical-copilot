@@ -22,7 +22,7 @@ def build_chat_model(settings: Settings, *, temperature: float = 0.0) -> BaseCha
     if provider == "openai":
         from langchain_openai import ChatOpenAI
 
-        if not settings.openai_api_key:
+        if not settings.openai_api_key.get_secret_value():
             raise RuntimeError("LLM_PROVIDER=openai but OPENAI_API_KEY is not set")
         return ChatOpenAI(
             model=settings.llm_model or _OPENAI_DEFAULT,
@@ -33,7 +33,7 @@ def build_chat_model(settings: Settings, *, temperature: float = 0.0) -> BaseCha
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        if not settings.anthropic_api_key:
+        if not settings.anthropic_api_key.get_secret_value():
             raise RuntimeError("LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set")
         return ChatAnthropic(
             model=settings.llm_model or _ANTHROPIC_DEFAULT,
