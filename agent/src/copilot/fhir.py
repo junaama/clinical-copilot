@@ -68,35 +68,59 @@ class ToolResult:
 
 
 class FhirClient:
-    """Thin async wrapper around the FHIR endpoint."""
+    """Thin async wrapper around the FHIR endpoint.
+
+    Three modes, decided per call:
+
+    1. Fixture mode (``USE_FIXTURE_FHIR=1``) — serves ``FIXTURE_BUNDLE``
+       in-process; ignores tokens entirely. Used for tests, demos, and any
+       run that has no SMART context.
+    2. SMART-bound real mode — when the active SMART access token contextvar
+       is populated (set by ``graph.agent_node`` from
+       ``state.smart_access_token``), use that token to hit
+       ``OPENEMR_FHIR_BASE``.
+    3. Static-token real mode — fallback when ``OPENEMR_FHIR_TOKEN`` is set
+       in env (for one-off scripts or service-account-style usage). The
+       SMART token always wins when both are present.
+    """
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._fixture = settings.use_fixture_fhir or not settings.openemr_fhir_token
+        self._client = httpx.AsyncClient(timeout=10.0, transport=_HTTPX_RETRY_TRANSPORT)
+
+    def _resolve_token(self) -> str:
+        # Lazy import to avoid an import cycle (tools imports fhir).
+        from .tools import get_active_smart_token
+
+        return get_active_smart_token() or self._settings.openemr_fhir_token.get_secret_value()
+
+    def _use_fixture(self) -> bool:
+        if self._settings.use_fixture_fhir:
+            return True
+        # Fall back to fixture only when no real token is available *anywhere*.
+        return not self._resolve_token()
 
     @property
     def fixture_mode(self) -> bool:
-        return self._fixture
+        # Surface a snapshot for callers / tests.
+        return self._use_fixture()
 
     async def search(
         self, resource_type: str, params: dict[str, Any]
     ) -> tuple[bool, list[dict[str, Any]], str | None, int]:
         """Run a FHIR search; return (ok, entries, error, latency_ms)."""
         started = time.monotonic()
-        if self._fixture:
+        if self._use_fixture():
             entries = _fixture_search(resource_type, params)
             return True, entries, None, int((time.monotonic() - started) * 1000)
 
         url = f"{self._settings.openemr_fhir_base.rstrip('/')}/{resource_type}"
         headers = {
             "Accept": "application/fhir+json",
-            "Authorization": f"Bearer {self._settings.openemr_fhir_token}",
+            "Authorization": f"Bearer {self._resolve_token()}",
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=10.0, transport=_HTTPX_RETRY_TRANSPORT
-            ) as client:
-                response = await client.get(url, headers=headers, params=params)
+            response = await self._client.get(url, headers=headers, params=params)
         except httpx.HTTPError as exc:
             return False, [], f"transport: {exc.__class__.__name__}", int(
                 (time.monotonic() - started) * 1000
@@ -114,7 +138,7 @@ class FhirClient:
         self, resource_type: str, resource_id: str
     ) -> tuple[bool, dict[str, Any] | None, str | None, int]:
         started = time.monotonic()
-        if self._fixture:
+        if self._use_fixture():
             resource = _fixture_read(resource_type, resource_id)
             return resource is not None, resource, None, int(
                 (time.monotonic() - started) * 1000
@@ -123,13 +147,10 @@ class FhirClient:
         url = f"{self._settings.openemr_fhir_base.rstrip('/')}/{resource_type}/{resource_id}"
         headers = {
             "Accept": "application/fhir+json",
-            "Authorization": f"Bearer {self._settings.openemr_fhir_token}",
+            "Authorization": f"Bearer {self._resolve_token()}",
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=10.0, transport=_HTTPX_RETRY_TRANSPORT
-            ) as client:
-                response = await client.get(url, headers=headers)
+            response = await self._client.get(url, headers=headers)
         except httpx.HTTPError as exc:
             return False, None, f"transport: {exc.__class__.__name__}", int(
                 (time.monotonic() - started) * 1000
