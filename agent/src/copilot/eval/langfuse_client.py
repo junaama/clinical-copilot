@@ -50,8 +50,8 @@ class LangfuseClient:
 
                 self._sdk = Langfuse(
                     host=self.settings.langfuse_host,
-                    public_key=self.settings.langfuse_public_key,
-                    secret_key=self.settings.langfuse_secret_key,
+                    public_key=self.settings.langfuse_public_key.get_secret_value(),
+                    secret_key=self.settings.langfuse_secret_key.get_secret_value(),
                 )
                 _log.info("langfuse client initialized; experiment=%s", self.experiment_name)
             except ImportError:
