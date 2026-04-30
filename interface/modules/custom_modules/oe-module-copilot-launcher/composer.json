@@ -1,0 +1,32 @@
+{
+    "name": "openemr/oe-module-copilot-launcher",
+    "description": "Clinical Co-Pilot launcher: registers the Co-Pilot SMART app, embeds it as a docked iframe in the chart, bridges citation flash events, and writes to agent_audit.",
+    "type": "openemr-module",
+    "license": "GPL-3.0-or-later",
+    "authors": [
+        {
+            "name": "Naama",
+            "email": "naama.paulemont@challenger.gauntletai.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "OpenEMR\\Modules\\CopilotLauncher\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "OpenEMR\\Tests\\Unit\\Modules\\CopilotLauncher\\": "tests/"
+        }
+    },
+    "extra": {
+        "openemr": {
+            "type": "custom-module",
+            "directory": "oe-module-copilot-launcher"
+        }
+    },
+    "keywords": ["openemr", "module", "smart-on-fhir", "agent", "clinical-copilot"]
+}
