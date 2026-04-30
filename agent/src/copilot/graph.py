@@ -25,12 +25,19 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from .audit import AuditEvent, now_iso, write_audit_event
-from .checkpointer import build_checkpointer
+from .blocks import (
+    block_from_clarify_text,
+    plain_block_from_text,
+    refusal_plain_block,
+    synthesize_overnight_block,
+    synthesize_triage_block,
+)
+from .checkpointer import build_memory_checkpointer
 from .config import Settings, get_settings
 from .llm import build_chat_model
 from .prompts import CLARIFY_SYSTEM, CLASSIFIER_SYSTEM, PER_PATIENT_BRIEF, TRIAGE_BRIEF
 from .state import CoPilotState
-from .tools import make_tools, set_active_patient_id
+from .tools import make_tools, set_active_patient_id, set_active_smart_token
 
 MAX_REGENS = 2
 CLASSIFIER_CONFIDENCE_THRESHOLD = 0.8
@@ -79,6 +86,42 @@ def _refs_from_tool_message(msg: ToolMessage) -> set[str]:
     return set(_FHIR_REF_PATTERN.findall(content))
 
 
+# Tool source labels that disambiguate Observation rows by FHIR category. Used
+# to feed the citation-card mapper so cited Observation refs land on the right
+# OpenEMR chart card. Aligned with the ``sources_checked`` strings the tools
+# in ``tools.py`` already emit.
+_OBSERVATION_SOURCE_TO_CATEGORY = {
+    "Observation (vital-signs)": "vital-signs",
+    "Observation (laboratory)": "laboratory",
+}
+
+
+def _observation_categories_from_tool_message(
+    msg: ToolMessage,
+) -> dict[str, str]:
+    """Extract a {fhir_ref: 'vital-signs' | 'laboratory'} map from a tool result.
+
+    Tools tag their results with ``sources_checked`` already; we read that
+    label and apply it to every Observation row in the same payload. This
+    runs without parsing JSON — simple substring sniffing is enough because
+    we control the producer.
+    """
+
+    content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+    category: str | None = None
+    for source_label, cat in _OBSERVATION_SOURCE_TO_CATEGORY.items():
+        if source_label in content:
+            category = cat
+            break
+    if category is None:
+        return {}
+    return {
+        ref: category
+        for ref in _FHIR_REF_PATTERN.findall(content)
+        if ref.startswith("Observation/")
+    }
+
+
 def _audit(
     state: CoPilotState,
     settings: Settings,
@@ -120,12 +163,20 @@ def _audit(
     write_audit_event(event, settings)
 
 
-def build_graph(settings: Settings | None = None):
+def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = None):
+    """Compile and return the agent graph.
+
+    ``checkpointer`` is injected: callers that need durable persistence open
+    an ``AsyncPostgresSaver`` via ``open_checkpointer(settings)`` and pass
+    it in. Defaults to an in-process MemorySaver — fine for tests, scripts,
+    and demos.
+    """
     settings = settings or get_settings()
     chat_model = build_chat_model(settings)
     classifier_model = chat_model.with_structured_output(WorkflowDecision)
     tools = make_tools(settings)
-    checkpointer = build_checkpointer(settings)
+    if checkpointer is None:
+        checkpointer = build_memory_checkpointer()
 
     async def classifier_node(state: CoPilotState) -> Command:
         user_messages = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
@@ -185,18 +236,24 @@ def build_graph(settings: Settings | None = None):
                 "on a specific patient. Could you say which?"
             )
         _audit(state, settings, decision="clarify", final_text=content)
+        clarify_block = block_from_clarify_text(content)
         return {
             "messages": [AIMessage(content=content)],
             "decision": "clarify",
+            "block": clarify_block.model_dump(by_alias=True),
         }
 
     async def agent_node(state: CoPilotState) -> dict[str, Any]:
         patient_id = state.get("patient_id") or ""
         feedback = state.get("verifier_feedback") or ""
+        smart_token = state.get("smart_access_token") or ""
 
         # Bind the active SMART patient_id into the tool layer's contextvar so
-        # every tool call independently validates per ARCHITECTURE.md §7.
+        # every tool call independently validates per ARCHITECTURE.md §7. The
+        # access token rides the same contextvar pattern so FhirClient picks
+        # the right authorization for this turn.
         set_active_patient_id(patient_id or None)
+        set_active_smart_token(smart_token or None)
 
         system_prompt = PER_PATIENT_BRIEF.format(patient_id=patient_id)
         if feedback:
@@ -216,12 +273,16 @@ def build_graph(settings: Settings | None = None):
         fetched: list[str] = []
         tool_calls: list[dict] = []
         context_mismatch = False
+        observation_categories: dict[str, str] = {}
         for msg in sub_messages:
             if isinstance(msg, ToolMessage):
                 content = msg.content if isinstance(msg.content, str) else str(msg.content)
                 if "patient_context_mismatch" in content:
                     context_mismatch = True
                 fetched.extend(_refs_from_tool_message(msg))
+                observation_categories.update(
+                    _observation_categories_from_tool_message(msg)
+                )
             if isinstance(msg, AIMessage) and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_calls.append(
@@ -229,11 +290,13 @@ def build_graph(settings: Settings | None = None):
                     )
 
         final = sub_messages[-1] if sub_messages else AIMessage(content="")
+        final_text = final.content if isinstance(final.content, str) else str(final.content)
 
         update: dict[str, Any] = {
             "messages": [final],
             "fetched_refs": fetched,
             "tool_results": tool_calls,
+            "observation_categories": observation_categories,
             # Clear feedback so the next verifier pass evaluates the new response cleanly.
             "verifier_feedback": "",
         }
@@ -241,6 +304,19 @@ def build_graph(settings: Settings | None = None):
             # §7: mismatch is a hard deny that takes precedence over the
             # verifier's allow/refused_unsourced decision.
             update["decision"] = "denied_authz"
+            update["block"] = plain_block_from_text(final_text).model_dump(by_alias=True)
+            return update
+
+        # Synthesize the structured overnight block. Validation failures fall
+        # back to a PlainBlock inside the helper so the wire shape is always
+        # valid even if structured-output parsing breaks.
+        block = await synthesize_overnight_block(
+            chat_model,
+            synthesis_text=final_text,
+            fetched_refs=fetched,
+            observation_categories=observation_categories,
+        )
+        update["block"] = block.model_dump(by_alias=True)
         return update
 
     def verifier_node(state: CoPilotState) -> Command:
@@ -255,7 +331,16 @@ def build_graph(settings: Settings | None = None):
         last = messages[-1] if messages else None
         if not isinstance(last, AIMessage):
             _audit(state, settings, decision="tool_failure")
-            return Command(goto=END, update={"decision": "tool_failure"})
+            failure_block = refusal_plain_block(
+                "I couldn't produce a verifiable response. Please retry."
+            )
+            return Command(
+                goto=END,
+                update={
+                    "decision": "tool_failure",
+                    "block": failure_block.model_dump(by_alias=True),
+                },
+            )
 
         text = last.content if isinstance(last.content, str) else str(last.content)
         citations = _extract_citations(text)
@@ -268,14 +353,14 @@ def build_graph(settings: Settings | None = None):
 
         regen = state.get("regen_count") or 0
         if regen >= MAX_REGENS:
-            refusal = AIMessage(
-                content=(
-                    "I couldn't ground the following claim(s) against the chart data "
-                    f"available in this turn: {', '.join(unresolved)}. "
-                    "These refs do not match any FHIR resource I fetched. "
-                    "Please rephrase or verify directly in the chart."
-                )
+            refusal_text = (
+                "I couldn't ground the following claim(s) against the chart data "
+                f"available in this turn: {', '.join(unresolved)}. "
+                "These refs do not match any FHIR resource I fetched. "
+                "Please rephrase or verify directly in the chart."
             )
+            refusal = AIMessage(content=refusal_text)
+            refusal_block = refusal_plain_block(refusal_text)
             _audit(
                 state,
                 settings,
@@ -284,7 +369,11 @@ def build_graph(settings: Settings | None = None):
             )
             return Command(
                 goto=END,
-                update={"messages": [refusal], "decision": "refused_unsourced"},
+                update={
+                    "messages": [refusal],
+                    "decision": "refused_unsourced",
+                    "block": refusal_block.model_dump(by_alias=True),
+                },
             )
 
         feedback = (
@@ -312,8 +401,10 @@ def build_graph(settings: Settings | None = None):
 
     async def triage_node(state: CoPilotState) -> dict[str, Any]:
         # Triage explicitly does NOT bind a single active patient; the
-        # workflow spans the user's panel.
+        # workflow spans the user's panel. The SMART token still applies —
+        # it's the same authenticated user's care team.
         set_active_patient_id(None)
+        set_active_smart_token(state.get("smart_access_token") or None)
 
         feedback = state.get("verifier_feedback") or ""
         system_prompt = TRIAGE_BRIEF
@@ -326,9 +417,13 @@ def build_graph(settings: Settings | None = None):
         sub_messages = result.get("messages", [])
         fetched: list[str] = []
         tool_calls: list[dict] = []
+        observation_categories: dict[str, str] = {}
         for msg in sub_messages:
             if isinstance(msg, ToolMessage):
                 fetched.extend(_refs_from_tool_message(msg))
+                observation_categories.update(
+                    _observation_categories_from_tool_message(msg)
+                )
             if isinstance(msg, AIMessage) and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_calls.append(
@@ -336,11 +431,21 @@ def build_graph(settings: Settings | None = None):
                     )
 
         final = sub_messages[-1] if sub_messages else AIMessage(content="")
+        final_text = final.content if isinstance(final.content, str) else str(final.content)
+
+        block = await synthesize_triage_block(
+            chat_model,
+            synthesis_text=final_text,
+            fetched_refs=fetched,
+            active_patient_id=state.get("patient_id") or None,
+        )
         return {
             "messages": [final],
             "fetched_refs": fetched,
             "tool_results": tool_calls,
+            "observation_categories": observation_categories,
             "verifier_feedback": "",
+            "block": block.model_dump(by_alias=True),
         }
 
     builder = StateGraph(CoPilotState)
