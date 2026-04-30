@@ -32,10 +32,10 @@ async def main() -> int:
     query = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_QUERY
 
     settings = get_settings()
-    if settings.llm_provider == "openai" and not settings.openai_api_key:
+    if settings.llm_provider == "openai" and not settings.openai_api_key.get_secret_value():
         print("error: OPENAI_API_KEY not set", file=sys.stderr)
         return 2
-    if settings.llm_provider == "anthropic" and not settings.anthropic_api_key:
+    if settings.llm_provider == "anthropic" and not settings.anthropic_api_key.get_secret_value():
         print("error: ANTHROPIC_API_KEY not set", file=sys.stderr)
         return 2
 
