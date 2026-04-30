@@ -26,11 +26,14 @@ from .fhir import ABSENT, FhirClient, Row, ToolResult
 from .fixtures import CARE_TEAM_PANEL
 
 
-# Contextvar carries the active SMART patient_id into the async tool calls
+# Contextvars carry the active SMART context into the async tool calls
 # without threading it through every signature. Set by the graph's agent_node
 # before invoking the agent; auto-propagates to spawned asyncio tasks.
 _active_patient_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "copilot_active_patient_id", default=None
+)
+_active_smart_token: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "copilot_active_smart_token", default=None
 )
 
 
@@ -40,6 +43,14 @@ def set_active_patient_id(patient_id: str | None) -> None:
 
 def get_active_patient_id() -> str | None:
     return _active_patient_id.get()
+
+
+def set_active_smart_token(token: str | None) -> None:
+    _active_smart_token.set(token or None)
+
+
+def get_active_smart_token() -> str | None:
+    return _active_smart_token.get()
 
 
 def _enforce_patient_context(patient_id: str) -> dict[str, Any] | None:
