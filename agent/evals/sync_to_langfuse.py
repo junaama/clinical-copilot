@@ -79,8 +79,8 @@ def sync(tier: str, *, dry_run: bool = False) -> int:
 
     client = Langfuse(
         host=settings.langfuse_host,
-        public_key=settings.langfuse_public_key,
-        secret_key=settings.langfuse_secret_key,
+        public_key=settings.langfuse_public_key.get_secret_value(),
+        secret_key=settings.langfuse_secret_key.get_secret_value(),
     )
 
     dataset_name = _dataset_name(tier, settings.langfuse_project)
