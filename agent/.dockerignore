@@ -1,0 +1,37 @@
+# Virtualenvs / build artifacts
+.venv
+.venv-*
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.egg-info
+build/
+dist/
+
+# Local secrets — never bake into images
+.env
+.env.*
+!.env.example
+
+# Local-only data
+logs/
+
+# Tooling
+.git
+.gitignore
+.editorconfig
+.python-version
+
+# Docs and tests aren't needed at runtime
+README.md
+tests/
+evals/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

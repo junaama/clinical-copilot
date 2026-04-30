@@ -1,0 +1,18 @@
+# Railway service config for the Co-Pilot agent.
+# Docs: https://docs.railway.app/reference/config-as-code
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Railway injects $PORT; the Dockerfile CMD picks it up. We set the
+# healthcheck explicitly so failed boots roll back instead of looping.
+# Cold-start budget: uvicorn boot + LangGraph compile + ChatOpenAI init
+# normally finishes within ~15s; 120s gives ample margin for slow hosts
+# without inheriting the default 300s window that delays failure detection.
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+# numReplicas left to default; scale up later when load demands it.
