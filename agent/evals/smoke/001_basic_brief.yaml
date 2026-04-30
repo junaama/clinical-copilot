@@ -1,0 +1,32 @@
+id: smoke-001-basic-brief
+tier: smoke
+description: >
+  Basic UC-2 path — agent is asked for an overnight brief on the fixture
+  patient, must produce a non-empty response with at least one citation
+  resolving to a fetched FHIR resource. Decision must be 'allow'.
+workflow: W-2
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "Give me a quick brief on this patient."
+
+expected:
+  workflow_id: W-2
+  decision: allow
+  required_facts: []
+  required_citation_refs: []
+  forbidden_claims:
+    - "no patient on file"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 0.0
+  latency_ms_max: 30000
+  cost_usd_max: 0.50

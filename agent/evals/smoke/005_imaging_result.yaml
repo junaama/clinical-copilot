@@ -1,0 +1,36 @@
+id: smoke-005-imaging-result
+tier: smoke
+description: >
+  The agent must use get_imaging_results to retrieve the post-hypotension
+  CXR and surface the radiologist impression. Tests the §8 imaging tool +
+  status canonicalization is not breaking other tools.
+workflow: W-2
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "Was any imaging done overnight, and what did it show?"
+
+expected:
+  workflow_id: W-2
+  decision: allow
+  required_facts:
+    - "chest"
+    - "no acute"
+  required_citation_refs:
+    - "DiagnosticReport/rad-cxr-eduardo"
+  forbidden_claims:
+    - "no imaging"
+    - "no studies were done"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 1.0
+  latency_ms_max: 45000
+  cost_usd_max: 0.50
