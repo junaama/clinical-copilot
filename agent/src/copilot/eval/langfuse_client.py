@@ -64,36 +64,52 @@ class LangfuseClient:
         return self._sdk is not None
 
     def record_case(self, result: "CaseResult") -> str | None:
-        """Push a case's trace + scores. Returns the trace id, or ``None``."""
+        """Push a case's trace + scores. Returns the trace id, or ``None``.
+
+        Uses the langfuse 4.x API surface: ``start_as_current_observation``
+        for the span context, ``set_current_trace_io`` + ``update_current_span``
+        for metadata, and ``score_current_trace`` for the per-metric scores.
+        The legacy ``self._sdk.trace(...)`` API was removed when the SDK
+        moved to OTLP transport against a v3 server.
+        """
         if not self.enabled or self._sdk is None:
             return None
         try:
-            trace = self._sdk.trace(
+            with self._sdk.start_as_current_observation(
                 name=result.case.id,
-                metadata={
-                    "tier": result.case.tier,
-                    "workflow": result.case.workflow,
-                    "user_role": result.case.user_role,
-                    "patient_id": result.case.patient_id,
-                    "experiment": self.experiment_name,
-                    "passed": result.passed,
-                    "decision": result.decision,
-                    "failures": result.failures,
-                },
-                input={"message": result.case.message},
-                output={"response": result.response_text, "citations": result.citations},
-                tags=[result.case.tier, result.case.workflow, self.experiment_name],
-            )
-            trace_id = getattr(trace, "id", None) or trace.trace_id  # type: ignore[attr-defined]
-
-            # Push named scores; Langfuse aggregates these on the dataset view.
-            for metric, value, comment in _flatten_scores(result):
-                self._sdk.score(
-                    trace_id=trace_id,
-                    name=metric,
-                    value=value,
-                    comment=comment,
+                as_type="span",
+            ):
+                # Trace-level input/output (visible at the top of the dashboard
+                # row, not buried inside the span).
+                self._sdk.set_current_trace_io(
+                    input={"message": result.case.message},
+                    output={
+                        "response": result.response_text,
+                        "citations": result.citations,
+                    },
                 )
+                # Span-level metadata for filtering + drill-down.
+                self._sdk.update_current_span(
+                    metadata={
+                        "tier": result.case.tier,
+                        "workflow": result.case.workflow,
+                        "user_role": result.case.user_role,
+                        "patient_id": result.case.patient_id,
+                        "experiment": self.experiment_name,
+                        "passed": result.passed,
+                        "decision": result.decision,
+                        "failures": result.failures,
+                    },
+                )
+                # Per-metric scores attached to the trace (so the dataset
+                # view aggregates them).
+                for metric, value, comment in _flatten_scores(result):
+                    self._sdk.score_current_trace(
+                        name=metric,
+                        value=value,
+                        comment=comment,
+                    )
+                trace_id = self._sdk.get_current_trace_id()
 
             self._sdk.flush()
             return trace_id
