@@ -38,7 +38,10 @@ class Settings(BaseSettings):
         alias="OPENEMR_FHIR_BASE",
     )
     openemr_fhir_token: SecretStr = Field(default=SecretStr(""), alias="OPENEMR_FHIR_TOKEN")
-    use_fixture_fhir: bool = Field(default=True, alias="USE_FIXTURE_FHIR")
+    # Default off so that production deploys never silently serve fixtures.
+    # Dev environments must opt in explicitly via ``USE_FIXTURE_FHIR=1`` in
+    # their ``.env`` (see ``agent/.env.example``).
+    use_fixture_fhir: bool = Field(default=False, alias="USE_FIXTURE_FHIR")
 
     smart_client_id: str = Field(default="", alias="SMART_CLIENT_ID")
     smart_client_secret: SecretStr = Field(default=SecretStr(""), alias="SMART_CLIENT_SECRET")
@@ -47,7 +50,14 @@ class Settings(BaseSettings):
         alias="SMART_REDIRECT_URI",
     )
     smart_scopes: str = Field(
-        default="launch openid fhirUser patient/*.read offline_access",
+        default=(
+            "openid fhirUser launch launch/patient offline_access "
+            "patient/Patient.read patient/Observation.read "
+            "patient/Condition.read patient/MedicationRequest.read "
+            "patient/MedicationAdministration.read patient/Encounter.read "
+            "patient/AllergyIntolerance.read patient/DocumentReference.read "
+            "patient/DiagnosticReport.read patient/ServiceRequest.read"
+        ),
         alias="SMART_SCOPES",
     )
 
