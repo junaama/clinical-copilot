@@ -61,6 +61,11 @@ class Settings(BaseSettings):
         alias="SMART_SCOPES",
     )
 
+    # Where to send the user after /smart/callback completes the OAuth dance.
+    # The frontend reads conversation_id (and patient_id, scope, etc.) off the
+    # URL and bootstraps the chat panel from there.
+    copilot_ui_url: str = Field(default="", alias="COPILOT_UI_URL")
+
     checkpointer_dsn: str = Field(default="", alias="CHECKPOINTER_DSN")
 
     agent_audit_log_path: str = Field(

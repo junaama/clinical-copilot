@@ -258,14 +258,19 @@ async def smart_launch(iss: str = "", launch: str = "") -> RedirectResponse:
     return RedirectResponse(url=redirect_url, status_code=302)
 
 
-@app.get("/smart/callback")
-async def smart_callback(code: str = "", state: str = "", error: str = "") -> dict[str, Any]:
+@app.get("/smart/callback", response_model=None)
+async def smart_callback(
+    code: str = "", state: str = "", error: str = ""
+) -> RedirectResponse | dict[str, Any]:
     """OAuth2 redirect target.
 
     The EHR redirects back here with ``code`` (the authorization code) plus
     the ``state`` we issued during /smart/launch. We exchange the code for
-    an access_token at the EHR's token endpoint, then bind the resulting
-    bundle to a fresh conversation_id the chat UI will use.
+    an access_token at the EHR's token endpoint, bind the resulting bundle
+    to a fresh conversation_id, and 302 the user to the chat UI with the
+    conversation context in the query string. When ``COPILOT_UI_URL`` is
+    not configured we fall back to returning the bundle as JSON so the dev
+    flow still works without a deployed frontend.
     """
     if error:
         raise HTTPException(status_code=400, detail=f"authorization error: {error}")
@@ -308,12 +313,29 @@ async def smart_callback(code: str = "", state: str = "", error: str = "") -> di
     conversation_id = secrets.token_urlsafe(16)
     stores.put_token(conversation_id, bundle)
 
-    # The chat UI reads these from the URL hash to bootstrap.
-    return {
-        "conversation_id": conversation_id,
-        "patient_id": bundle.patient_id,
-        "user_id": bundle.user_id,
-        "scope": bundle.scope,
-        "expires_in": bundle.expires_in,
-        "iss": bundle.iss,
-    }
+    if not settings.copilot_ui_url:
+        return {
+            "conversation_id": conversation_id,
+            "patient_id": bundle.patient_id,
+            "user_id": bundle.user_id,
+            "scope": bundle.scope,
+            "expires_in": bundle.expires_in,
+            "iss": bundle.iss,
+        }
+
+    from urllib.parse import urlencode
+
+    params = urlencode(
+        {
+            "conversation_id": conversation_id,
+            "patient": bundle.patient_id,
+            "user": bundle.user_id,
+            "iss": bundle.iss,
+            "scope": bundle.scope,
+            "expires_in": bundle.expires_in,
+        }
+    )
+    return RedirectResponse(
+        url=f"{settings.copilot_ui_url.rstrip('/')}/?{params}",
+        status_code=302,
+    )
