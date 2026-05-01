@@ -15,7 +15,14 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "python-dotenv>=1.0.1",
-    "langfuse>=2.40.0",
+    # SDK<>server compatibility note: the langfuse 4.x SDK speaks OTLP to a
+    # langfuse v3 *server*. We currently self-host the v2 single-container
+    # server (Postgres-only). The v2 SDK requires langchain<1.x and so is
+    # incompatible with our ``langchain>=1.2.16`` pin. Until we provision the
+    # full v3 stack (Postgres + ClickHouse + Redis + MinIO + langfuse-web +
+    # langfuse-worker), the runtime CallbackHandler no-ops with a 404 from
+    # the v2 server. Tracked in ``agentforge-docs/AGENT-TODO.md``.
+    "langfuse>=4.5.0",
     "pyyaml>=6.0",
     "langchain>=1.2.16",
 ]
