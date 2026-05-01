@@ -89,7 +89,7 @@ A small companion module inside OpenEMR is optional but recommended. Its only jo
 | **Anthropic API** | LLM inference. Three models used: Sonnet 4.6 for tool-call planning, Opus 4.7 for final synthesis, Haiku 4.5 for cheap classifiers (e.g., "is this a single-patient question or a list-wide one?"). | Strongest tool-use model class in 2026. One vendor, one BAA. Bedrock is the documented multi-vendor failover path if we ever need resilience. |
 | **LangGraph** (library, runs in our Python service) | The agent state machine — manages the multi-turn loop, parallel tool dispatch, retries, verification regeneration. | Stateful conversation across turns, parallel tool calls when the planner emits more than one, mature ecosystem. |
 | **Langfuse** (self-hosted) | Observability for the agent loop — every turn's tool calls, latencies, token counts, costs, prompts and responses, retries, verification decisions are visible as a trace. Also hosts the eval datasets and experiment results (see EVAL.md). | Self-hosted from day 1 to keep all traces inside our infrastructure boundary; no third-party PHI exposure even on synthetic data; no LangSmith→Langfuse migration tax later. Runs as a Railway service with its own Postgres. Native LangChain/LangGraph integration. |
-| **Synthea** (offline tool) | Generates synthetic patient data with realistic encounter histories. Used once, before the demo, to populate the OpenEMR FHIR store. | OpenEMR's stock seed has 14 patients and zero clinical rows. Synthea exports FHIR bundles that import directly via the same FHIR endpoints the agent reads. |
+| **Synthea** (offline tool) + **seed loader** (offline script) | Generates synthetic patient data with realistic encounter histories. Used once, before each demo, to populate OpenEMR. The seed loader (`agent/scripts/seed/`) is a one-time CLI that authenticates as a SMART Backend Services client (separate from the runtime agent's launch-token client), POSTs Patient/Practitioner via the FHIR API, and posts everything else (encounters, vitals, problems, medications, SOAP notes) via OpenEMR's Standard REST API. The runtime agent never writes; only the seed loader does. | OpenEMR's stock seed has 14 patients and zero clinical rows. The deployed FHIR module supports writes for only Patient/Practitioner/Organization, so the loader takes a hybrid approach: FHIR for those three resources, Standard API for everything else, with the FHIR layer surfacing both on reads. |
 | **Railway** | Hosting for OpenEMR + MariaDB + the Co-Pilot service + Langfuse + the two Postgres instances. | Already chosen for the OpenEMR deploy; everything runs on the same internal network, no cross-cloud egress, single dashboard. |
 | **Postgres** (Railway-managed, ×2) | (1) LangGraph checkpointer — multi-turn conversation state. (2) Langfuse storage — traces, datasets, scores. | Two separate instances because the data has different lifecycles (conversation state is session-scoped; Langfuse data is project-lifetime audit + analytics). Both use LangGraph's / Langfuse's officially supported Postgres backends. |
 
@@ -172,6 +172,15 @@ class Row:
 
 The LLM sees `fhir_ref`, `resource_type`, and `fields`. The `raw_excerpt` is for downstream debugging in Langfuse traces, not for the prompt.
 
+**Note on week-1 data sources.** The deployed OpenEMR build advertises read-only `system/*` FHIR scopes and exposes write endpoints for only `Patient`/`Practitioner`/`Organization`. As a consequence, four tools in the catalog have no discrete data to surface at week-1 demo time:
+
+- `get_recent_orders` — `ServiceRequest` has neither FHIR write nor Standard API write coverage; orders are encoded in the cross-cover SOAP note narrative.
+- `get_imaging_results` — `DiagnosticReport.conclusion` has no write path; the radiology read is encoded in the SOAP note narrative.
+- `get_medication_administrations` — `MedicationAdministration` is not exposed by this build's FHIR module; held/given doses are documented in the SOAP note (e.g., "lisinopril held this AM, BP 90/60, Cr 1.8") with the held med's `MedicationRequest.status` reflecting the intent.
+- `get_recent_labs` — lab `Observation` has no Standard API write endpoint; lab values are encoded in the cross-cover SOAP note narrative ("Cr 1.8, K 5.2").
+
+These tools remain in the catalog (not removed) so the agent's tool surface matches a production EHR with full FHIR write coverage. At week-1 they return `{ok: true, rows: []}`, and the planner is instructed to fall back to `get_clinical_notes` when an expected category is empty. The verification layer treats note-grounded citations (`DocumentReference` with substring match into the note body) as first-class — see §13. This is not a workaround so much as it is faithful to how most early-stage EHR deployments actually carry clinical content: in narrative, not in discrete resources.
+
 ## 9. End-to-end request flow
 
 The hospitalist asks: *"What happened to Eduardo Perez in the last 24 hours?"*
@@ -250,10 +259,12 @@ For each `pid` in the user's care-team panel, the agent fires four capped querie
 
 ```
 GET /fhir/Observation?patient={pid}&category=vital-signs&date=ge{since}&_summary=count
-GET /fhir/MedicationAdministration?patient={pid}&effective-time=ge{since}&_summary=count
+GET /fhir/MedicationRequest?patient={pid}&_lastUpdated=ge{since}&_summary=count
 GET /fhir/DocumentReference?patient={pid}&date=ge{since}&_summary=count
 GET /fhir/Encounter?patient={pid}&date=ge{since}&_summary=count
 ```
+
+(`MedicationAdministration` would be the ideal probe for "medication events overnight" but is not exposed on this OpenEMR build's FHIR module. `MedicationRequest` filtered by `_lastUpdated` is the closest available proxy: it catches new orders and any status changes (held, stopped) since the cutoff.)
 
 For an 18-patient panel that is 72 lightweight queries, all parallel, returning a 4-element count vector per patient. Total wall-clock: ~1–2 seconds at OpenEMR's stock FHIR latency.
 
