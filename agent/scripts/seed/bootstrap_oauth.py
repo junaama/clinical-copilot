@@ -40,22 +40,30 @@ CONTACT_EMAIL = "naama.paulemont@challenger.gauntletai.com"
 # resource type, plus reads for verification. The admin still has to
 # grant these from the UI before they take effect — registration alone
 # is not authorization.
-# OpenEMR uses SMART v2.2 single-letter permission flags:
-# c=create, r=read, u=update, d=delete, s=search. `.cruds` = full access.
+# Scopes are validated against the deployed instance's
+# /.well-known/openid-configuration scopes_supported list. This OpenEMR
+# build's FHIR module advertises read-only system scopes (.rs) plus
+# bulk-export operations. Writes go through:
+#   - the FHIR module for Patient/Practitioner/Organization (api:fhir)
+#   - the Standard REST API for everything else (api:oemr) — encounters,
+#     vitals, problems, medications, SOAP notes, etc.
+# MedicationAdministration is not advertised at all on this build; we
+# encode the held-lisinopril scenario via a SOAP note narrative.
 REQUESTED_SCOPES = " ".join([
     "openid",
-    "system/Patient.cruds",
-    "system/Practitioner.cruds",
-    "system/PractitionerRole.cruds",
-    "system/CareTeam.cruds",
-    "system/Encounter.cruds",
-    "system/Condition.cruds",
-    "system/Observation.cruds",
-    "system/MedicationRequest.cruds",
-    "system/MedicationAdministration.cruds",
-    "system/ServiceRequest.cruds",
-    "system/DiagnosticReport.cruds",
-    "system/DocumentReference.cruds",
+    "api:oemr",
+    "api:fhir",
+    "system/Patient.rs",
+    "system/Practitioner.rs",
+    "system/PractitionerRole.rs",
+    "system/CareTeam.rs",
+    "system/Encounter.rs",
+    "system/Condition.rs",
+    "system/Observation.rs",
+    "system/MedicationRequest.rs",
+    "system/ServiceRequest.rs",
+    "system/DiagnosticReport.rs",
+    "system/DocumentReference.rs",
 ])
 
 
@@ -184,7 +192,7 @@ def main() -> int:
     print("  2. Go to: Admin -> System -> API Clients.")
     print(f"  3. Find the client named '{CLIENT_NAME}' and click Edit.")
     print("  4. Enable the client.")
-    print("  5. Grant every scope listed in the request (system/*.read + .write).")
+    print("  5. Grant every scope listed in the request (system/*.rs + api:oemr + api:fhir).")
     print("  6. Run get_token.py to verify the token exchange works.")
 
     return 0
