@@ -56,6 +56,12 @@ def get_callback_handler(settings: Settings | None = None) -> Any | None:
     os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key.get_secret_value())
 
     try:
+        # langfuse SDK v4.x exposes ``langfuse.langchain.CallbackHandler`` and
+        # speaks OTLP to a langfuse v3 *server*. Our self-hosted server is
+        # currently v2 (single-container) — the SDK will log
+        # ``Failed to export span batch code: 404`` on every flush until the
+        # v3 stack is provisioned (Postgres + ClickHouse + Redis + MinIO +
+        # langfuse-web + langfuse-worker). The 404s are non-fatal.
         from langfuse.langchain import CallbackHandler
 
         _handler = CallbackHandler()
