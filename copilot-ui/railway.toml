@@ -1,0 +1,13 @@
+# Railway service config for the Co-Pilot React UI.
+# Docs: https://docs.railway.app/reference/config-as-code
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# `serve` boots in well under 5s; 60s healthcheck is plenty.
+healthcheckPath = "/"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
