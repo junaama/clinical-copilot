@@ -95,10 +95,11 @@ class FhirClient:
         return get_active_smart_token() or self._settings.openemr_fhir_token.get_secret_value()
 
     def _use_fixture(self) -> bool:
-        if self._settings.use_fixture_fhir:
-            return True
-        # Fall back to fixture only when no real token is available *anywhere*.
-        return not self._resolve_token()
+        # Fixture mode is opt-in only. Production must NEVER fall back to
+        # fixtures when a SMART/static token is missing — instead, the search
+        # call below surfaces an explicit "no_token" error so the agent
+        # refuses rather than fabricating data from a synthetic bundle.
+        return self._settings.use_fixture_fhir
 
     @property
     def fixture_mode(self) -> bool:
@@ -114,10 +115,14 @@ class FhirClient:
             entries = _fixture_search(resource_type, params)
             return True, entries, None, int((time.monotonic() - started) * 1000)
 
+        token = self._resolve_token()
+        if not token:
+            return False, [], "no_token", int((time.monotonic() - started) * 1000)
+
         url = f"{self._settings.openemr_fhir_base.rstrip('/')}/{resource_type}"
         headers = {
             "Accept": "application/fhir+json",
-            "Authorization": f"Bearer {self._resolve_token()}",
+            "Authorization": f"Bearer {token}",
         }
         try:
             response = await self._client.get(url, headers=headers, params=params)
@@ -144,10 +149,14 @@ class FhirClient:
                 (time.monotonic() - started) * 1000
             )
 
+        token = self._resolve_token()
+        if not token:
+            return False, None, "no_token", int((time.monotonic() - started) * 1000)
+
         url = f"{self._settings.openemr_fhir_base.rstrip('/')}/{resource_type}/{resource_id}"
         headers = {
             "Accept": "application/fhir+json",
-            "Authorization": f"Bearer {self._resolve_token()}",
+            "Authorization": f"Bearer {token}",
         }
         try:
             response = await self._client.get(url, headers=headers)

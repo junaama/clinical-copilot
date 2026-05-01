@@ -82,9 +82,11 @@ def test_falls_back_to_static_token_when_no_smart_context() -> None:
     assert captured["authorization"] == "Bearer static-fallback"
 
 
-def test_falls_back_to_fixture_when_no_token_anywhere() -> None:
-    """When neither the SMART contextvar nor the env carries a token, the
-    client transparently uses the fixture path. Avoids 401-loops in dev.
+def test_no_implicit_fixture_fallback_in_production() -> None:
+    """When ``USE_FIXTURE_FHIR=0`` and no token is resolvable, the client
+    must NOT silently serve fixture data — production deploys would otherwise
+    fabricate clinical content from the synthetic bundle. ``search`` and
+    ``read`` surface ``error='no_token'`` instead.
     """
     s = Settings(
         LLM_PROVIDER="openai",
@@ -93,4 +95,15 @@ def test_falls_back_to_fixture_when_no_token_anywhere() -> None:
         OPENEMR_FHIR_TOKEN="",
     )
     client = FhirClient(s)
-    assert client.fixture_mode is True
+    assert client.fixture_mode is False
+
+    import asyncio
+    ok, entries, err, _ = asyncio.run(client.search("Patient", {"_id": "x"}))
+    assert ok is False
+    assert entries == []
+    assert err == "no_token"
+
+    ok, resource, err, _ = asyncio.run(client.read("Patient", "x"))
+    assert ok is False
+    assert resource is None
+    assert err == "no_token"
