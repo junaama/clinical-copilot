@@ -47,6 +47,15 @@ describe('parseSmartLaunch', () => {
     const ctx = parseSmartLaunch('https://app.example.com/');
     expect(ctx.iss).toBeNull();
     expect(ctx.launch).toBeNull();
+    expect(ctx.conversationId).toBeNull();
+  });
+
+  it('reads conversation_id issued by the backend /smart/callback redirect', () => {
+    const ctx = parseSmartLaunch(
+      'https://app.example.com/?conversation_id=conv-123&patient=p1',
+    );
+    expect(ctx.conversationId).toBe('conv-123');
+    expect(ctx.patientId).toBe('p1');
   });
 });
 
@@ -59,6 +68,7 @@ describe('exchangeLaunchForToken', () => {
         patientId: null,
         userId: null,
         accessToken: '',
+        conversationId: null,
       }),
     ).rejects.toThrow(/not implemented/);
   });

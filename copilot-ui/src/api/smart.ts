@@ -23,6 +23,12 @@ export interface SmartLaunchContext {
   readonly userId: string | null;
   /** Bearer access token, if already exchanged or passed by the host. */
   readonly accessToken: string;
+  /**
+   * Conversation id issued by the agent's /smart/callback. The backend keys
+   * the SMART token bundle by this id; chat requests must echo it so the
+   * agent can resolve the FHIR access token for tool calls.
+   */
+  readonly conversationId: string | null;
 }
 
 const EMPTY_CONTEXT: SmartLaunchContext = {
@@ -31,6 +37,7 @@ const EMPTY_CONTEXT: SmartLaunchContext = {
   patientId: null,
   userId: null,
   accessToken: '',
+  conversationId: null,
 };
 
 /**
@@ -56,6 +63,7 @@ export function parseSmartLaunch(href: string): SmartLaunchContext {
     patientId: get('patient') ?? get('patient_id'),
     userId: get('user') ?? get('user_id'),
     accessToken: get('access_token') ?? '',
+    conversationId: get('conversation_id'),
   };
 }
 

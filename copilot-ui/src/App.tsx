@@ -46,12 +46,15 @@ export function App(): JSX.Element {
   const [open, setOpen] = useState<boolean>(true);
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
   const [highlights, setHighlights] = useState<Record<string, boolean>>({});
-  const conversationIdRef = useRef<string>(makeConversationId());
-
   const smart: SmartLaunchContext = useMemo(
     () => parseSmartLaunch(window.location.href),
     [],
   );
+  // Prefer the conversation_id issued by the agent's /smart/callback so the
+  // backend can resolve the SMART token bundle for FHIR tool calls. Fall back
+  // to a client-generated id for dev / fixture mode where no SMART round-trip
+  // has happened yet.
+  const conversationIdRef = useRef<string>(smart.conversationId ?? makeConversationId());
 
   // ⌘K / Ctrl-K toggles the panel.
   useEffect(() => {
