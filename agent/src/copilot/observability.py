@@ -50,18 +50,18 @@ def get_callback_handler(settings: Settings | None = None) -> Any | None:
     if _handler is not None and fp == _handler_settings_fingerprint:
         return _handler
 
-    # Apply env vars so the SDK's get_client() picks them up.
-    os.environ.setdefault("LANGFUSE_HOST", settings.langfuse_host)
-    os.environ.setdefault("LANGFUSE_PUBLIC_KEY", settings.langfuse_public_key.get_secret_value())
-    os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key.get_secret_value())
+    # Apply env vars so the SDK's get_client() picks them up. Use plain
+    # assignment (NOT setdefault) — Settings is the source of truth, and a
+    # stale env var from a prior run would otherwise pin the wrong host.
+    os.environ["LANGFUSE_HOST"] = settings.langfuse_host
+    os.environ["LANGFUSE_PUBLIC_KEY"] = settings.langfuse_public_key.get_secret_value()
+    os.environ["LANGFUSE_SECRET_KEY"] = settings.langfuse_secret_key.get_secret_value()
 
     try:
-        # langfuse SDK v4.x exposes ``langfuse.langchain.CallbackHandler`` and
-        # speaks OTLP to a langfuse v3 *server*. Our self-hosted server is
-        # currently v2 (single-container) — the SDK will log
-        # ``Failed to export span batch code: 404`` on every flush until the
-        # v3 stack is provisioned (Postgres + ClickHouse + Redis + MinIO +
-        # langfuse-web + langfuse-worker). The 404s are non-fatal.
+        # langfuse SDK 4.x exposes ``langfuse.langchain.CallbackHandler`` and
+        # speaks OTLP to a v3 server. The full v3 stack is deployed
+        # (Postgres + ClickHouse + Redis + MinIO + langfuse-web +
+        # langfuse-worker) so traces should ingest cleanly.
         from langfuse.langchain import CallbackHandler
 
         _handler = CallbackHandler()
