@@ -86,13 +86,28 @@ def _assert_patient_context_matches(
 ) -> None:
     """Defense-in-depth check above the tool layer.
 
-    TODO: once the SMART OAuth2 PKCE exchange is wired in end-to-end, look
-    up the cached bundle for ``conversation_id`` and reject with HTTP 403
-    when ``patient_id`` doesn't match the launch context. Today this is a
-    placeholder that always passes — tool-layer enforcement in
-    :mod:`copilot.tools` remains the primary gate.
+    When a ``TokenBundle`` is bound to ``conversation_id`` (i.e. the SMART
+    launch completed), reject any /chat call whose ``patient_id`` doesn't
+    match the launched context with HTTP 403. The tool layer also enforces
+    this per ARCHITECTURE.md §7, but bouncing it at the API boundary keeps
+    a malicious or buggy client from triggering a graph invocation that
+    spends tokens before the guard fires.
+
+    No-op when there is no bound bundle (dev/test paths that pass
+    ``patient_id`` directly in the request body).
     """
 
+    bundle = get_default_stores().get_token(conversation_id)
+    if bundle is None:
+        return None
+    if bundle.patient_id and patient_id and bundle.patient_id != patient_id:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "patient_context_mismatch: launched session is bound to a "
+                "different patient — re-launch the Co-Pilot from the chart"
+            ),
+        )
     return None
 
 
