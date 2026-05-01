@@ -3,16 +3,26 @@
 /**
  * ChartSidebarListener
  *
- * Injects the Co-Pilot launch markup at the top of the patient demographics
- * section list. The markup itself is a single button + an empty iframe host
- * that the browser-side bridge fills in on click. The button URL points at
- * the module's public/embed.php which performs the SMART EHR launch.
+ * Injects a floating "Co-Pilot" launch button and a fixed-position sidebar
+ * slot at the bottom of the patient demographics page. The button is
+ * position:fixed so it sits on top of the chart and is always visible
+ * regardless of how the chart is scrolled — no buried-inside-a-card UX.
  *
- * Why TOP: docking on the right edge of the chart needs a stable mount point
- * inside the demographics column. EVENT_SECTION_LIST_RENDER_TOP fires once,
- * before any chart-card has been rendered, which means the bridge JS — also
- * injected here — can attach data-card="..." attributes to subsequent card
- * containers reliably (see `assignDataCardAttributes` in the inline script).
+ * Why EVENT_RENDER_POST_PAGELOAD: it fires once at the end of demographics.php,
+ * after every chart card has rendered. That gives us a stable mount point
+ * for a sidebar overlay that lives outside the section list and lets the
+ * inline JS attach data-card="..." to chart cards for the citation-flash
+ * bridge.
+ *
+ * Demo-path notes (Path A in the design doc):
+ *   - The iframe URL points directly at the Co-Pilot UI, NOT through
+ *     embed.php / SMART OAuth. The patient and user identifiers come
+ *     straight from $_SESSION (the user is already authenticated in
+ *     OpenEMR; the patient is already the chart context).
+ *   - The agent honors DEMO_MODE and reads patient context from the chat
+ *     request body instead of looking up a SMART token bundle.
+ *   - The full SMART path (embed.php + SmartLaunchToken) still exists for
+ *     production deploys; nothing here breaks it.
  *
  * @package   OpenEMR
  * @link      https://www.open-emr.org
@@ -28,42 +38,89 @@ use OpenEMR\Events\PatientDemographics\RenderEvent;
 final readonly class ChartSidebarListener
 {
     public function __construct(
-        private string $installPath,
         private string $copilotAppUrl,
+        private int $sessionUserId,
+        private string $sessionUserName,
     ) {
     }
 
-    public function onPatientSummaryTop(RenderEvent $event): void
+    public function onPatientPagePostLoad(RenderEvent $event): void
     {
         $pid = $event->getPid();
         if ($pid === null || $pid === 0) {
             return;
         }
-        $embedUrl = $this->installPath . '/public/embed.php?pid=' . urlencode((string) $pid);
-        $expectedOrigin = $this->originOf($this->copilotAppUrl);
 
-        // attr() is loaded by globals.php in the host context.
-        $launchUrlAttr = function_exists('attr') ? attr($embedUrl) : htmlspecialchars($embedUrl, ENT_QUOTES);
+        $copilotUrl = rtrim($this->copilotAppUrl, '/');
+        $expectedOrigin = $this->originOf($copilotUrl);
+
+        // attr() / text() loaded by globals.php in the host context.
+        $copilotUrlAttr = function_exists('attr') ? attr($copilotUrl) : htmlspecialchars($copilotUrl, ENT_QUOTES);
+        $pidAttr = function_exists('attr') ? attr((string) $pid) : htmlspecialchars((string) $pid, ENT_QUOTES);
+        $userIdAttr = function_exists('attr') ? attr((string) $this->sessionUserId) : htmlspecialchars((string) $this->sessionUserId, ENT_QUOTES);
+        $userNameAttr = function_exists('attr') ? attr($this->sessionUserName) : htmlspecialchars($this->sessionUserName, ENT_QUOTES);
         $originJs = json_encode($expectedOrigin, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
 
-        // Markup + bridge: launch button, mount point for the iframe, and
-        // the postMessage listener that turns copilot:flash-card events into
-        // a flash outline on the matching chart card.
         echo <<<HTML
-<section class="copilot-launcher" id="copilot-launcher-mount" data-copilot-origin="{$expectedOrigin}">
-    <button type="button" class="btn btn-primary btn-sm" id="copilot-open-btn"
-            data-embed-url="{$launchUrlAttr}">
-        Open Co-Pilot
+<div id="copilot-launcher-root"
+     data-copilot-url="{$copilotUrlAttr}"
+     data-copilot-origin="{$expectedOrigin}"
+     data-pid="{$pidAttr}"
+     data-user-id="{$userIdAttr}"
+     data-user-name="{$userNameAttr}">
+    <button type="button" id="copilot-fab" aria-label="Open Clinical Co-Pilot">
+        <span class="copilot-fab-icon">✦</span>
+        <span class="copilot-fab-label">Co-Pilot</span>
     </button>
-    <div id="copilot-iframe-slot" hidden></div>
-</section>
+    <aside id="copilot-sidebar" hidden aria-label="Clinical Co-Pilot"></aside>
+</div>
 <style>
-    .copilot-launcher { margin: 0 0 12px 0; }
-    #copilot-iframe-slot { position: fixed; right: 0; top: 0; width: 420px;
-        height: 100vh; z-index: 9000; border-left: 1px solid #ccc;
-        background: #fff; box-shadow: -4px 0 12px rgba(0,0,0,.08); }
-    #copilot-iframe-slot iframe { width: 100%; height: 100%; border: 0; }
-    /* Mirrors the .emr-card.flash rule from copilot-ui/src/styles/styles.css */
+    #copilot-fab {
+        position: fixed;
+        right: 24px;
+        bottom: 24px;
+        z-index: 9000;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 18px;
+        font-size: 14px;
+        font-weight: 600;
+        color: #fff;
+        background: linear-gradient(135deg, #4abfac 0%, #2f8f7f 100%);
+        border: 0;
+        border-radius: 999px;
+        box-shadow: 0 4px 14px rgba(47, 143, 127, .35);
+        cursor: pointer;
+        transition: transform .15s ease, box-shadow .15s ease;
+    }
+    #copilot-fab:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(47, 143, 127, .45); }
+    #copilot-fab:active { transform: translateY(0); }
+    .copilot-fab-icon { font-size: 16px; line-height: 1; }
+    #copilot-sidebar {
+        position: fixed;
+        right: 0;
+        top: 0;
+        width: 440px;
+        max-width: 100vw;
+        height: 100vh;
+        z-index: 9100;
+        background: #fff;
+        border-left: 1px solid rgba(0,0,0,.08);
+        box-shadow: -4px 0 16px rgba(0,0,0,.10);
+        animation: copilot-slide-in .25s ease-out;
+    }
+    @keyframes copilot-slide-in {
+        from { transform: translateX(100%); }
+        to   { transform: translateX(0); }
+    }
+    #copilot-sidebar iframe {
+        width: 100%;
+        height: 100%;
+        border: 0;
+        display: block;
+    }
+    /* Citation flash — mirrors copilot-ui's .emr-card.flash rule. */
     [data-card].copilot-flash { animation: copilot-flash 1.6s ease-out 1; outline-offset: 4px; }
     @keyframes copilot-flash {
         0%   { outline: 3px solid rgba(255, 193, 7, 0); }
@@ -73,19 +130,13 @@ final readonly class ChartSidebarListener
 </style>
 <script>
 (function () {
+    var root = document.getElementById('copilot-launcher-root');
+    if (!root) return;
     var EXPECTED_ORIGIN = {$originJs};
     var KNOWN_CARDS = [
         'vitals','labs','medications','problems','allergies',
         'prescriptions','encounters','documents','other'
     ];
-
-    /**
-     * Heuristic: OpenEMR's stock chart cards do not carry stable
-     * data-card markers. We map by the section heading text, which is
-     * the most stable identifier in the upstream UI today. If the
-     * heading text is restyled upstream, update this map; the rest of
-     * the bridge is data-driven by the data-card attribute.
-     */
     var HEADING_TO_CARD = {
         'vitals': 'vitals',
         'lab results': 'labs',
@@ -136,31 +187,60 @@ final readonly class ChartSidebarListener
         setTimeout(function () { target.classList.remove('copilot-flash'); }, 2000);
     }
 
+    function buildIframeSrc() {
+        var base = root.dataset.copilotUrl;
+        var qs = new URLSearchParams({
+            patient: root.dataset.pid,
+            user: root.dataset.userId,
+            user_name: root.dataset.userName,
+            surface: 'panel',
+            demo: '1'
+        });
+        return base + '/?' + qs.toString();
+    }
+
     function openCoPilot() {
-        var slot = document.getElementById('copilot-iframe-slot');
-        var btn = document.getElementById('copilot-open-btn');
-        if (!slot || !btn) return;
-        if (slot.firstChild) { slot.hidden = !slot.hidden; return; }
+        var sidebar = document.getElementById('copilot-sidebar');
+        if (!sidebar) return;
+        if (sidebar.firstChild) {
+            sidebar.hidden = !sidebar.hidden;
+            return;
+        }
         var iframe = document.createElement('iframe');
-        iframe.src = btn.getAttribute('data-embed-url');
+        iframe.src = buildIframeSrc();
         iframe.title = 'Clinical Co-Pilot';
         iframe.setAttribute('allow', 'clipboard-write');
-        slot.appendChild(iframe);
-        slot.hidden = false;
+        sidebar.appendChild(iframe);
+        sidebar.hidden = false;
     }
 
     document.addEventListener('DOMContentLoaded', function () {
         assignDataCardAttributes();
-        var btn = document.getElementById('copilot-open-btn');
-        if (btn) btn.addEventListener('click', openCoPilot);
+    });
+    // EVENT_RENDER_POST_PAGELOAD already fires after the page is loaded — wire
+    // straight away so Cmd-K and the FAB click are live immediately.
+    assignDataCardAttributes();
+
+    var btn = document.getElementById('copilot-fab');
+    if (btn) btn.addEventListener('click', openCoPilot);
+
+    document.addEventListener('keydown', function (e) {
+        if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+            e.preventDefault();
+            openCoPilot();
+        }
     });
 
     window.addEventListener('message', function (event) {
         if (event.origin !== EXPECTED_ORIGIN) return;
         var data = event.data;
-        if (!data || data.type !== 'copilot:flash-card') return;
-        if (typeof data.card !== 'string') return;
-        flashCard(data.card);
+        if (!data) return;
+        if (data.type === 'copilot:flash-card' && typeof data.card === 'string') {
+            flashCard(data.card);
+        } else if (data.type === 'copilot:close') {
+            var sidebar = document.getElementById('copilot-sidebar');
+            if (sidebar) sidebar.hidden = true;
+        }
     }, false);
 })();
 </script>
@@ -171,8 +251,6 @@ HTML;
     {
         $parts = parse_url($url);
         if ($parts === false) {
-            // Defensive default — treat as a same-origin null so messages from
-            // a misconfigured app are dropped, not trusted.
             return 'null';
         }
         $scheme = $parts['scheme'] ?? '';

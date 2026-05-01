@@ -41,15 +41,28 @@ final class Bootstrap
         if ($copilotAppUrl === '') {
             $copilotAppUrl = 'http://localhost:5173';
         }
+
+        // Pull session identifiers at subscribe-time. They're stable for the
+        // page lifecycle, and reading them here keeps the listener pure.
+        $sessionUserId = isset($_SESSION['authUserID']) && is_numeric($_SESSION['authUserID'])
+            ? (int) $_SESSION['authUserID']
+            : 0;
+        $sessionUserName = isset($_SESSION['authUser']) && is_string($_SESSION['authUser'])
+            ? $_SESSION['authUser']
+            : '';
+
         $sidebar = new ChartSidebarListener(
-            installPath: OEGlobalsBag::getInstance()->getWebRoot() . self::MODULE_INSTALLATION_PATH,
             copilotAppUrl: $copilotAppUrl,
+            sessionUserId: $sessionUserId,
+            sessionUserName: $sessionUserName,
         );
 
-        // Renders the launch + iframe-host markup in the patient summary view.
+        // Render once at the bottom of the demographics page so the floating
+        // launch button + sidebar slot live outside the section list and stay
+        // visible regardless of how the chart is scrolled.
         $this->eventDispatcher->addListener(
-            RenderEvent::EVENT_SECTION_LIST_RENDER_TOP,
-            $sidebar->onPatientSummaryTop(...)
+            RenderEvent::EVENT_RENDER_POST_PAGELOAD,
+            $sidebar->onPatientPagePostLoad(...)
         );
 
         // Best-effort: ensure the SMART client has a generated secret. Skipped
