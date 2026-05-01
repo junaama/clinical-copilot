@@ -35,6 +35,9 @@ _active_patient_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _active_smart_token: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "copilot_active_smart_token", default=None
 )
+_active_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "copilot_active_user_id", default=None
+)
 
 
 def set_active_patient_id(patient_id: str | None) -> None:
@@ -51,6 +54,14 @@ def set_active_smart_token(token: str | None) -> None:
 
 def get_active_smart_token() -> str | None:
     return _active_smart_token.get()
+
+
+def set_active_user_id(user_id: str | None) -> None:
+    _active_user_id.set(user_id or None)
+
+
+def get_active_user_id() -> str | None:
+    return _active_user_id.get()
 
 
 def _enforce_patient_context(patient_id: str) -> dict[str, Any] | None:
@@ -414,26 +425,84 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
 
     async def get_my_patient_list() -> dict[str, Any]:
         """UC-1 Stage 0: return the active user's care-team panel as patient
-        ids. Fixture mode returns the canonical 5-patient panel; real mode
-        will query OpenEMR's care-team relationships (TODO).
+        ids.
+
+        Two modes:
+
+        - Fixture mode (``USE_FIXTURE_FHIR=1``) — returns the canonical
+          5-patient panel from ``fixtures.CARE_TEAM_PANEL``. Used for tests
+          and the demo runner.
+        - Real mode — queries the FHIR ``CareTeam`` resource scoped to the
+          authenticated practitioner (``CareTeam?participant=Practitioner/{id}``)
+          and extracts unique ``Patient/{id}`` references from each team's
+          ``subject``. When the SMART token doesn't surface a practitioner
+          id (e.g. patient-launch context), returns an explicit error rather
+          than falling back to a fixture panel.
 
         Note: this tool is bound to the *user*, not a patient — so it does
         not enforce the patient-context guard. The downstream tools that
         actually fetch patient data still do.
         """
-        rows = tuple(
-            Row(
-                fhir_ref=f"Patient/{pid}",
-                resource_type="Patient",
-                fields={"patient_id": pid},
+        if settings.use_fixture_fhir:
+            rows = tuple(
+                Row(
+                    fhir_ref=f"Patient/{pid}",
+                    resource_type="Patient",
+                    fields={"patient_id": pid},
+                )
+                for pid in CARE_TEAM_PANEL
             )
-            for pid in CARE_TEAM_PANEL
+            return ToolResult(
+                ok=True,
+                rows=rows,
+                sources_checked=("CareTeam (fixture panel)",),
+                latency_ms=0,
+            ).to_payload()
+
+        practitioner_id = get_active_user_id()
+        if not practitioner_id:
+            return ToolResult(
+                ok=False,
+                sources_checked=(),
+                error="no_practitioner_context",
+                latency_ms=0,
+            ).to_payload()
+
+        ok, entries, err, ms = await client.search(
+            "CareTeam",
+            {"participant": f"Practitioner/{practitioner_id}"},
         )
+        if not ok:
+            return ToolResult(
+                ok=False,
+                sources_checked=("CareTeam",),
+                error=err or "care_team_query_failed",
+                latency_ms=ms,
+            ).to_payload()
+
+        # CareTeam.subject -> Patient/{id}. Dedupe while preserving order.
+        seen: set[str] = set()
+        rows: list[Row] = []
+        for team in entries:
+            ref = (team.get("subject") or {}).get("reference") or ""
+            if not ref.startswith("Patient/"):
+                continue
+            pid = ref.removeprefix("Patient/")
+            if pid in seen:
+                continue
+            seen.add(pid)
+            rows.append(
+                Row(
+                    fhir_ref=ref,
+                    resource_type="Patient",
+                    fields={"patient_id": pid},
+                )
+            )
         return ToolResult(
             ok=True,
-            rows=rows,
-            sources_checked=("CareTeam (fixture panel)",),
-            latency_ms=0,
+            rows=tuple(rows),
+            sources_checked=("CareTeam",),
+            latency_ms=ms,
         ).to_payload()
 
     async def get_change_signal(patient_id: str, hours: int = 24) -> dict[str, Any]:

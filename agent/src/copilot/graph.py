@@ -15,8 +15,11 @@ Classifier, planner, and UC-1 nodes are tracked in
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -37,7 +40,12 @@ from .config import Settings, get_settings
 from .llm import build_chat_model
 from .prompts import CLARIFY_SYSTEM, CLASSIFIER_SYSTEM, PER_PATIENT_BRIEF, TRIAGE_BRIEF
 from .state import CoPilotState
-from .tools import make_tools, set_active_patient_id, set_active_smart_token
+from .tools import (
+    make_tools,
+    set_active_patient_id,
+    set_active_smart_token,
+    set_active_user_id,
+)
 
 MAX_REGENS = 2
 CLASSIFIER_CONFIDENCE_THRESHOLD = 0.8
@@ -192,7 +200,20 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             decision = await classifier_model.ainvoke(
                 [SystemMessage(content=CLASSIFIER_SYSTEM), HumanMessage(content=latest)]
             )
-        except Exception:  # noqa: BLE001 — classifier failure should fail-open to clarify
+        except Exception as exc:  # noqa: BLE001 — classifier failure fails open to clarify
+            # Surface the cause so an opaque "unclear/0.0" response in
+            # production can be debugged without pulling traces. The free-text
+            # of the user message is *not* logged (PHI leak risk) — only the
+            # exception class, message, and traceback (for the framework
+            # surface). ``exc_info=True`` is required because Python's default
+            # logging formatter ignores ``extra=`` keys.
+            _log.warning(
+                "classifier_failed model=%s err=%s: %s",
+                settings.llm_model,
+                exc.__class__.__name__,
+                exc,
+                exc_info=True,
+            )
             return Command(
                 goto="clarify",
                 update={"workflow_id": "unclear", "classifier_confidence": 0.0},
@@ -254,6 +275,7 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         # the right authorization for this turn.
         set_active_patient_id(patient_id or None)
         set_active_smart_token(smart_token or None)
+        set_active_user_id(state.get("user_id") or None)
 
         system_prompt = PER_PATIENT_BRIEF.format(patient_id=patient_id)
         if feedback:
@@ -405,6 +427,7 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         # it's the same authenticated user's care team.
         set_active_patient_id(None)
         set_active_smart_token(state.get("smart_access_token") or None)
+        set_active_user_id(state.get("user_id") or None)
 
         feedback = state.get("verifier_feedback") or ""
         system_prompt = TRIAGE_BRIEF
