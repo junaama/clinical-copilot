@@ -210,7 +210,7 @@ function parseCohortRow(raw: unknown, field: string): CohortRow {
     id: asString(obj.id, `${field}.id`),
     name: asString(obj.name, `${field}.name`),
     age: asNumber(obj.age, `${field}.age`),
-    room: asString(obj.room, `${field}.room`),
+    room: asOptionalString(obj.room, `${field}.room`) ?? '',
     score: asNumber(obj.score, `${field}.score`),
     trend: asTrend(obj.trend, `${field}.trend`),
     reasons: asArray(obj.reasons, `${field}.reasons`).map((r, i) =>
