@@ -1,8 +1,9 @@
-"""W-2 / W-3 synthesis-prompt selector — issue 006.
+"""W-1 / W-2 / W-3 synthesis-prompt selector — issues 006 and 007.
 
 The classifier emits an advisory ``workflow_id``. After tool execution the
 synthesis prompt selector picks framing tuned to the workflow:
 
+* ``W-1`` (panel triage) — emphasizes ranking and "see X first".
 * ``W-2`` (per-patient 24h brief) — emphasizes "what changed" overnight.
 * ``W-3`` (pager-driven acute) — emphasizes acuity / next-90-seconds.
 * anything else — falls through to the default framing.
@@ -31,6 +32,34 @@ def _build(workflow_id: str, *, confidence: float = 0.95) -> str:
         workflow_id=workflow_id,
         confidence=confidence,
     )
+
+
+def test_w1_prompt_includes_panel_triage_framing() -> None:
+    """W-1 framing is panel-level prioritization. Marker phrase has to be
+    unique enough that we can assert it isn't present for other workflows."""
+    prompt = _build("W-1")
+    assert "W-1 SYNTHESIS" in prompt
+    lowered = prompt.lower()
+    # The W-1 framing should reference ranking / prioritization language
+    # and the panel-triage composite tool.
+    assert (
+        "rank" in lowered
+        or "first" in lowered
+        or "prioritiz" in lowered
+    )
+    assert "run_panel_triage" in prompt
+
+
+def test_w1_prompt_does_not_include_w2_or_w3_framing() -> None:
+    """The selector must not double-include framings."""
+    prompt = _build("W-1")
+    assert "W-2 SYNTHESIS" not in prompt
+    assert "W-3 SYNTHESIS" not in prompt
+
+
+def test_w2_prompt_does_not_include_w1_framing() -> None:
+    prompt = _build("W-2")
+    assert "W-1 SYNTHESIS" not in prompt
 
 
 def test_w2_prompt_includes_overnight_brief_framing() -> None:
@@ -69,15 +98,17 @@ def test_w3_prompt_does_not_include_w2_framing() -> None:
 
 
 def test_w7_prompt_uses_default_framing() -> None:
-    """A workflow without a dedicated framing falls through cleanly: neither
-    W-2 nor W-3 framing appears in the prompt."""
+    """A workflow without a dedicated framing falls through cleanly: no
+    W-1, W-2, or W-3 framing appears in the prompt."""
     prompt = _build("W-7")
+    assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
 
 
 def test_unclear_workflow_uses_default_framing() -> None:
     prompt = _build("unclear", confidence=0.5)
+    assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
 
