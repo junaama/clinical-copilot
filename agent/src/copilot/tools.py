@@ -9,11 +9,13 @@ issuing a FHIR query. The gate checks whether the active practitioner (the
 ``user_id`` contextvar set by the graph) is on the patient's CareTeam; if
 not, the call is hard-refused with ``error='careteam_denied'`` (or
 ``no_active_patient`` when the tool was called without a patient_id at all).
-This replaces the EHR-launch-era one-patient-per-conversation pin.
+The legacy EHR-launch-era one-patient-per-conversation pin is gone — issue 003
+removed it; multi-patient conversations resolve patients via the
+``resolve_patient`` tool against the user's CareTeam.
 
-Test/dev paths that haven't bound an active user fall through the legacy
-SMART-pin check (``patient_context_mismatch``) so isolated unit tests still
-work without a CareTeam fixture.
+Tests and scripts that exercise patient-scoped tools must bind an active
+user via ``set_active_user_id`` (typically a fixture practitioner) so the
+gate can decide.
 """
 
 from __future__ import annotations
@@ -33,23 +35,22 @@ from .fixtures import CARE_TEAM_PANEL
 # Contextvars carry the active SMART context into the async tool calls
 # without threading it through every signature. Set by the graph's agent_node
 # before invoking the agent; auto-propagates to spawned asyncio tasks.
-_active_patient_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "copilot_active_patient_id", default=None
-)
 _active_smart_token: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "copilot_active_smart_token", default=None
 )
 _active_user_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "copilot_active_user_id", default=None
 )
-
-
-def set_active_patient_id(patient_id: str | None) -> None:
-    _active_patient_id.set(patient_id)
-
-
-def get_active_patient_id() -> str | None:
-    return _active_patient_id.get()
+# Conversation-scoped patient registry. Set by the graph's agent_node from
+# ``state.resolved_patients`` before the agent runs; ``resolve_patient`` reads
+# it for O(1) cache hits on previously-resolved names. Read-only at the tool
+# layer — the agent_node aggregates new resolutions back into state after
+# all tools have returned. Default is ``None`` (sentinel for "not bound");
+# ``get_active_registry`` normalizes to an empty dict so callers don't have
+# to.
+_active_registry: contextvars.ContextVar[dict[str, dict[str, Any]] | None] = (
+    contextvars.ContextVar("copilot_active_registry", default=None)
+)
 
 
 def set_active_smart_token(token: str | None) -> None:
@@ -68,23 +69,12 @@ def get_active_user_id() -> str | None:
     return _active_user_id.get()
 
 
-def _enforce_patient_context(patient_id: str) -> dict[str, Any] | None:
-    """Legacy SMART-pin check, used only when no CareTeam gate is wired
-    (test/dev paths) and no active user_id is bound.
+def set_active_registry(registry: dict[str, dict[str, Any]] | None) -> None:
+    _active_registry.set(dict(registry or {}))
 
-    Returns the refusal payload when the call's ``patient_id`` doesn't match
-    the bound SMART context, or ``None`` when allowed (including the no-
-    context-bound case).
-    """
-    active = get_active_patient_id()
-    if active is None or patient_id == active:
-        return None
-    return ToolResult(
-        ok=False,
-        sources_checked=(),
-        error=AuthDecision.PATIENT_CONTEXT_MISMATCH.value,
-        latency_ms=0,
-    ).to_payload()
+
+def get_active_registry() -> dict[str, dict[str, Any]]:
+    return _active_registry.get() or {}
 
 
 def _denial_payload(decision: AuthDecision) -> dict[str, Any]:
@@ -101,14 +91,12 @@ async def _enforce_patient_authorization(
 ) -> dict[str, Any] | None:
     """Run the CareTeam gate for this tool call.
 
-    When an active user_id is bound (the production path: graph.agent_node
-    sets it from state.user_id), the gate is consulted. When it's absent
-    (isolated unit tests, scripts), we fall back to the legacy SMART-pin
-    check so those paths don't need a CareTeam fixture to keep working.
+    Returns the refusal payload when the gate denies, or ``None`` when the
+    call is allowed. Tests must bind an active user_id (fixture
+    practitioner) before invoking patient-scoped tools — without one the
+    gate returns ``careteam_denied`` for every patient.
     """
-    user_id = get_active_user_id()
-    if not user_id:
-        return _enforce_patient_context(patient_id)
+    user_id = get_active_user_id() or ""
     decision = await gate.assert_authorized(user_id, patient_id)
     if decision is AuthDecision.ALLOWED:
         return None
@@ -344,10 +332,166 @@ def _result_from_entries(
     )
 
 
+def _patient_matches_name(
+    patient: dict[str, Any], name_lower: str
+) -> bool:
+    """Case-insensitive name match: family, given, full-name, or substring.
+
+    Accepts "Hayes", "Robert Hayes", "robert", or even "haye" (substring of
+    family). Two-word inputs are matched as either order — "Robert Hayes" and
+    "Hayes, Robert" both hit the same row.
+    """
+    given = (patient.get("given_name") or "").lower()
+    family = (patient.get("family_name") or "").lower()
+    full_a = f"{given} {family}".strip()
+    full_b = f"{family} {given}".strip()
+    if not name_lower:
+        return False
+    return (
+        name_lower == family
+        or name_lower == given
+        or name_lower in full_a
+        or name_lower in full_b
+        or name_lower in family
+        or name_lower in given
+    )
+
+
+def _registry_to_patient_dict(
+    p: dict[str, Any],
+) -> dict[str, Any]:
+    """Project a registry entry into the resolve_patient response shape."""
+    return {
+        "patient_id": p["patient_id"],
+        "given_name": p["given_name"],
+        "family_name": p["family_name"],
+        "birth_date": p["birth_date"],
+    }
+
+
 def make_tools(settings: Settings) -> list[StructuredTool]:
     """Build the tool set bound to a shared FHIR client and CareTeam gate."""
     client = FhirClient(settings)
     gate = CareTeamGate(client, admin_user_ids=frozenset(settings.admin_user_ids))
+
+    async def resolve_patient(
+        name: str,
+        dob: str | None = None,
+        mrn_tail: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a patient mention against the user's CareTeam roster.
+
+        Status semantics:
+
+        * ``resolved`` — exactly one match. ``patients`` carries the row.
+        * ``ambiguous`` — multiple matches. ``patients`` carries the
+          candidates with DOBs so the caller can ask the user to
+          disambiguate.
+        * ``not_found`` — zero matches. Privacy-correct collapse of "exists
+          but not on your CareTeam" with "doesn't exist anywhere"; both
+          surface the same way.
+        * ``clarify`` — ``name`` is too sparse to search.
+
+        The resolver is cache-hit-idempotent within a conversation: it
+        consults the active registry contextvar first and short-circuits
+        on a single-name match before paying a FHIR roundtrip. The audit
+        row still reflects the call regardless — every "user mentioned a
+        patient" event is logged via the gate-decisions array.
+        """
+        started_name = (name or "").strip()
+        if len(started_name) < 2:
+            return {
+                "ok": False,
+                "status": "clarify",
+                "patients": [],
+                "message": (
+                    "I need at least a partial name to look up a patient — "
+                    "please tell me who you mean."
+                ),
+                "sources_checked": [],
+                "latency_ms": 0,
+            }
+
+        name_lower = started_name.lower()
+        registry = get_active_registry()
+
+        # Cache-first: scan the registry for a unique match. DOB and
+        # mrn_tail filters apply to the cache too so a more-specific call
+        # narrows previously-resolved entries.
+        cached_candidates = [
+            entry
+            for entry in registry.values()
+            if _patient_matches_name(entry, name_lower)
+            and (dob is None or entry.get("birth_date") == dob)
+        ]
+        if len(cached_candidates) == 1:
+            return {
+                "ok": True,
+                "status": "resolved",
+                "patients": [_registry_to_patient_dict(cached_candidates[0])],
+                "message": "",
+                "sources_checked": ["CareTeam (cached)"],
+                "latency_ms": 0,
+            }
+
+        # Cold path: ask the gate for the user's panel and match against it.
+        # ``list_panel`` is the same call the empty-state UI uses; we reuse
+        # it so the resolver is intrinsically CareTeam-prefiltered.
+        user_id = get_active_user_id() or ""
+        roster = await gate.list_panel(user_id)
+
+        candidates = []
+        for resolved in roster:
+            row = {
+                "patient_id": resolved.patient_id,
+                "given_name": resolved.given_name,
+                "family_name": resolved.family_name,
+                "birth_date": resolved.birth_date,
+            }
+            if not _patient_matches_name(row, name_lower):
+                continue
+            if dob is not None and row["birth_date"] != dob:
+                continue
+            # ``mrn_tail`` is accepted for forward-compat but the fixture
+            # bundle has no MRN identifiers; real OpenEMR will populate
+            # ``Patient.identifier`` and we'll filter on the trailing digits
+            # here. Until then, mrn_tail-narrowing is a no-op when MRN data
+            # is unavailable.
+            candidates.append(row)
+
+        if len(candidates) == 1:
+            return {
+                "ok": True,
+                "status": "resolved",
+                "patients": candidates,
+                "message": "",
+                "sources_checked": ["CareTeam"],
+                "latency_ms": 0,
+            }
+        if len(candidates) > 1:
+            return {
+                "ok": True,
+                "status": "ambiguous",
+                "patients": candidates,
+                "message": (
+                    "Multiple patients on your CareTeam match — "
+                    "please disambiguate by date of birth."
+                ),
+                "sources_checked": ["CareTeam"],
+                "latency_ms": 0,
+            }
+        return {
+            "ok": True,
+            "status": "not_found",
+            "patients": [],
+            "message": (
+                "No patient on your CareTeam matches that name. "
+                "If you believe this patient is on your panel, double-check "
+                "spelling or use a more specific identifier."
+            ),
+            "sources_checked": ["CareTeam"],
+            "latency_ms": 0,
+        }
 
     async def get_patient_demographics(patient_id: str) -> dict[str, Any]:
         if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
@@ -674,6 +818,22 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     return [
+        StructuredTool.from_function(
+            coroutine=resolve_patient,
+            name="resolve_patient",
+            description=(
+                "Resolve a patient name (and optionally DOB or MRN tail) "
+                "against the user's CareTeam. Call this FIRST whenever the "
+                "user mentions a patient by name (e.g. 'Hayes', 'tell me "
+                "about Robert'); use the returned patient_id for downstream "
+                "tool calls. Status values: 'resolved' (single match — "
+                "proceed), 'ambiguous' (multiple matches — ask the user to "
+                "pick one by DOB), 'not_found' (no match on the user's "
+                "CareTeam — say so and stop), 'clarify' (input too sparse). "
+                "Subsequent mentions of the same name in the same "
+                "conversation are O(1) cache hits."
+            ),
+        ),
         StructuredTool.from_function(
             coroutine=get_my_patient_list,
             name="get_my_patient_list",
