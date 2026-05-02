@@ -144,6 +144,57 @@ plan (meds + orders) in one parallel fan-out.
 """
 
 
+_W8_SYNTHESIS_FRAMING = """\
+W-8 SYNTHESIS (consult orientation — specialist reading the chart)
+The user is reading the chart from a consulting specialist's
+perspective: cardiology, nephrology, or ID. Lead with the active
+problems most relevant to the consult question, then orient the
+clinician on what the chart shows from their service's lens. Cite
+every claim. **Do NOT recommend a treatment plan or workup — the
+consultant decides; surface what the chart says.** Skip findings
+outside the consulting lens unless they bear directly on the
+consult question (e.g., a fever spike for an ID consult is on-
+topic; a routine BP reading for an ID consult is not).
+
+Domain-specific lenses:
+  - ``cardiology``: lead with cardiac problems (CHF / CAD /
+    arrhythmia / valve), then the active cardiac regimen
+    (β-blockers, ACE/ARB/ARNi, diuretics, anticoagulants,
+    antiarrhythmics, statin) grouped by indication. Surface the
+    BP / HR / rhythm trend from the vitals envelope; pull BNP /
+    troponin / BMP from the labs envelope; pull echo / cath
+    conclusions from the imaging envelope (DiagnosticReport
+    radiology). Quote the most recent echo's EF and any wall-motion
+    findings verbatim.
+  - ``nephrology``: lead with the renal problem (CKD stage / AKI
+    stage / ESRD on dialysis / transplant), then the renal-relevant
+    medications (ACE/ARB, diuretics, nephrotoxic agents — NSAIDs,
+    aminoglycosides, contrast load, vancomycin trough-bearing). Pull
+    Cr / K+ / BUN / eGFR / UA / urine protein from the labs
+    envelope; surface held-for-AKI doses from the MARs envelope
+    (``lifecycle_status='held'`` with status reason quoted). Note
+    any documented dialysis encounters from the encounters envelope.
+  - ``id``: lead with the infection-related problem (sepsis /
+    pneumonia / UTI / SSTI / cellulitis / endocarditis), then the
+    active antibiotic regimen with start dates from
+    ``authored_on``, then the MAR trail (held / given / stopped),
+    then the microbiology evidence (culture orders authored over
+    the window from ServiceRequest, culture / sensitivity / gram-
+    stain results from Observation laboratory — quote organisms
+    and sensitivities verbatim), then the WBC / temperature /
+    lactate trend from the labs envelope. Same lens as
+    ``run_abx_stewardship`` but extended over a wider window with
+    problems and notes for the consult write-up.
+
+Prefer ``run_consult_orientation`` with the appropriate ``domain``
+over chaining the granular reads — it fans out the per-domain
+branches in parallel against a 7-day window by default. If the
+consult question requires a resource outside the domain's fan-out
+(e.g., a cardiology consultant asking about cultures), call the
+relevant granular tool on top of the composite.
+"""
+
+
 _W9_SYNTHESIS_FRAMING = """\
 W-9 SYNTHESIS (re-consult / what changed since I last looked)
 The user has touched this chart before and is asking what changed
@@ -379,18 +430,19 @@ def render_registry_block(
 
 
 # Workflow-id → synthesis framing block. Issue 006 wires W-2 and W-3;
-# issue 007 extends this map to W-1, W-4, W-5, W-9, W-10, and W-11 (W-8
-# remains pending). W-4 and W-5 share one composite tool
-# (``run_cross_cover_onboarding``) but get different framings here:
-# cross-cover orientation vs. family-meeting prep. Every workflow not in
-# the map falls through to ``""`` (default framing — the generic
-# WORKFLOW / FORMAT sections below already handle the common path).
+# issue 007 extends this map to cover W-1, W-4, W-5, W-8, W-9, W-10, and
+# W-11. W-4 and W-5 share one composite tool (``run_cross_cover_onboarding``)
+# but get different framings here: cross-cover orientation vs.
+# family-meeting prep. W-6 (causal trace) and W-7 (targeted drill) fall
+# through to the default framing by design — both use granular reads
+# under the WORKFLOW / FORMAT sections of the unified template.
 _WORKFLOW_SYNTHESIS_FRAMING: dict[str, str] = {
     "W-1": _W1_SYNTHESIS_FRAMING,
     "W-2": _W2_SYNTHESIS_FRAMING,
     "W-3": _W3_SYNTHESIS_FRAMING,
     "W-4": _W4_SYNTHESIS_FRAMING,
     "W-5": _W5_SYNTHESIS_FRAMING,
+    "W-8": _W8_SYNTHESIS_FRAMING,
     "W-9": _W9_SYNTHESIS_FRAMING,
     "W-10": _W10_SYNTHESIS_FRAMING,
     "W-11": _W11_SYNTHESIS_FRAMING,
