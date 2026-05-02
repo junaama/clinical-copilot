@@ -30,6 +30,16 @@ export interface ChatMessage {
   readonly error?: { readonly status: number; readonly detail: string };
 }
 
+/**
+ * Sentinel a parent uses to inject a synthetic user message — the click-to-brief
+ * wire (issue 005). The `id` must change with each new injection so AgentPanel
+ * fires `ask` once per click; identical ids are ignored (re-renders no-op).
+ */
+export interface PendingUserMessage {
+  readonly id: string;
+  readonly text: string;
+}
+
 export interface AgentPanelProps {
   readonly open: boolean;
   readonly surface: Surface;
@@ -47,6 +57,8 @@ export interface AgentPanelProps {
   ) => void;
   readonly onClose: () => void;
   readonly onCite: (citation: Citation) => void;
+  readonly pendingUserMessage?: PendingUserMessage | null;
+  readonly onPendingMessageHandled?: () => void;
 }
 
 export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
@@ -65,12 +77,15 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     setMessages,
     onClose,
     onCite,
+    pendingUserMessage,
+    onPendingMessageHandled,
   } = props;
 
   const [draft, setDraft] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const idCounter = useRef<number>(0);
+  const lastPendingIdRef = useRef<string | null>(null);
 
   function nextId(): string {
     idCounter.current += 1;
@@ -143,6 +158,20 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     void ask(draft);
     setDraft('');
   }
+
+  // Synthetic-message channel — see issue 005. The parent sets
+  // `pendingUserMessage` with a fresh `id` to enqueue a single ask; the
+  // ref-tracked id-dedupe makes re-renders idempotent.
+  useEffect(() => {
+    if (!pendingUserMessage) return;
+    if (pendingUserMessage.id === lastPendingIdRef.current) return;
+    lastPendingIdRef.current = pendingUserMessage.id;
+    void ask(pendingUserMessage.text);
+    onPendingMessageHandled?.();
+    // ask & onPendingMessageHandled are stable enough for this slice; the
+    // dedupe ref guarantees a single fire per id regardless.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingUserMessage]);
 
   function handleJumpToVitals(): void {
     onCite({ card: 'vitals', label: 'Vitals', fhir_ref: null });

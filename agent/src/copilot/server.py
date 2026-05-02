@@ -136,6 +136,35 @@ def _assert_patient_context_matches(
     return None
 
 
+async def _seed_panel_registry(
+    bundle: Any | None, user_id: str, settings: Any
+) -> dict[str, dict[str, Any]]:
+    """Build the ``resolved_patients`` seed for a standalone-path /chat call.
+
+    Returns an empty dict (a no-op merge) for the EHR-launch path — that
+    flow is single-patient by construction and ``resolve_patient`` is not
+    in its critical path. Returns the user's CareTeam roster keyed by
+    ``patient_id`` for the standalone path, so the first ``resolve_patient``
+    in a click-to-brief turn is a cache hit.
+    """
+    if bundle is not None or not user_id:
+        return {}
+    gate = CareTeamGate(
+        FhirClient(settings),
+        admin_user_ids=frozenset(settings.admin_user_ids),
+    )
+    panel = await gate.list_panel(user_id)
+    return {
+        p.patient_id: {
+            "patient_id": p.patient_id,
+            "given_name": p.given_name,
+            "family_name": p.family_name,
+            "birth_date": p.birth_date,
+        }
+        for p in panel
+    }
+
+
 def _coerce_block_dict(block_dict: dict[str, Any] | None, fallback_text: str) -> Block:
     """Convert a state-dict block payload back into a typed Block.
 
@@ -209,17 +238,28 @@ async def chat(
             )
         _assert_patient_context_matches(req.conversation_id, patient_id)
 
+    # Standalone-path registry seed (issue 005). Pre-populating
+    # ``resolved_patients`` from the user's CareTeam roster makes the LLM's
+    # first ``resolve_patient`` call (e.g., the click-to-brief synthetic
+    # message) an O(1) cache hit — saving the FHIR ``CareTeam`` round-trip
+    # the cold path would otherwise take. The reducer is right-wins so
+    # later turns don't lose patients the user has resolved out of band
+    # (admin-bypass cases that aren't on the panel).
+    seeded_registry = await _seed_panel_registry(bundle, user_id, settings)
+
     config: dict[str, Any] = {"configurable": {"thread_id": req.conversation_id}}
     handler = get_callback_handler(settings)
     if handler is not None:
         config["callbacks"] = [handler]
-    inputs = {
+    inputs: dict[str, Any] = {
         "messages": [HumanMessage(content=req.message)],
         "conversation_id": req.conversation_id,
         "patient_id": patient_id,
         "user_id": user_id,
         "smart_access_token": smart_access_token,
     }
+    if seeded_registry:
+        inputs["resolved_patients"] = seeded_registry
     result = await graph.ainvoke(inputs, config=config)
     messages = result.get("messages") or []
     if not messages:

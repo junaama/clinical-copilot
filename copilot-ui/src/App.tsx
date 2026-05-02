@@ -13,12 +13,19 @@
  *   - reads SMART launch params from the URL once on first paint
  */
 
-import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { AgentPanel, type ChatMessage, type Density, type Surface } from './components/AgentPanel';
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import {
+  AgentPanel,
+  type ChatMessage,
+  type Density,
+  type PendingUserMessage,
+  type Surface,
+} from './components/AgentPanel';
 import { AppShell } from './components/AppShell';
 import { Launcher } from './components/Launcher';
 import { LoginPage } from './components/LoginPage';
 import { PanelView } from './components/PanelView';
+import type { PanelPatient } from './api/panel';
 import { TweaksPanel } from './components/Tweaks/TweaksPanel';
 import { TweakButton, TweakColor, TweakRadio, TweakSection, TweakToggle } from './components/Tweaks/controls';
 import { useTweaks, type TweakValues } from './components/Tweaks/useTweaks';
@@ -76,7 +83,28 @@ export function App(): JSX.Element {
 function StandaloneApp(): JSX.Element {
   const session = useSession();
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
-  const conversationIdRef = useRef<string>(makeConversationId());
+  const [conversationId, setConversationId] = useState<string>(() => makeConversationId());
+  const [pendingMessage, setPendingMessage] = useState<PendingUserMessage | null>(null);
+
+  // Click-to-brief (issue 005). Each click injects a synthetic
+  //   "Give me a brief on <given> <family>."
+  // user turn. If the current conversation already has turns we mint a
+  // fresh thread first so the click-injected message lands as the first
+  // turn of a new conversation rather than appending to an unrelated one.
+  const handlePatientClick = useCallback(
+    (patient: PanelPatient): void => {
+      const text = `Give me a brief on ${patient.given_name} ${patient.family_name}.`;
+      if (messages.length > 0) {
+        setConversationId(makeConversationId());
+        setMessages([]);
+      }
+      setPendingMessage({
+        id: `click-${patient.patient_id}-${Date.now().toString(36)}`,
+        text,
+      });
+    },
+    [messages.length],
+  );
 
   if (session.state === 'loading') {
     return (
@@ -92,25 +120,26 @@ function StandaloneApp(): JSX.Element {
     return <LoginPage />;
   }
 
-  // Empty state — show the CareTeam panel until the conversation has its
-  // first turn. Click-to-brief wiring is issue 005; for now the panel is
-  // visible above the chat composer so the user can also just start typing.
   return (
     <AppShell user={session.user}>
-      {messages.length === 0 ? <PanelView /> : null}
+      {messages.length === 0 && pendingMessage === null ? (
+        <PanelView onPatientClick={handlePatientClick} />
+      ) : null}
       <AgentPanel
         open={true}
         surface="panel"
         density="regular"
         showCitations={true}
         accent="#4abfac"
-        conversationId={conversationIdRef.current}
+        conversationId={conversationId}
         patientId=""
         userId=""
         smartAccessToken=""
         patientName={DEFAULT_PATIENT_NAME}
         messages={messages}
         setMessages={(updater) => setMessages((prev) => updater(prev))}
+        pendingUserMessage={pendingMessage}
+        onPendingMessageHandled={() => setPendingMessage(null)}
         onClose={() => {}}
         onCite={() => {}}
       />
