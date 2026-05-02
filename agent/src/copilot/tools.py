@@ -4,27 +4,31 @@ Each tool is a thin wrapper over ``FhirClient`` plus field allowlist + absence
 markers (ARCHITECTURE §11, §15). All async; all return JSON-serializable dicts
 so they can be embedded in tool messages.
 
-Convention: every tool requires ``patient_id``. The active SMART session's
-patient is bound via ``set_active_patient_id`` before the agent runs; any
-tool call whose ``patient_id`` parameter doesn't match that bound id is hard-
-refused at the tool layer with ``error='patient_context_mismatch'`` per
-ARCHITECTURE.md §7 ("defense in depth — every tool call independently
-validates the patient ID").
+Convention: every patient-data tool runs through ``CareTeamGate`` before
+issuing a FHIR query. The gate checks whether the active practitioner (the
+``user_id`` contextvar set by the graph) is on the patient's CareTeam; if
+not, the call is hard-refused with ``error='careteam_denied'`` (or
+``no_active_patient`` when the tool was called without a patient_id at all).
+This replaces the EHR-launch-era one-patient-per-conversation pin.
+
+Test/dev paths that haven't bound an active user fall through the legacy
+SMART-pin check (``patient_context_mismatch``) so isolated unit tests still
+work without a CareTeam fixture.
 """
 
 from __future__ import annotations
 
 import base64
 import contextvars
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from langchain_core.tools import StructuredTool
 
+from .care_team import AuthDecision, CareTeamGate
 from .config import Settings
 from .fhir import ABSENT, FhirClient, Row, ToolResult
 from .fixtures import CARE_TEAM_PANEL
-
 
 # Contextvars carry the active SMART context into the async tool calls
 # without threading it through every signature. Set by the graph's agent_node
@@ -65,11 +69,12 @@ def get_active_user_id() -> str | None:
 
 
 def _enforce_patient_context(patient_id: str) -> dict[str, Any] | None:
-    """Hard-refuse tool calls whose ``patient_id`` doesn't match the bound
-    SMART context. Returns the refusal payload, or ``None`` when allowed.
+    """Legacy SMART-pin check, used only when no CareTeam gate is wired
+    (test/dev paths) and no active user_id is bound.
 
-    No-op when no active context is bound (so unit tests and one-off scripts
-    that don't set a context still work).
+    Returns the refusal payload when the call's ``patient_id`` doesn't match
+    the bound SMART context, or ``None`` when allowed (including the no-
+    context-bound case).
     """
     active = get_active_patient_id()
     if active is None or patient_id == active:
@@ -77,13 +82,41 @@ def _enforce_patient_context(patient_id: str) -> dict[str, Any] | None:
     return ToolResult(
         ok=False,
         sources_checked=(),
-        error="patient_context_mismatch",
+        error=AuthDecision.PATIENT_CONTEXT_MISMATCH.value,
         latency_ms=0,
     ).to_payload()
 
 
+def _denial_payload(decision: AuthDecision) -> dict[str, Any]:
+    return ToolResult(
+        ok=False,
+        sources_checked=(),
+        error=decision.value,
+        latency_ms=0,
+    ).to_payload()
+
+
+async def _enforce_patient_authorization(
+    gate: CareTeamGate, patient_id: str
+) -> dict[str, Any] | None:
+    """Run the CareTeam gate for this tool call.
+
+    When an active user_id is bound (the production path: graph.agent_node
+    sets it from state.user_id), the gate is consulted. When it's absent
+    (isolated unit tests, scripts), we fall back to the legacy SMART-pin
+    check so those paths don't need a CareTeam fixture to keep working.
+    """
+    user_id = get_active_user_id()
+    if not user_id:
+        return _enforce_patient_context(patient_id)
+    decision = await gate.assert_authorized(user_id, patient_id)
+    if decision is AuthDecision.ALLOWED:
+        return None
+    return _denial_payload(decision)
+
+
 def _hours_window(hours: int) -> str:
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
     return cutoff.strftime("ge%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -312,11 +345,12 @@ def _result_from_entries(
 
 
 def make_tools(settings: Settings) -> list[StructuredTool]:
-    """Build the tool set bound to a shared FHIR client."""
+    """Build the tool set bound to a shared FHIR client and CareTeam gate."""
     client = FhirClient(settings)
+    gate = CareTeamGate(client, admin_user_ids=frozenset(settings.admin_user_ids))
 
     async def get_patient_demographics(patient_id: str) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, resource, err, ms = await client.read("Patient", patient_id)
         entries = [resource] if resource else []
@@ -331,7 +365,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     async def get_active_problems(patient_id: str) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "Condition", {"patient": patient_id, "clinical-status": "active"}
@@ -347,7 +381,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     async def get_active_medications(patient_id: str) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "MedicationRequest", {"patient": patient_id, "status": "active"}
@@ -363,7 +397,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     async def get_recent_vitals(patient_id: str, hours: int = 24) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "Observation",
@@ -385,7 +419,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     async def get_recent_labs(patient_id: str, hours: int = 24) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "Observation",
@@ -407,7 +441,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     async def get_recent_encounters(patient_id: str, hours: int = 24) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "Encounter",
@@ -518,7 +552,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         different patient. Triage_node clears the active context so probes
         across the panel succeed.
         """
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         params = {"patient": patient_id, "date": _hours_window(hours)}
         # Four signal channels (§10).
@@ -565,7 +599,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     async def get_recent_orders(patient_id: str, hours: int = 24) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "ServiceRequest",
@@ -582,7 +616,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     async def get_imaging_results(patient_id: str, hours: int = 24) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "DiagnosticReport",
@@ -605,7 +639,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
     async def get_medication_administrations(
         patient_id: str, hours: int = 24
     ) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "MedicationAdministration",
@@ -622,7 +656,7 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         ).to_payload()
 
     async def get_clinical_notes(patient_id: str, hours: int = 24) -> dict[str, Any]:
-        if (denied := _enforce_patient_context(patient_id)) is not None:
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
         ok, entries, err, ms = await client.search(
             "DocumentReference",

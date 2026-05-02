@@ -339,3 +339,78 @@ def test_logout_clears_session(auth_client: TestClient) -> None:
     # /me should now 401
     me_resp = auth_client.get("/me", cookies={"copilot_session": session_cookie})
     assert me_resp.status_code == 401
+
+
+# ---------- GET /panel ----------
+
+
+async def _seed_session(client: TestClient, fhir_user: str) -> str:
+    """Mint a session row directly via the gateway so /panel tests don't have
+    to walk the full OAuth flow with a mock id_token. Returns the cookie value.
+    """
+    import time
+
+    from copilot import server as server_mod
+    from copilot.session import SessionRow
+
+    gateway = server_mod.app.state.session_gateway
+    session_id = "test-session-" + fhir_user.replace("/", "-")
+    now = time.time()
+    await gateway.create_session(
+        SessionRow(
+            session_id=session_id,
+            oe_user_id=42,
+            display_name="Test User",
+            fhir_user=fhir_user,
+            created_at=now,
+            expires_at=now + 3600,
+        )
+    )
+    return session_id
+
+
+def test_panel_returns_401_without_cookie(auth_client: TestClient) -> None:
+    resp = auth_client.get("/panel")
+    assert resp.status_code == 401
+
+
+async def test_panel_returns_dr_smith_subset(auth_client: TestClient) -> None:
+    """A session whose fhirUser is dr_smith sees the three patients on his
+    CareTeam. fixture-2 (Maya) and fixture-4 (Linda) are filtered out."""
+    cookie = await _seed_session(
+        auth_client, "Practitioner/practitioner-dr-smith"
+    )
+
+    resp = auth_client.get("/panel", cookies={"copilot_session": cookie})
+    assert resp.status_code == 200
+    body = resp.json()
+    pids = sorted(p["patient_id"] for p in body["patients"])
+    assert pids == ["fixture-1", "fixture-3", "fixture-5"]
+    eduardo = next(p for p in body["patients"] if p["patient_id"] == "fixture-1")
+    assert eduardo["family_name"] == "Perez"
+    assert eduardo["given_name"] == "Eduardo"
+    assert eduardo["birth_date"] == "1958-03-12"
+
+
+async def test_panel_admin_sees_full_set(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Admin user_id (in the configured allow-list) bypasses the gate."""
+    admin_practitioner = "practitioner-admin"
+    monkeypatch.setenv("COPILOT_ADMIN_USER_IDS", admin_practitioner)
+
+    # Re-read settings on the app so the new env var lands.
+    from copilot import server as server_mod
+    from copilot.config import Settings
+
+    server_mod.app.state.settings = Settings()
+
+    cookie = await _seed_session(
+        auth_client, f"Practitioner/{admin_practitioner}"
+    )
+
+    resp = auth_client.get("/panel", cookies={"copilot_session": cookie})
+    assert resp.status_code == 200
+    body = resp.json()
+    pids = sorted(p["patient_id"] for p in body["patients"])
+    assert pids == ["fixture-1", "fixture-2", "fixture-3", "fixture-4", "fixture-5"]

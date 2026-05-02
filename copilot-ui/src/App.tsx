@@ -18,6 +18,7 @@ import { AgentPanel, type ChatMessage, type Density, type Surface } from './comp
 import { AppShell } from './components/AppShell';
 import { Launcher } from './components/Launcher';
 import { LoginPage } from './components/LoginPage';
+import { PanelView } from './components/PanelView';
 import { TweaksPanel } from './components/Tweaks/TweaksPanel';
 import { TweakButton, TweakColor, TweakRadio, TweakSection, TweakToggle } from './components/Tweaks/controls';
 import { useTweaks, type TweakValues } from './components/Tweaks/useTweaks';
@@ -91,8 +92,12 @@ function StandaloneApp(): JSX.Element {
     return <LoginPage />;
   }
 
+  // Empty state — show the CareTeam panel until the conversation has its
+  // first turn. Click-to-brief wiring is issue 005; for now the panel is
+  // visible above the chat composer so the user can also just start typing.
   return (
     <AppShell user={session.user}>
+      {messages.length === 0 ? <PanelView /> : null}
       <AgentPanel
         open={true}
         surface="panel"

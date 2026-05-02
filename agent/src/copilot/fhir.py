@@ -207,6 +207,17 @@ def _fixture_search(resource_type: str, params: dict[str, Any]) -> list[dict[str
             )
         ]
 
+    participant = params.get("participant")
+    if participant is not None:
+        entries = [
+            e
+            for e in entries
+            if any(
+                (p.get("member") or {}).get("reference") == participant
+                for p in (e.get("participant") or [])
+            )
+        ]
+
     return list(entries)
 
 

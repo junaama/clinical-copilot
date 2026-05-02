@@ -32,8 +32,10 @@ from .api.schemas import (
     PlainBlock,
     TriageBlock,
 )
+from .care_team import CareTeamGate
 from .checkpointer import open_checkpointer
 from .config import get_settings
+from .fhir import FhirClient
 from .graph import build_graph
 from .observability import get_callback_handler
 from .session import (
@@ -43,6 +45,7 @@ from .session import (
     SessionRow,
     TokenBundleRow,
     open_session_store,
+    parse_fhir_user,
 )
 from .smart import (
     LaunchState,
@@ -554,6 +557,52 @@ async def me(
         "user_id": session.oe_user_id,
         "display_name": session.display_name,
         "fhir_user": session.fhir_user,
+    }
+
+
+@app.get("/panel")
+async def panel(
+    copilot_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Return the authenticated user's CareTeam roster.
+
+    Drives the empty-state Panel UI in the standalone shell. The roster is
+    scoped to whatever ``CareTeamGate.list_panel`` returns: dr_smith sees a
+    subset, admin (via the configured allow-list) sees the full set.
+
+    The user is identified via the session cookie's ``fhir_user`` claim
+    (a ``Practitioner/<uuid>`` reference); we extract the uuid and pass it
+    to the gate. When the session has no fhirUser (e.g. legacy/dev), the
+    gate gets an empty user_id and returns an empty panel.
+    """
+    if not copilot_session:
+        raise HTTPException(status_code=401, detail="not authenticated")
+
+    gateway: SessionGateway = app.state.session_gateway
+    session = await gateway.get_session(copilot_session)
+    if session is None:
+        raise HTTPException(status_code=401, detail="session expired or invalid")
+
+    settings = app.state.settings
+    _, practitioner_id = parse_fhir_user(session.fhir_user)
+    gate = CareTeamGate(
+        FhirClient(settings),
+        admin_user_ids=frozenset(settings.admin_user_ids),
+    )
+    panel = await gate.list_panel(practitioner_id)
+    return {
+        "user_id": session.oe_user_id,
+        "patients": [
+            {
+                "patient_id": p.patient_id,
+                "given_name": p.given_name,
+                "family_name": p.family_name,
+                "birth_date": p.birth_date,
+                "last_admission": p.last_admission,
+                "room": p.room,
+            }
+            for p in panel
+        ],
     }
 
 

@@ -21,6 +21,14 @@ CARE_TEAM_PANEL = [
     "fixture-5",  # James O'Neill — stable observation (low signal)
 ]
 
+# Practitioner ids used by the CareTeam gate fixtures. dr_smith is on a
+# subset of the panel so the gate's deny path is observable in the demo;
+# admin is intentionally NOT on any team — it bypasses via the admin
+# allow-list.
+PRACTITIONER_DR_SMITH = "practitioner-dr-smith"
+PRACTITIONER_ADMIN = "practitioner-admin"
+DR_SMITH_PANEL = ["fixture-1", "fixture-3", "fixture-5"]
+
 
 def _ts(hours_ago: int, minutes: int = 0) -> str:
     """Build an ISO timestamp relative to a fixed reference point."""
@@ -406,6 +414,42 @@ FIXTURE_BUNDLE: dict[str, list[dict[str, Any]]] = {
             "dosage": {"text": "10 mg PO"},
             "performer": [{"actor": {"display": "RN Chen"}}],
         },
+    ],
+    "CareTeam": [
+        # dr_smith is on three of the five panel patients. The gap (fixture-2,
+        # fixture-4) is what makes the gate's careteam_denied path visible
+        # in the demo: dr_smith asking about Maya Singh sees a refusal,
+        # admin asking about her sees the data.
+        {
+            "resourceType": "CareTeam",
+            "id": "ct-eduardo",
+            "subject": {"reference": "Patient/fixture-1"},
+            "status": "active",
+            "participant": [
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_SMITH}"}},
+            ],
+        },
+        {
+            "resourceType": "CareTeam",
+            "id": "ct-robert",
+            "subject": {"reference": "Patient/fixture-3"},
+            "status": "active",
+            "participant": [
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_SMITH}"}},
+            ],
+        },
+        {
+            "resourceType": "CareTeam",
+            "id": "ct-james",
+            "subject": {"reference": "Patient/fixture-5"},
+            "status": "active",
+            "participant": [
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_SMITH}"}},
+            ],
+        },
+        # Maya (fixture-2) and Linda (fixture-4) intentionally have no
+        # CareTeam row scoped to dr_smith. Admin reaches them via the
+        # admin allow-list.
     ],
     "DocumentReference": [
         {
