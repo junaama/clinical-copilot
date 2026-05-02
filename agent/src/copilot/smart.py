@@ -240,6 +240,54 @@ async def exchange_code_for_token(
     return response.json()
 
 
+async def refresh_access_token(
+    *,
+    token_endpoint: str,
+    refresh_token: str,
+    client_id: str,
+    client_secret: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Exchange a refresh token for a fresh access token.
+
+    Mirrors :func:`exchange_code_for_token` but uses the
+    ``grant_type=refresh_token`` grant. Returns the raw token-endpoint JSON
+    so callers can persist whatever shape the server returns (some servers
+    rotate ``refresh_token``, some don't; some return ``id_token``, some
+    don't).
+
+    The client credentials are passed explicitly so the caller picks the
+    right pair (EHR-launch vs. standalone) without the helper reaching into
+    settings.
+    """
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+    }
+    if client_secret:
+        payload["client_secret"] = client_secret
+
+    own_client = client is None
+    client = client or httpx.AsyncClient(timeout=10.0)
+    try:
+        response = await client.post(
+            token_endpoint,
+            data=payload,
+            headers={"Accept": "application/json"},
+        )
+    finally:
+        if own_client:
+            await client.aclose()
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"token endpoint refused refresh ({response.status_code}): "
+            f"{response.text[:200]}"
+        )
+    return response.json()
+
+
 def token_bundle_from_response(payload: dict[str, Any], iss: str) -> TokenBundle:
     """Parse a token-endpoint JSON response into a ``TokenBundle``."""
     return TokenBundle(

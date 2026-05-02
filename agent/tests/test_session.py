@@ -227,6 +227,195 @@ async def test_token_bundle_unknown_session() -> None:
 
 # ---------- Full login round-trip ----------
 
+# ---------- Token refresh ----------
+
+
+async def test_get_fresh_token_bundle_returns_existing_when_unexpired() -> None:
+    """The hot path: token has plenty of life left, so the gateway returns
+    the stored bundle without invoking the refresh callable."""
+    gw = _gateway()
+    now = time.time()
+    await gw.upsert_token_bundle(
+        TokenBundleRow(
+            session_id="sess-fresh",
+            access_token="at-current",
+            refresh_token="rt-current",
+            id_token="id.current",
+            scope="openid fhirUser user/*.rs",
+            issuer="https://openemr.example",
+            expires_at=now + 3600,  # comfortably alive
+        )
+    )
+
+    refresh_calls: list[str] = []
+
+    async def _should_not_refresh(_rt: str) -> dict[str, object]:
+        refresh_calls.append("called")
+        return {}
+
+    fresh = await gw.get_fresh_token_bundle(
+        "sess-fresh", refresh_fn=_should_not_refresh
+    )
+    assert fresh is not None
+    assert fresh.access_token == "at-current"
+    assert refresh_calls == []  # no refresh round-trip
+
+
+async def test_get_fresh_token_bundle_refreshes_within_skew() -> None:
+    """When ``expires_at`` is within the skew window, the gateway calls
+    ``refresh_fn`` with the stored refresh token and persists the new bundle.
+    """
+    gw = _gateway()
+    now = time.time()
+    await gw.upsert_token_bundle(
+        TokenBundleRow(
+            session_id="sess-skew",
+            access_token="at-stale",
+            refresh_token="rt-old",
+            id_token="id.stale",
+            scope="openid fhirUser user/*.rs",
+            issuer="https://openemr.example",
+            expires_at=now + 10,  # inside the default 30s skew
+        )
+    )
+
+    refresh_calls: list[str] = []
+
+    async def _refresh(rt: str) -> dict[str, object]:
+        refresh_calls.append(rt)
+        return {
+            "access_token": "at-new",
+            "refresh_token": "rt-new",
+            "id_token": "id.new",
+            "scope": "openid fhirUser user/*.rs",
+            "expires_in": 3600,
+        }
+
+    fresh = await gw.get_fresh_token_bundle("sess-skew", refresh_fn=_refresh)
+    assert fresh is not None
+    assert fresh.access_token == "at-new"
+    assert fresh.refresh_token == "rt-new"
+    assert refresh_calls == ["rt-old"]  # called exactly once with old rt
+
+    # Persisted: a subsequent unexpired-path read returns the rotated bundle.
+    persisted = await gw.get_token_bundle("sess-skew")
+    assert persisted is not None
+    assert persisted.access_token == "at-new"
+    assert persisted.refresh_token == "rt-new"
+    assert persisted.expires_at > now + 3000
+
+
+async def test_get_fresh_token_bundle_refreshes_when_already_expired() -> None:
+    """A frankly-expired bundle (clock past ``expires_at``) still refreshes —
+    the skew logic is upper-bound, not lower-bound."""
+    gw = _gateway()
+    now = time.time()
+    await gw.upsert_token_bundle(
+        TokenBundleRow(
+            session_id="sess-expired",
+            access_token="at-dead",
+            refresh_token="rt-still-good",
+            id_token="id.dead",
+            scope="openid fhirUser",
+            issuer="https://openemr.example",
+            expires_at=now - 600,  # 10 min past expiry
+        )
+    )
+
+    async def _refresh(_rt: str) -> dict[str, object]:
+        return {
+            "access_token": "at-new",
+            "refresh_token": "rt-new",
+            "expires_in": 3600,
+        }
+
+    fresh = await gw.get_fresh_token_bundle(
+        "sess-expired", refresh_fn=_refresh
+    )
+    assert fresh is not None
+    assert fresh.access_token == "at-new"
+
+
+async def test_get_fresh_token_bundle_preserves_old_refresh_when_not_rotated() -> None:
+    """Some token endpoints don't rotate the refresh token on a refresh call.
+    The gateway must keep the old refresh token rather than overwriting it
+    with an empty string — otherwise the next refresh fails with
+    ``invalid_grant``."""
+    gw = _gateway()
+    now = time.time()
+    await gw.upsert_token_bundle(
+        TokenBundleRow(
+            session_id="sess-no-rotate",
+            access_token="at-stale",
+            refresh_token="rt-keep-me",
+            id_token="id.kept",
+            scope="openid fhirUser",
+            issuer="https://openemr.example",
+            expires_at=now + 5,
+        )
+    )
+
+    async def _refresh(_rt: str) -> dict[str, object]:
+        # Note: no ``refresh_token`` key in the response.
+        return {
+            "access_token": "at-new",
+            "id_token": "id.kept",  # also unchanged
+            "expires_in": 3600,
+        }
+
+    fresh = await gw.get_fresh_token_bundle(
+        "sess-no-rotate", refresh_fn=_refresh
+    )
+    assert fresh is not None
+    assert fresh.access_token == "at-new"
+    assert fresh.refresh_token == "rt-keep-me"  # carried over
+
+
+async def test_get_fresh_token_bundle_returns_none_when_session_has_no_bundle() -> None:
+    """No bundle = no refresh attempted; caller treats this as "needs login"
+    rather than as a refresh failure."""
+    gw = _gateway()
+
+    async def _refresh(_rt: str) -> dict[str, object]:
+        raise AssertionError("refresh_fn called for missing bundle")
+
+    fresh = await gw.get_fresh_token_bundle("sess-missing", refresh_fn=_refresh)
+    assert fresh is None
+
+
+async def test_get_fresh_token_bundle_propagates_refresh_failure() -> None:
+    """Token endpoint rejection (e.g. ``invalid_grant`` because the refresh
+    token was revoked) propagates; the caller forces the user back through
+    /auth/login.  The stale bundle is left in place — clearing it is the
+    caller's job after they decide what to do."""
+    gw = _gateway()
+    now = time.time()
+    await gw.upsert_token_bundle(
+        TokenBundleRow(
+            session_id="sess-fail",
+            access_token="at-stale",
+            refresh_token="rt-revoked",
+            id_token="id",
+            scope="openid",
+            issuer="https://openemr.example",
+            expires_at=now - 1,
+        )
+    )
+
+    async def _refresh(_rt: str) -> dict[str, object]:
+        raise RuntimeError("token endpoint refused refresh (400): invalid_grant")
+
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        await gw.get_fresh_token_bundle("sess-fail", refresh_fn=_refresh)
+
+    # Stale bundle survives so a debug operator can inspect it.
+    stale = await gw.get_token_bundle("sess-fail")
+    assert stale is not None
+    assert stale.access_token == "at-stale"
+
+
 async def test_full_login_round_trip() -> None:
     """Simulate the happy path: create launch state → pop it → create session
     + token bundle → /me reads session → logout deletes it."""
