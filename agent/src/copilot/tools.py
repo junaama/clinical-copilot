@@ -110,6 +110,31 @@ def _hours_window(hours: int) -> str:
     return cutoff.strftime("ge%Y-%m-%dT%H:%M:%SZ")
 
 
+def _hours_until_now_from_iso(since: str) -> int | None:
+    """Convert an ISO 8601 ``since`` timestamp to a positive hours-ago delta.
+
+    Returns ``None`` for malformed input or for timestamps in the future —
+    both are caller errors that ``run_recent_changes`` surfaces as
+    ``invalid_since``. The +1 buffer rounds the cutoff *outward* so the
+    boundary timestamp is included rather than excluded by integer
+    truncation; the W-9 diff loses very little by overshooting the
+    window by an hour and would lose a real signal by undershooting it.
+    """
+    if not since:
+        return None
+    try:
+        parsed = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    delta = datetime.now(UTC) - parsed
+    seconds = delta.total_seconds()
+    if seconds < 0:
+        return None
+    return int(seconds // 3600) + 1
+
+
 def _coding_display(coding_list: list[dict[str, Any]] | None) -> str:
     if not coding_list:
         return ABSENT
@@ -1075,6 +1100,60 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
 
         return _merge_envelopes(list(results), elapsed_ms=elapsed_ms)
 
+    async def run_recent_changes(
+        patient_id: str, since: str
+    ) -> dict[str, Any]:
+        """Composite tool: diff over time-windowed resources since a cutoff.
+
+        W-9 ("what changed since I last looked"). Fans out the seven
+        time-windowed granular reads — vitals, labs, encounters,
+        orders, imaging, MARs, notes — over a window starting at
+        ``since`` (an ISO 8601 timestamp). Active problems and active
+        medications are intentionally excluded: they describe current
+        *state*, not changes. The W-9 framing tells the LLM to fetch
+        them granularly when it needs to anchor a diff against the
+        current med list.
+
+        ``since`` is a required ISO 8601 timestamp (e.g.,
+        ``"2026-04-25T08:00:00Z"``). Malformed values, empty strings,
+        and future timestamps return ``error="invalid_since"`` rather
+        than an opaque exception so the LLM can surface the bad input
+        to the user without the runtime crashing.
+
+        Authorization is enforced **per nested call** by reusing the
+        granular tools' ``_enforce_patient_authorization`` helper. A
+        buggy refactor that removed the gate from a single branch
+        would still be caught by the gate at the other branches;
+        defense in depth.
+        """
+        # Top-of-call gate: short-circuits the empty-pid / out-of-team path
+        # so we don't fan out seven gate-denied calls when one would do.
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
+            return denied
+
+        hours = _hours_until_now_from_iso(since)
+        if hours is None:
+            return ToolResult(
+                ok=False,
+                sources_checked=(),
+                error="invalid_since",
+                latency_ms=0,
+            ).to_payload()
+
+        started = time.monotonic()
+        results = await asyncio.gather(
+            get_recent_vitals(patient_id, hours),
+            get_recent_labs(patient_id, hours),
+            get_recent_encounters(patient_id, hours),
+            get_recent_orders(patient_id, hours),
+            get_imaging_results(patient_id, hours),
+            get_medication_administrations(patient_id, hours),
+            get_clinical_notes(patient_id, hours),
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        return _merge_envelopes(list(results), elapsed_ms=elapsed_ms)
+
     return [
         StructuredTool.from_function(
             coroutine=resolve_patient,
@@ -1280,6 +1359,31 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
                 "tool. For a 24-hour overnight brief, use "
                 "``run_per_patient_brief`` instead — it pulls vitals and "
                 "labs that the cross-cover composite intentionally omits."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=run_recent_changes,
+            name="run_recent_changes",
+            description=(
+                "Composite diff for ONE patient: fans out the seven "
+                "time-windowed reads — vitals, labs, encounters, orders, "
+                "imaging results, medication administrations, and "
+                "clinical notes — over a window starting at ``since`` (an "
+                "ISO 8601 timestamp like '2026-04-25T08:00:00Z') in "
+                "PARALLEL and returns one merged envelope of everything "
+                "new since that cutoff. Prefer this tool whenever the "
+                "user asks what's changed, what's new, what they missed, "
+                "or what happened since a specific time — 'what's new on "
+                "Hayes since rounds?', 'anything happen since I left at "
+                "4pm?', 'diff me on Eduardo since yesterday', 'I last "
+                "looked at this chart Tuesday — what changed?'. Active "
+                "problems and active medications are intentionally NOT "
+                "in the diff — they're current state, not changes; "
+                "fetch them granularly if you need to anchor against "
+                "the current med list. Returns the same envelope shape "
+                "(rows, sources_checked, latency_ms, error, ok) as a "
+                "granular tool. Malformed or future ``since`` values "
+                "return ``error='invalid_since'``."
             ),
         ),
     ]
