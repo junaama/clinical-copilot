@@ -68,8 +68,23 @@ from .title_summarizer import (
     HaikuTitleSummarizer,
     build_default_haiku_factory,
 )
+from .token_crypto import TokenEncryptor, load_encryptor_from_env
 
 _log = logging.getLogger(__name__)
+
+
+def _load_token_encryptor(settings: Any) -> TokenEncryptor:
+    """Build a ``TokenEncryptor`` from settings, failing loudly on misconfig.
+
+    Reads the secret out of ``settings.token_enc_key`` (the SecretStr-wrapped
+    ``COPILOT_TOKEN_ENC_KEY``) and feeds it through the env loader so the
+    same validation rules apply whether the key was sourced from a real
+    env var or a ``.env`` file. The token-encryption hard-fail is the
+    distinguishing feature of issue 009: a missing key never silently
+    falls back to plaintext storage.
+    """
+    raw = settings.token_enc_key.get_secret_value() if settings.token_enc_key else ""
+    return load_encryptor_from_env({"COPILOT_TOKEN_ENC_KEY": raw})
 
 
 def _maybe_build_title_summarizer(
@@ -111,7 +126,15 @@ async def lifespan(app: FastAPI):
             yield
             return
         if settings.checkpointer_dsn:
-            async with open_session_store(settings.checkpointer_dsn) as session_store:
+            # Token encryption-at-rest: required when persisting to
+            # Postgres. ``load_encryptor_from_env`` raises a typed
+            # error when the env var is missing or mis-shaped — the
+            # process fails to start with a clear message rather than
+            # silently writing plaintext tokens.
+            encryptor = _load_token_encryptor(settings)
+            async with open_session_store(
+                settings.checkpointer_dsn, encryptor=encryptor
+            ) as session_store:
                 async with open_conversation_store(
                     settings.checkpointer_dsn
                 ) as conv_store:

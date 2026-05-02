@@ -346,6 +346,7 @@ name = "copilot"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "langchain" },
@@ -379,13 +380,12 @@ postgres = [
     { name = "psycopg", extra = ["binary", "pool"] },
 ]
 seed = [
-    { name = "cryptography" },
     { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "cryptography", marker = "extra == 'seed'", specifier = ">=43.0.0" },
+    { name = "cryptography", specifier = ">=43.0.0" },
     { name = "deepeval", marker = "extra == 'eval'", specifier = ">=1.4.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },
