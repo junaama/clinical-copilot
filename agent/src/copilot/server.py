@@ -1,8 +1,7 @@
 """FastAPI entry point.
 
-Exposes the chat surface (POST /chat), a health check, and stub SMART EHR
-launch endpoints so the OAuth flow can be filled in without touching the
-graph wiring.
+Exposes the chat surface (POST /chat), a health check, SMART EHR launch
+endpoints, and standalone auth endpoints (``/auth/*``).
 
 Wire shapes (request and response) are defined in :mod:`copilot.api.schemas`
 and mirror ``agentforge-docs/CHAT-API-CONTRACT.md``.
@@ -10,13 +9,16 @@ and mirror ``agentforge-docs/CHAT-API-CONTRACT.md``.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import secrets
 import time
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Cookie, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from langchain_core.messages import HumanMessage
@@ -34,7 +36,15 @@ from .checkpointer import open_checkpointer
 from .config import get_settings
 from .graph import build_graph
 from .observability import get_callback_handler
+from .session import (
+    InMemorySessionStore,
+    LaunchStateRow,
+    SessionGateway,
+    SessionRow,
+    TokenBundleRow,
+)
 from .smart import (
+    LaunchState,
     build_authorize_redirect_url,
     code_challenge_for,
     discover_smart_endpoints,
@@ -43,7 +53,6 @@ from .smart import (
     generate_state,
     get_default_stores,
     token_bundle_from_response,
-    LaunchState,
 )
 
 _log = logging.getLogger(__name__)
@@ -57,6 +66,12 @@ async def lifespan(app: FastAPI):
     # unset, so this same path serves dev (no DSN) and production (Postgres).
     async with open_checkpointer(settings) as checkpointer:
         app.state.graph = build_graph(settings, checkpointer=checkpointer)
+        # Session gateway for standalone auth (in-memory for now; Postgres
+        # backend when CHECKPOINTER_DSN is set — wired in a future pass).
+        if not hasattr(app.state, "session_gateway"):
+            app.state.session_gateway = SessionGateway(
+                store=InMemorySessionStore()
+            )
         yield
 
 
@@ -298,7 +313,7 @@ async def smart_callback(
             code=code,
             code_verifier=launch_state.code_verifier,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise HTTPException(status_code=502, detail=f"token exchange failed: {exc}") from exc
 
     bundle = token_bundle_from_response(payload, iss=launch_state.iss)
@@ -323,8 +338,6 @@ async def smart_callback(
             "iss": bundle.iss,
         }
 
-    from urllib.parse import urlencode
-
     params = urlencode(
         {
             "conversation_id": conversation_id,
@@ -339,3 +352,213 @@ async def smart_callback(
         url=f"{settings.copilot_ui_url.rstrip('/')}/?{params}",
         status_code=302,
     )
+
+
+# ---------------------------------------------------------------------------
+# Standalone auth endpoints
+# ---------------------------------------------------------------------------
+
+STANDALONE_LAUNCH_STATE_TTL = 600  # 10 minutes
+SESSION_COOKIE_NAME = "copilot_session"
+
+
+def _parse_id_token_claims(id_token: str) -> dict[str, Any]:
+    """Decode the payload of a JWT id_token without verifying the signature.
+
+    We trust the token because it was received over a direct HTTPS POST to
+    the token endpoint; the TLS channel provides authenticity. Signature
+    verification is a defense-in-depth improvement tracked separately.
+    """
+    parts = id_token.split(".")
+    if len(parts) < 2:
+        return {}
+    # Add padding — JWT base64url omits trailing '='.
+    payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(payload_b64))
+    except Exception:
+        return {}
+
+
+@app.get("/auth/login")
+async def auth_login() -> RedirectResponse:
+    """Initiate SMART standalone login.
+
+    Generates PKCE verifier+challenge and state, persists launch state, and
+    302s the user to the OpenEMR authorize endpoint. No ``iss`` or ``launch``
+    params — standalone flow uses the configured FHIR base directly.
+    """
+    settings = app.state.settings
+    if not settings.smart_standalone_client_id:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "SMART_STANDALONE_CLIENT_ID not configured — "
+                "register the copilot-standalone client in OpenEMR first"
+            ),
+        )
+
+    iss = settings.openemr_fhir_base
+    config = await discover_smart_endpoints(iss)
+    authorization_endpoint = config.get("authorization_endpoint")
+    if not authorization_endpoint:
+        raise HTTPException(
+            status_code=502,
+            detail=f"could not resolve authorization_endpoint from {iss}",
+        )
+
+    code_verifier = generate_code_verifier()
+    state = generate_state()
+    now = time.time()
+
+    gateway: SessionGateway = app.state.session_gateway
+    await gateway.create_launch_state(
+        LaunchStateRow(
+            state=state,
+            code_verifier=code_verifier,
+            redirect_uri=settings.smart_standalone_redirect_uri,
+            expires_at=now + STANDALONE_LAUNCH_STATE_TTL,
+        )
+    )
+
+    params = {
+        "response_type": "code",
+        "client_id": settings.smart_standalone_client_id,
+        "redirect_uri": settings.smart_standalone_redirect_uri,
+        "scope": settings.smart_standalone_scopes,
+        "state": state,
+        "aud": iss,
+        "code_challenge": code_challenge_for(code_verifier),
+        "code_challenge_method": "S256",
+    }
+    redirect_url = f"{authorization_endpoint}?{urlencode(params)}"
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
+@app.get("/auth/smart/callback", response_model=None)
+async def auth_standalone_callback(
+    code: str = "", state: str = "", error: str = ""
+) -> RedirectResponse | dict[str, Any]:
+    """OAuth2 callback for the standalone login flow.
+
+    Exchanges the authorization code for tokens, parses the ``fhirUser``
+    claim from the id_token, mints a session, stores the token bundle,
+    sets an HttpOnly session cookie, and 302s to the copilot-ui root.
+    """
+    if error:
+        raise HTTPException(status_code=400, detail=f"authorization error: {error}")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="missing code or state")
+
+    gateway: SessionGateway = app.state.session_gateway
+    launch_state = await gateway.pop_launch_state(state)
+    if launch_state is None:
+        raise HTTPException(
+            status_code=400,
+            detail="unknown or expired state — please log in again",
+        )
+
+    settings = app.state.settings
+    iss = settings.openemr_fhir_base
+    config = await discover_smart_endpoints(iss)
+    token_endpoint = config.get("token_endpoint")
+    if not token_endpoint:
+        raise HTTPException(status_code=502, detail="could not resolve token_endpoint")
+
+    try:
+        payload = await exchange_code_for_token(
+            settings=settings,
+            token_endpoint=token_endpoint,
+            code=code,
+            code_verifier=launch_state.code_verifier,
+            client_id_override=settings.smart_standalone_client_id,
+            client_secret_override=settings.smart_standalone_client_secret.get_secret_value(),
+            redirect_uri_override=settings.smart_standalone_redirect_uri,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"token exchange failed: {exc}"
+        ) from exc
+
+    access_token = payload.get("access_token", "")
+    if not access_token:
+        raise HTTPException(
+            status_code=502, detail="token endpoint returned no access_token"
+        )
+
+    # Parse fhirUser from id_token claims.
+    id_token = payload.get("id_token", "")
+    claims = _parse_id_token_claims(id_token) if id_token else {}
+    fhir_user = claims.get("fhirUser", "")
+    display_name = claims.get("name", "") or str(payload.get("user", ""))
+
+    now = time.time()
+    session_id = secrets.token_urlsafe(32)
+    session = SessionRow(
+        session_id=session_id,
+        oe_user_id=0,  # resolved via fhirUser → users.uuid lookup in a future pass
+        display_name=display_name,
+        fhir_user=fhir_user,
+        created_at=now,
+        expires_at=now + settings.session_ttl_seconds,
+    )
+    await gateway.create_session(session)
+
+    token_bundle = TokenBundleRow(
+        session_id=session_id,
+        access_token=access_token,
+        refresh_token=payload.get("refresh_token", ""),
+        id_token=id_token,
+        scope=payload.get("scope", ""),
+        issuer=iss,
+        expires_at=now + int(payload.get("expires_in", 3600)),
+    )
+    await gateway.upsert_token_bundle(token_bundle)
+
+    # Build the redirect response with the session cookie.
+    ui_url = settings.copilot_ui_url or "http://localhost:5173"
+    response = RedirectResponse(url=ui_url, status_code=302)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_id,
+        httponly=True,
+        secure=False,  # False for localhost dev; True in production via reverse proxy
+        samesite="lax",
+        path="/",
+        max_age=settings.session_ttl_seconds,
+    )
+    return response
+
+
+@app.get("/me")
+async def me(
+    copilot_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Return the authenticated user's info, or 401 if no valid session."""
+    if not copilot_session:
+        raise HTTPException(status_code=401, detail="not authenticated")
+
+    gateway: SessionGateway = app.state.session_gateway
+    session = await gateway.get_session(copilot_session)
+    if session is None:
+        raise HTTPException(status_code=401, detail="session expired or invalid")
+
+    return {
+        "user_id": session.oe_user_id,
+        "display_name": session.display_name,
+        "fhir_user": session.fhir_user,
+    }
+
+
+@app.post("/auth/logout")
+async def auth_logout(
+    response: Response,
+    copilot_session: str | None = Cookie(default=None),
+) -> dict[str, str]:
+    """Revoke the session and clear the cookie."""
+    if copilot_session:
+        gateway: SessionGateway = app.state.session_gateway
+        await gateway.delete_session(copilot_session)
+
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
+    return {"status": "logged_out"}

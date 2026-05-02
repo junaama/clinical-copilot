@@ -198,17 +198,28 @@ async def exchange_code_for_token(
     code: str,
     code_verifier: str,
     client: httpx.AsyncClient | None = None,
+    client_id_override: str = "",
+    client_secret_override: str = "",
+    redirect_uri_override: str = "",
 ) -> dict[str, Any]:
-    """Exchange the authorization code for an access token."""
+    """Exchange the authorization code for an access token.
+
+    Optional ``*_override`` params let the standalone flow use different
+    client credentials than the EHR-launch flow without duplicating logic.
+    """
+    client_id = client_id_override or settings.smart_client_id
+    client_secret = client_secret_override or settings.smart_client_secret.get_secret_value()
+    redirect_uri = redirect_uri_override or settings.smart_redirect_uri
+
     payload = {
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": settings.smart_redirect_uri,
-        "client_id": settings.smart_client_id,
+        "redirect_uri": redirect_uri,
+        "client_id": client_id,
         "code_verifier": code_verifier,
     }
-    if settings.smart_client_secret.get_secret_value():
-        payload["client_secret"] = settings.smart_client_secret.get_secret_value()
+    if client_secret:
+        payload["client_secret"] = client_secret
 
     own_client = client is None
     client = client or httpx.AsyncClient(timeout=10.0)
