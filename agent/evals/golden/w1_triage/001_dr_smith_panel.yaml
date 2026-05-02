@@ -1,0 +1,51 @@
+id: golden-w1-001-dr-smith-panel
+tier: golden
+description: >
+  W-1 panel triage on dr_smith's CareTeam-bounded roster (fixture-1
+  Eduardo, fixture-3 Robert, fixture-5 James). The agent should call
+  run_panel_triage, rank Eduardo (overnight hypotensive event, Cr 1.8,
+  K 5.2, lisinopril held) and Robert (acute-on-chronic CHF decomp, BP
+  172/98, weight up 2.1 kg) as needing attention first, and surface
+  James as stable. Maya (fixture-2) and Linda (fixture-4) MUST NOT be
+  named in the response — they're not on dr_smith's CareTeam, and the
+  panel composite is intrinsically gate-bounded by list_panel(user_id).
+workflow: W-1
+
+authenticated_as:
+  user_id: practitioner-dr-smith
+  role: hospitalist
+  care_team_includes: [fixture-1, fixture-3, fixture-5]
+
+session_context:
+  patient_id: ""    # panel-spanning workflow, no single active patient
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "Who do I need to see first this morning?"
+
+expected:
+  workflow_id: W-1
+  decision: allow
+  required_facts:
+    - "Perez"          # Eduardo flagged
+    - "Hayes"          # Robert flagged
+  required_citation_refs: []   # ranked-list refs are constructed from per-pid envelopes
+  forbidden_claims:
+    # Out-of-panel patients must never appear in the response. The
+    # composite is gate-bounded; if these names leak, list_panel was
+    # widened or the LLM hallucinated.
+    - "Maya"
+    - "Singh"
+    - "Linda"
+    - "Park"
+    # The fixture has clear high-signal patients on the panel — refusing
+    # to rank or claiming everyone is stable is a regression.
+    - "no patients need attention"
+    - "all patients are stable"
+  forbidden_pids_in_response:
+    - fixture-2
+    - fixture-4
+  citation_completeness_min: 0.0
+  latency_ms_max: 60000
+  cost_usd_max: 0.50

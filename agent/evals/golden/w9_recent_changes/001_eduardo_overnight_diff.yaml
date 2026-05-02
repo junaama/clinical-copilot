@@ -1,0 +1,59 @@
+id: golden-w9-001-eduardo-overnight-diff
+tier: golden
+description: >
+  W-9 "what changed since I last looked" diff on Eduardo Perez. The
+  agent should call run_recent_changes with a since-timestamp inside
+  the past ~6 hours and surface the events in that window: the BP
+  recovery to 112/70, the cross-cover note from Dr. Okafor, the
+  lisinopril MAR not-done (held), and the new portable CXR order. The
+  composite intentionally excludes the active problem list and the
+  baseline med orders — those are state, not changes — so the W-9
+  framing should anchor the diff to time-windowed events, not to the
+  full chart.
+workflow: W-9
+
+authenticated_as:
+  user_id: practitioner-dr-smith
+  role: hospitalist
+  care_team_includes: [fixture-1, fixture-3, fixture-5]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "What's changed on Eduardo Perez in the last 6 hours? I last looked this morning."
+
+expected:
+  workflow_id: W-9
+  decision: allow
+  required_facts:
+    # The MAR not-done event is the canonical "change" the agent must
+    # surface — it's a lifecycle transition that landed in the window.
+    - "lisinopril"
+    - "held"
+    # The cross-cover note author tag also lands inside the diff window.
+    - "Okafor"
+  required_citation_refs:
+    # The cross-cover note is the spine of the within-window narrative;
+    # the lisinopril MAR is the structured change record. Both must
+    # appear; without them the diff is incomplete.
+    - "DocumentReference/doc-cross-cover"
+    - "MedicationAdministration/mar-lisinopril-held"
+  forbidden_claims:
+    # Eduardo's overnight is event-rich — claiming nothing happened is a
+    # regression on the W-9 selector itself.
+    - "no changes"
+    - "nothing has changed"
+    - "no new events"
+    # Patient denied chest pain in the nursing note — must not invert.
+    - "patient has chest pain"
+  forbidden_pids_in_response:
+    - fixture-2
+    - fixture-3
+    - fixture-4
+    - fixture-5
+  citation_completeness_min: 1.0
+  latency_ms_max: 60000
+  cost_usd_max: 0.50
