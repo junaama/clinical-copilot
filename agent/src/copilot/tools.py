@@ -1150,6 +1150,109 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
 
         return _merge_envelopes(list(results), elapsed_ms=elapsed_ms)
 
+    async def run_consult_orientation(
+        patient_id: str, domain: str, hours: int = 168
+    ) -> dict[str, Any]:
+        """Composite tool: consult orientation scoped to a clinical domain.
+
+        W-8 ("specialist reading the chart story for their domain"). The
+        ``domain`` arg picks the fan-out shape — different consulting
+        services read different parts of the chart, so a cardiology
+        consult cares about vitals + imaging (echo / cath in the
+        DiagnosticReport branch) while a nephrology consult cares about
+        MARs (held nephrotoxic doses) and an ID consult cares about the
+        culture-orders branch (ServiceRequest).
+
+        Domain → fan-out branches:
+
+        * ``cardiology`` — problems + meds + vitals + labs + encounters +
+          imaging + notes. The W-8 framing tells the LLM to lens through
+          cardiac-relevant codes (BNP, troponin, BMP, BP/HR trend, echo /
+          cath conclusions).
+        * ``nephrology`` — problems + meds + labs + encounters + MARs +
+          notes. MARs surface held-for-AKI nephrotoxic doses; the W-8
+          framing tells the LLM to lens through Cr / K+ / BUN / UA.
+        * ``id`` — problems + meds + MARs + labs + orders + notes.
+          Cultures live as Observation (laboratory) entries; culture
+          orders are ServiceRequest. Same data shape mostly overlaps
+          ``run_abx_stewardship`` but consult orientation runs over a
+          wider 7-day window and includes problems / notes for the
+          consult write-up.
+
+        Like W-10 / W-11, code-level filtering (e.g., "cardiac labs
+        only") lives in the W-8 framing, not the data layer — pre-
+        filtering at fetch time would couple the composite to a
+        specific code vocabulary and break as new consult lenses are
+        added.
+
+        Default lookback is 168 hours (7 days), matching
+        ``run_cross_cover_onboarding`` — consult orientation spans the
+        admission, not just overnight.
+
+        Unknown / empty ``domain`` returns ``error="invalid_domain"``
+        rather than an opaque exception so the LLM can surface the bad
+        input, mirroring ``run_recent_changes``'s ``invalid_since``
+        discipline.
+
+        Authorization is enforced **per nested call** by reusing the
+        granular tools' ``_enforce_patient_authorization`` helper. A
+        buggy refactor that removed the gate from a single branch
+        would still be caught by the gate at the other branches;
+        defense in depth.
+        """
+        # Top-of-call gate: short-circuits the empty-pid / out-of-team path
+        # so we don't fan out gate-denied calls when one would do.
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
+            return denied
+
+        normalized = (domain or "").strip().lower()
+        # Per-domain branch builder: each entry is a no-arg coroutine
+        # factory closing over patient_id / hours so the outer gather
+        # doesn't have to know which branches the domain selected. Codes
+        # within a branch are NOT filtered here — that's a synthesis-layer
+        # concern. See class docstring.
+        branch_factories: dict[str, list[Any]] = {
+            "cardiology": [
+                lambda: get_active_problems(patient_id),
+                lambda: get_active_medications(patient_id),
+                lambda: get_recent_vitals(patient_id, hours),
+                lambda: get_recent_labs(patient_id, hours),
+                lambda: get_recent_encounters(patient_id, hours),
+                lambda: get_imaging_results(patient_id, hours),
+                lambda: get_clinical_notes(patient_id, hours),
+            ],
+            "nephrology": [
+                lambda: get_active_problems(patient_id),
+                lambda: get_active_medications(patient_id),
+                lambda: get_recent_labs(patient_id, hours),
+                lambda: get_recent_encounters(patient_id, hours),
+                lambda: get_medication_administrations(patient_id, hours),
+                lambda: get_clinical_notes(patient_id, hours),
+            ],
+            "id": [
+                lambda: get_active_problems(patient_id),
+                lambda: get_active_medications(patient_id),
+                lambda: get_medication_administrations(patient_id, hours),
+                lambda: get_recent_labs(patient_id, hours),
+                lambda: get_recent_orders(patient_id, hours),
+                lambda: get_clinical_notes(patient_id, hours),
+            ],
+        }
+        factories = branch_factories.get(normalized)
+        if factories is None:
+            return ToolResult(
+                ok=False,
+                sources_checked=(),
+                error="invalid_domain",
+                latency_ms=0,
+            ).to_payload()
+
+        started = time.monotonic()
+        results = await asyncio.gather(*[factory() for factory in factories])
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        return _merge_envelopes(list(results), elapsed_ms=elapsed_ms)
+
     async def run_recent_changes(
         patient_id: str, since: str
     ) -> dict[str, Any]:
@@ -1434,6 +1537,39 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
                 "(rows, sources_checked, latency_ms, error, ok) as a "
                 "granular tool. Malformed or future ``since`` values "
                 "return ``error='invalid_since'``."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=run_consult_orientation,
+            name="run_consult_orientation",
+            description=(
+                "Composite consult-orientation read for ONE patient, "
+                "scoped by clinical ``domain``. The domain selects the "
+                "fan-out shape so the consulting specialist sees what "
+                "their service reads against. Supported domains: "
+                "``cardiology`` (problems + meds + vitals + labs + "
+                "encounters + imaging + notes — vitals and imaging "
+                "are cardiology-specific because BP/HR trends and "
+                "echo/cath conclusions matter), ``nephrology`` "
+                "(problems + meds + labs + encounters + medication "
+                "administrations + notes — MARs surface held "
+                "nephrotoxic doses), ``id`` (problems + meds + "
+                "medication administrations + labs + orders + notes — "
+                "ServiceRequest holds the culture orders, Observation "
+                "laboratory holds the cultures). Default lookback is "
+                "168 hours (7 days) so the envelope spans the "
+                "admission, not just overnight. Prefer this tool "
+                "whenever the user is preparing for a consult or "
+                "asking the chart from a consultant's perspective — "
+                "'cardiology consult on Hayes', 'orient me as nephro "
+                "on Eduardo', 'walk me through Linda's chart from an "
+                "ID standpoint'. Unknown / empty ``domain`` returns "
+                "``error='invalid_domain'``. Returns the same envelope "
+                "shape (rows, sources_checked, latency_ms, error, ok) "
+                "as a granular tool. For a 24-hour overnight brief, "
+                "use ``run_per_patient_brief``; for cross-cover "
+                "orientation without a specialist lens, use "
+                "``run_cross_cover_onboarding``."
             ),
         ),
         StructuredTool.from_function(

@@ -133,6 +133,8 @@ async def test_all_patient_scoped_tools_enforce_gate_for_bound_user() -> None:
             kwargs["hours"] = 24
         if "since" in properties:
             kwargs["since"] = since_iso
+        if "domain" in properties:
+            kwargs["domain"] = "cardiology"
         result = await tool.ainvoke(kwargs)
         assert result["ok"] is False, f"{tool.name} did not enforce CareTeam gate"
         assert result["error"] == "careteam_denied", tool.name

@@ -13,12 +13,12 @@ This slice covers everything in the PRD's *Tool surface & routing* workflow ↔ 
 - [x] `run_panel_triage()` is registered. Implementation: `gate.list_panel(user_id)` (same call that powers `get_my_patient_list` in real mode and the empty-state UI) → parallel `get_change_signal` + `get_patient_demographics` + `get_active_problems` per pid → returns ranked panel envelope. Every per-pid nested call passes through `_enforce_patient_authorization`. *(Hours arg defaults to 24; outer `asyncio.gather` over the pid list, inner `gather` over the three branches per pid; merged envelope is byte-for-byte the granular `ToolResult.to_payload()` shape.)*
 - [x] `run_panel_med_safety()` is registered. Implementation: `gate.list_panel(user_id)` → parallel `get_active_medications` + `get_recent_labs` per pid → returns scan envelope. Per-pid gate enforced. *(Hours arg defaults to 24; outer `asyncio.gather` over the pid list, inner `gather` over the two branches per pid; merge logic shared with `run_panel_triage` via `_merge_panel_envelopes`. Renal/hepatic-marker filtering is applied at the synthesis layer, not the data layer — the W-10 framing tells the LLM which lab codes to lens through.)*
 - [x] `run_cross_cover_onboarding(patient_id)` is registered. Implementation: wider-history fan-out (problems + meds + recent encounters + active orders + hospital-course notes). Gate enforced per nested call. *(Hours arg defaults to 168 / 7 days so the envelope captures the admission encounter, orders authored across the stay, and the chronological note trail. Single-pid fan-out under one ``asyncio.gather``; merge logic shared with ``run_per_patient_brief`` via the new ``_merge_envelopes`` helper. Defense-in-depth gate at every per-pid call.)*
-- [ ] `run_consult_orientation(patient_id, domain)` is registered. `domain` is a constrained string (e.g., `cardiology`, `nephrology`, `id`); the composite filters its fan-out to resources relevant to the domain. Gate enforced per nested call.
+- [x] `run_consult_orientation(patient_id, domain)` is registered. `domain` is a constrained string (e.g., `cardiology`, `nephrology`, `id`); the composite filters its fan-out to resources relevant to the domain. Gate enforced per nested call. *(``domain`` is a required string normalized via ``.strip().lower()`` so a clinician typing ``"Cardiology"`` or ``"CARDIOLOGY"`` doesn't get rejected. Unknown / empty values return ``error="invalid_domain"`` with the same envelope shape as ``invalid_since`` from ``run_recent_changes`` so the LLM can surface the bad input. Per-domain branch builder maps ``cardiology → problems + meds + vitals + labs + encounters + imaging + notes``, ``nephrology → problems + meds + labs + encounters + MARs + notes``, ``id → problems + meds + MARs + labs + orders + notes`` — vitals + imaging are cardiology-specific (BP/HR + echo/cath); MARs surface held nephrotoxic doses for nephrology; ServiceRequest holds the culture orders for ID. Default lookback is 168h / 7 days like ``run_cross_cover_onboarding`` since consult orientation spans the admission. Single-pid fan-out under one ``asyncio.gather``; merge logic shared with the other single-pid composites via the ``_merge_envelopes`` helper. Defense-in-depth gate at every per-pid call.)*
 - [x] `run_recent_changes(patient_id, since)` is registered. `since` is an ISO timestamp; composite returns a diff envelope of resources updated/created since that time. Gate enforced per nested call. *(``since`` is a required ISO 8601 timestamp; malformed and future values return ``error="invalid_since"``. The composite converts ``since`` → hours-ago and fans out the seven time-windowed granular reads (vitals, labs, encounters, orders, imaging, MARs, notes) under one ``asyncio.gather``; merge logic shared with the other single-pid composites via the ``_merge_envelopes`` helper. Active problems / active medications are intentionally excluded — they are current state, not changes; the W-9 framing tells the LLM to fetch them granularly when it needs to anchor a diff against current state.)*
 - [x] `run_abx_stewardship(patient_id)` is registered. Implementation: active meds + medication administrations + recent labs (Observation laboratory — where culture sensitivities, gram stains, and WBC trends live) + recent orders (ServiceRequest — where culture orders are authored). Gate enforced per nested call. *(Antibiotic filtering lives at the synthesis layer: the composite returns *all* meds / MARs / labs / orders; the W-11 framing tells the LLM which RxNorm/SNOMED codes are antibiotics. Mirrors W-10's design — pre-filtering at the data layer would couple the composite to a specific abx vocabulary. Default lookback is 72 hours / 3 days so a full course of cultures and dosing fits in the envelope. Active problems and demographics are intentionally NOT in the fan-out; W-11 framing tells the LLM to fetch them granularly when it needs to anchor the indication or compute duration. Single-pid fan-out under one ``asyncio.gather``; merge logic shared with the other single-pid composites via the ``_merge_envelopes`` helper. Defense-in-depth gate at every nested call.)*
-- [~] Synthesis prompts are authored and registered for: W-1 (panel triage / "who do I need to see first?"), W-4 (cross-cover onboarding), W-5 (family-meeting prep — same data shape as W-4 reused via `run_cross_cover_onboarding` plus a different prompt), W-8 (consult orientation), W-9 (re-consult / what changed), W-10 (panel med safety), W-11 (antibiotic stewardship). *(W-1 + W-4 + W-5 + W-9 + W-10 + W-11 framings landed; W-8 still pending.)*
-- [~] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 + W-4 + W-5 + W-9 + W-10 + W-11 added; W-8 still unmapped — selector default fall-through still applies.)*
-- [~] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(`run_panel_triage`, `run_panel_med_safety`, `run_cross_cover_onboarding`, `run_recent_changes`, and `run_abx_stewardship` descriptions done; only `run_consult_orientation` description remaining.)*
+- [x] Synthesis prompts are authored and registered for: W-1 (panel triage / "who do I need to see first?"), W-4 (cross-cover onboarding), W-5 (family-meeting prep — same data shape as W-4 reused via `run_cross_cover_onboarding` plus a different prompt), W-8 (consult orientation), W-9 (re-consult / what changed), W-10 (panel med safety), W-11 (antibiotic stewardship). *(All W-1 / W-4 / W-5 / W-8 / W-9 / W-10 / W-11 framings landed.)*
+- [x] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 / W-4 / W-5 / W-8 / W-9 / W-10 / W-11 all wired; W-6 / W-7 fall through to default by design.)*
+- [x] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(All composite tool descriptions done.)*
 - [x] Panel-level composites (`run_panel_triage`, `run_panel_med_safety`) only operate over patients returned by `list_panel(user_id)`. Their nested per-pid calls are intrinsically CareTeam-bounded. *(Both composites now use `gate.list_panel(user_id)` for the roster source and re-run the per-call gate as defense in depth.)*
 - [ ] Eval cases added per workflow: at least one golden conversation per W-1, W-4, W-5, W-8, W-9, W-10, W-11. Per the PRD's *Testing Decisions*, the composite tools themselves are not unit-tested for synthesis quality; that is what the eval harness exists for. The gate enforcement and parallel fan-out behavior, however, are unit-tested. *(Eval-harness drift inherited from issue 003 still unaddressed — adding new W-1 cases on top of a drifting harness would compound the problem; deferred to a single recalibration pass alongside the remaining composites.)*
 
@@ -568,6 +568,156 @@ Notes for next iteration:
   ``run_consult_orientation`` slice in one pass — adding W-11
   cases on top of a drifting harness would compound the problem.
   Unchanged from prior slices' notes.
+
+### 2026-05-02 — `run_consult_orientation` + W-8 synthesis framing landed
+
+Sixth and final composite slice in issue 007. Same single-pid
+fan-out template as cross-cover, recent-changes, and abx-stewardship,
+but the per-pid branch set is selected by a required ``domain`` arg.
+This is the trickiest of the W-1…W-11 composites because the
+fan-out shape itself is data — different consulting services read
+different parts of the chart, so the tool can't have one fixed
+branch set.
+
+Key decisions:
+
+- **Per-domain branch builder, not a per-domain code filter.** The
+  AC says "filters its fan-out to resources relevant to the domain";
+  the natural reading is "different consult services pull different
+  resource types". A cardiologist needs vitals (BP / HR / rhythm
+  trend) and imaging (echo / cath conclusions) that nobody else
+  needs at orientation time; a nephrologist needs MARs (held
+  nephrotoxic doses); an ID consultant needs ServiceRequest (where
+  culture orders are authored). The composite picks branch *types*
+  per domain. Code-level filtering (e.g., "cardiac labs only,
+  please") is a synthesis-layer concern — same reasoning as W-10
+  (renal/hepatic markers) and W-11 (antibiotic codes). The W-8
+  framing names the codes each domain should lens through.
+
+- **Three domains: ``cardiology``, ``nephrology``, ``id``.** Mapped
+  to:
+    * cardiology → problems + meds + vitals + labs + encounters +
+      imaging + notes (7 branches)
+    * nephrology → problems + meds + labs + encounters + MARs +
+      notes (6 branches)
+    * id → problems + meds + MARs + labs + orders + notes
+      (6 branches)
+  Each per-domain set hits a distinct subset of the granular
+  reads. The lambda-of-no-args pattern keeps the outer
+  ``asyncio.gather`` agnostic about which branches the domain
+  picked — it just runs whatever factories the per-domain map
+  produced.
+
+- **``domain`` is normalized via ``.strip().lower()``.** A clinician
+  typing ``"Cardiology"`` or ``" CARDIOLOGY "`` should not be
+  rejected. Mirrors the ``_hours_until_now_from_iso`` permissive-
+  parsing discipline from W-9.
+
+- **Unknown / empty ``domain`` returns ``error="invalid_domain"``.**
+  Same envelope shape as W-9's ``invalid_since`` so the LLM gets a
+  structured refusal instead of a runtime crash, and the user can
+  see the bad input in the chat. Currently unsupported domains
+  (e.g., ``endocrine``, ``heme``, ``pulmonary``, ``GI``) fall into
+  this path; adding new domains is a one-line change to the
+  per-domain branch map.
+
+- **No backed enum for ``domain`` at the StructuredTool layer.**
+  Originally considered a ``StrEnum`` on the function signature
+  to get pydantic-side validation, but the runtime ``invalid_domain``
+  envelope is more LLM-friendly than a pydantic ``ValidationError``
+  surfaced through langchain — the latter dies with an opaque
+  schema-mismatch message before the tool body runs. The
+  ``invalid_domain`` envelope plumbs the bad input back to the LLM
+  exactly like ``invalid_since`` does for W-9.
+
+- **Wider lookback default (168h / 7 days).** Same as
+  ``run_cross_cover_onboarding``. Consult orientation spans the
+  admission, not just overnight. The default is asserted via the
+  schema test so a regression that flipped it back to 24h would
+  fail loudly.
+
+- **Defense-in-depth gate at every per-pid call.** Top-of-call gate
+  short-circuits the empty-pid / out-of-team path before paying up
+  to seven gate-denied roundtrips; per-branch gate consults catch
+  a buggy refactor that removed the gate from a single read.
+  Counted via spy in the test (>= 7 expected for cardiology).
+
+- **Tool description biases the LLM toward composite for W-8
+  phrases.** "cardiology consult on Hayes", "orient me as nephro on
+  Eduardo", "walk me through Linda's chart from an ID standpoint".
+  Description names the three domains and the per-domain branch
+  shape so the LLM picks correctly; explicitly contrasts with
+  ``run_per_patient_brief`` (24h overnight) and
+  ``run_cross_cover_onboarding`` (cross-cover without a specialist
+  lens) so the routing surface stays clean.
+
+- **W-8 framing.** Per-domain lens with explicit code lists:
+  cardiology surfaces BP / HR / rhythm trends + BNP / troponin /
+  BMP + echo / cath conclusions; nephrology surfaces Cr / K+ /
+  BUN / eGFR / UA / urine protein + held-for-AKI doses; ID surfaces
+  active abx regimen + MAR trail + microbiology evidence + WBC /
+  temperature / lactate trend. Forbids treatment recommendations:
+  "do NOT recommend a treatment plan or workup — the consultant
+  decides; surface what the chart says." Selector regression tests
+  confirm W-8 framing doesn't bleed into W-1 / W-2 / W-3 / W-4 /
+  W-5 / W-9 / W-10 / W-11 / W-7 / unclear (and vice-versa). The
+  W-4 ↔ W-8 mutual-exclusion test is explicit because both produce
+  chart-orientation reads, but W-4 is the general cross-cover
+  pickup and W-8 is scoped to a specialist domain.
+
+- **Patient-context-guard sweep updated.** The catch-all
+  ``test_all_patient_scoped_tools_enforce_gate_for_bound_user``
+  iterates every patient-scoped tool. The new tool's required
+  ``domain`` arg meant the test had to supply it (``cardiology``)
+  alongside ``patient_id`` / ``hours`` / ``since``; otherwise
+  pydantic rejects the tool input before the gate runs.
+
+Files changed:
+
+- ``agent/src/copilot/tools.py`` — ``run_consult_orientation``
+  closure with per-domain branch builder + ``StructuredTool``
+  registration with description authored to bias the LLM toward
+  the composite for W-8 queries
+- ``agent/src/copilot/prompts.py`` — ``_W8_SYNTHESIS_FRAMING``
+  block; selector map extended to dispatch W-8
+- ``agent/tests/test_consult_orientation.py`` (new, 16 cases) —
+  envelope shape, three per-domain fan-out shapes (cardiology /
+  nephrology / id), case-insensitive domain, ``invalid_domain``
+  rejection (empty + unknown), parallel fan-out wall-clock, gate
+  enforcement per nested call, careteam_denied for out-of-team
+  pid, no_active_patient empty pid, no-user-bound denial, admin
+  bypass, registration / arg shape, wider-history default
+  (schema-asserted), description signals W-8 intent
+- ``agent/tests/test_synthesis_prompt_selector.py`` — 3 new cases
+  (W-8 framing markers, W-8 ↮ everything-else mutual exclusion,
+  W-4 ↔ W-8 explicit mutual exclusion); existing W-7 / unclear /
+  W-4 / W-5 / W-9 / W-10 / W-11 / default-framing cases extended
+  to also exclude W-8
+- ``agent/tests/test_patient_context_guard.py`` — catch-all sweep
+  now also passes ``domain`` when the tool requires it
+
+Tests: 276 backend unit tests pass (was 257; +16 consult-orientation
++ 3 selector cases; +0 from previously-skipped tests now running)
+excluding the Postgres-required files which need a DB on the
+sandbox; ruff clean on changed files. The 14 inherited
+eval-harness failures from issue 003 carry over as expected;
+recalibration was deferred to be paired with the remaining
+composites — that pairing now lives at the end of issue 007's
+remaining work.
+
+Notes for next iteration:
+
+- All six issue-007 composites and seven synthesis prompts are
+  now landed. The only remaining AC is the eval-harness work
+  (#23): adding at least one golden case per W-1 / W-4 / W-5 /
+  W-8 / W-9 / W-10 / W-11 *and* recalibrating the 14 inherited
+  failures from issue 003. That belongs in its own slice — the
+  composite-tool surface is now stable enough to recalibrate
+  against.
+- Consult-orientation domains beyond cardiology / nephrology / id
+  (heme/onc, pulmonary, GI, neuro, endo) are a one-line addition
+  to the per-domain branch map per domain plus a W-8 framing
+  paragraph. Defer until a real eval case asks for them.
 
 ## Blocked by
 

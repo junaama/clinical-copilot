@@ -1,4 +1,4 @@
-"""W-1 / W-2 / W-3 / W-4 / W-5 / W-9 / W-10 / W-11 synthesis-prompt selector — issues 006 and 007.
+"""W-1…W-11 synthesis-prompt selector — issues 006 and 007.
 
 The classifier emits an advisory ``workflow_id``. After tool execution the
 synthesis prompt selector picks framing tuned to the workflow:
@@ -11,6 +11,8 @@ synthesis prompt selector picks framing tuned to the workflow:
 * ``W-5`` (family-meeting prep) — diagnosis / trajectory / plan /
   prognosis surface for a family conversation. Same data shape as W-4
   via the shared ``run_cross_cover_onboarding`` composite.
+* ``W-8`` (consult orientation) — specialist reading the chart for
+  their domain (cardiology / nephrology / id), with a per-domain lens.
 * ``W-9`` (re-consult / what changed since I last looked) — diff
   framing scoped to a user-supplied ``since`` cutoff.
 * ``W-10`` (panel med-safety scan) — emphasizes pharmacist-style review
@@ -161,6 +163,7 @@ def test_w4_prompt_does_not_include_other_framings() -> None:
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-8 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
     assert "W-11 SYNTHESIS" not in prompt
@@ -171,9 +174,56 @@ def test_w5_prompt_does_not_include_other_framings() -> None:
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-8 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
     assert "W-11 SYNTHESIS" not in prompt
+
+
+def test_w8_prompt_includes_consult_orientation_framing() -> None:
+    """W-8 framing is consult orientation — specialist reading the chart
+    for their domain. Marker phrases have to be unique enough that we
+    can assert it isn't present for other workflows."""
+    prompt = _build("W-8")
+    assert "W-8 SYNTHESIS" in prompt
+    lowered = prompt.lower()
+    # The W-8 framing should reference the consult / specialist /
+    # domain discipline.
+    assert (
+        "consult" in lowered
+        or "specialist" in lowered
+        or "consulting" in lowered
+    )
+    # Each of the three supported domains must appear in the framing
+    # so the LLM has the right per-domain lens.
+    assert "cardiology" in lowered
+    assert "nephrology" in lowered
+    # Match either the plain "id" word or the "ID consult" phrasing.
+    assert " id" in lowered or "id``" in lowered or "id consult" in lowered
+    # And it points at the composite tool so the LLM picks it.
+    assert "run_consult_orientation" in prompt
+
+
+def test_w8_prompt_does_not_include_other_framings() -> None:
+    """The selector must not double-include framings."""
+    prompt = _build("W-8")
+    assert "W-1 SYNTHESIS" not in prompt
+    assert "W-2 SYNTHESIS" not in prompt
+    assert "W-3 SYNTHESIS" not in prompt
+    assert "W-4 SYNTHESIS" not in prompt
+    assert "W-5 SYNTHESIS" not in prompt
+    assert "W-9 SYNTHESIS" not in prompt
+    assert "W-10 SYNTHESIS" not in prompt
+    assert "W-11 SYNTHESIS" not in prompt
+
+
+def test_w4_prompt_does_not_include_w8_framing() -> None:
+    """W-4 (cross-cover) and W-8 (consult orientation) both produce
+    chart-orientation reads, but W-8 is scoped to a specialist domain
+    while W-4 is the general cross-cover pickup. The selector must
+    keep them distinct."""
+    prompt = _build("W-4")
+    assert "W-8 SYNTHESIS" not in prompt
 
 
 def test_w9_prompt_includes_recent_changes_framing() -> None:
@@ -202,6 +252,7 @@ def test_w9_prompt_does_not_include_other_framings() -> None:
     assert "W-3 SYNTHESIS" not in prompt
     assert "W-4 SYNTHESIS" not in prompt
     assert "W-5 SYNTHESIS" not in prompt
+    assert "W-8 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
     assert "W-11 SYNTHESIS" not in prompt
 
@@ -238,6 +289,7 @@ def test_w10_prompt_does_not_include_other_framings() -> None:
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-8 SYNTHESIS" not in prompt
     assert "W-11 SYNTHESIS" not in prompt
 
 
@@ -282,6 +334,7 @@ def test_w11_prompt_does_not_include_other_framings() -> None:
     assert "W-3 SYNTHESIS" not in prompt
     assert "W-4 SYNTHESIS" not in prompt
     assert "W-5 SYNTHESIS" not in prompt
+    assert "W-8 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
 
@@ -297,14 +350,17 @@ def test_w10_prompt_does_not_include_w11_framing() -> None:
 
 def test_w7_prompt_uses_default_framing() -> None:
     """A workflow without a dedicated framing falls through cleanly: no
-    W-1, W-2, W-3, W-4, W-5, W-9, W-10, or W-11 framing appears in the
-    prompt."""
+    W-1, W-2, W-3, W-4, W-5, W-8, W-9, W-10, or W-11 framing appears in
+    the prompt. W-6 and W-7 are the two workflows that intentionally
+    have no dedicated framing — they use granular reads under the
+    default WORKFLOW / FORMAT sections."""
     prompt = _build("W-7")
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
     assert "W-4 SYNTHESIS" not in prompt
     assert "W-5 SYNTHESIS" not in prompt
+    assert "W-8 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
     assert "W-11 SYNTHESIS" not in prompt
@@ -317,6 +373,7 @@ def test_unclear_workflow_uses_default_framing() -> None:
     assert "W-3 SYNTHESIS" not in prompt
     assert "W-4 SYNTHESIS" not in prompt
     assert "W-5 SYNTHESIS" not in prompt
+    assert "W-8 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
     assert "W-11 SYNTHESIS" not in prompt
