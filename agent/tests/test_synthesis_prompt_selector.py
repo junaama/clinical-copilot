@@ -1,4 +1,4 @@
-"""W-1 / W-2 / W-3 / W-4 / W-5 / W-10 synthesis-prompt selector — issues 006 and 007.
+"""W-1 / W-2 / W-3 / W-4 / W-5 / W-9 / W-10 synthesis-prompt selector — issues 006 and 007.
 
 The classifier emits an advisory ``workflow_id``. After tool execution the
 synthesis prompt selector picks framing tuned to the workflow:
@@ -11,6 +11,8 @@ synthesis prompt selector picks framing tuned to the workflow:
 * ``W-5`` (family-meeting prep) — diagnosis / trajectory / plan /
   prognosis surface for a family conversation. Same data shape as W-4
   via the shared ``run_cross_cover_onboarding`` composite.
+* ``W-9`` (re-consult / what changed since I last looked) — diff
+  framing scoped to a user-supplied ``since`` cutoff.
 * ``W-10`` (panel med-safety scan) — emphasizes pharmacist-style review
   with the renal/hepatic/anticoagulant lens.
 * anything else — falls through to the default framing.
@@ -157,6 +159,7 @@ def test_w4_prompt_does_not_include_other_framings() -> None:
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
 
 
@@ -165,7 +168,44 @@ def test_w5_prompt_does_not_include_other_framings() -> None:
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
+
+
+def test_w9_prompt_includes_recent_changes_framing() -> None:
+    """W-9 framing is "what changed since I last looked" — diff over a
+    user-supplied cutoff. Marker phrases have to be unique enough that
+    we can assert it isn't present for other workflows."""
+    prompt = _build("W-9")
+    assert "W-9 SYNTHESIS" in prompt
+    lowered = prompt.lower()
+    # The W-9 framing should reference the diff / change-since semantics.
+    assert "since" in lowered
+    assert (
+        "chang" in lowered
+        or "diff" in lowered
+        or "new" in lowered
+    )
+    # And it points at the composite tool so the LLM picks it.
+    assert "run_recent_changes" in prompt
+
+
+def test_w9_prompt_does_not_include_other_framings() -> None:
+    """The selector must not double-include framings."""
+    prompt = _build("W-9")
+    assert "W-1 SYNTHESIS" not in prompt
+    assert "W-2 SYNTHESIS" not in prompt
+    assert "W-3 SYNTHESIS" not in prompt
+    assert "W-4 SYNTHESIS" not in prompt
+    assert "W-5 SYNTHESIS" not in prompt
+    assert "W-10 SYNTHESIS" not in prompt
+
+
+def test_w2_prompt_does_not_include_w9_framing() -> None:
+    """W-2 (24h brief) and W-9 (diff since cutoff) are easy to confuse;
+    the selector must keep them distinct."""
+    prompt = _build("W-2")
+    assert "W-9 SYNTHESIS" not in prompt
 
 
 def test_w10_prompt_includes_med_safety_framing() -> None:
@@ -205,13 +245,14 @@ def test_w1_prompt_does_not_include_w10_framing() -> None:
 
 def test_w7_prompt_uses_default_framing() -> None:
     """A workflow without a dedicated framing falls through cleanly: no
-    W-1, W-2, W-3, W-4, W-5, or W-10 framing appears in the prompt."""
+    W-1, W-2, W-3, W-4, W-5, W-9, or W-10 framing appears in the prompt."""
     prompt = _build("W-7")
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
     assert "W-4 SYNTHESIS" not in prompt
     assert "W-5 SYNTHESIS" not in prompt
+    assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
 
 
@@ -222,6 +263,7 @@ def test_unclear_workflow_uses_default_framing() -> None:
     assert "W-3 SYNTHESIS" not in prompt
     assert "W-4 SYNTHESIS" not in prompt
     assert "W-5 SYNTHESIS" not in prompt
+    assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
 
 

@@ -14,11 +14,11 @@ This slice covers everything in the PRD's *Tool surface & routing* workflow ↔ 
 - [x] `run_panel_med_safety()` is registered. Implementation: `gate.list_panel(user_id)` → parallel `get_active_medications` + `get_recent_labs` per pid → returns scan envelope. Per-pid gate enforced. *(Hours arg defaults to 24; outer `asyncio.gather` over the pid list, inner `gather` over the two branches per pid; merge logic shared with `run_panel_triage` via `_merge_panel_envelopes`. Renal/hepatic-marker filtering is applied at the synthesis layer, not the data layer — the W-10 framing tells the LLM which lab codes to lens through.)*
 - [x] `run_cross_cover_onboarding(patient_id)` is registered. Implementation: wider-history fan-out (problems + meds + recent encounters + active orders + hospital-course notes). Gate enforced per nested call. *(Hours arg defaults to 168 / 7 days so the envelope captures the admission encounter, orders authored across the stay, and the chronological note trail. Single-pid fan-out under one ``asyncio.gather``; merge logic shared with ``run_per_patient_brief`` via the new ``_merge_envelopes`` helper. Defense-in-depth gate at every per-pid call.)*
 - [ ] `run_consult_orientation(patient_id, domain)` is registered. `domain` is a constrained string (e.g., `cardiology`, `nephrology`, `id`); the composite filters its fan-out to resources relevant to the domain. Gate enforced per nested call.
-- [ ] `run_recent_changes(patient_id, since)` is registered. `since` is an ISO timestamp; composite returns a diff envelope of resources updated/created since that time. Gate enforced per nested call.
+- [x] `run_recent_changes(patient_id, since)` is registered. `since` is an ISO timestamp; composite returns a diff envelope of resources updated/created since that time. Gate enforced per nested call. *(``since`` is a required ISO 8601 timestamp; malformed and future values return ``error="invalid_since"``. The composite converts ``since`` → hours-ago and fans out the seven time-windowed granular reads (vitals, labs, encounters, orders, imaging, MARs, notes) under one ``asyncio.gather``; merge logic shared with the other single-pid composites via the ``_merge_envelopes`` helper. Active problems / active medications are intentionally excluded — they are current state, not changes; the W-9 framing tells the LLM to fetch them granularly when it needs to anchor a diff against current state.)*
 - [ ] `run_abx_stewardship(patient_id)` is registered. Implementation: active meds (filtered to antibiotics) + medication administrations + relevant cultures (`DiagnosticReport`/`Observation`) + recent orders. Gate enforced per nested call.
-- [~] Synthesis prompts are authored and registered for: W-1 (panel triage / "who do I need to see first?"), W-4 (cross-cover onboarding), W-5 (family-meeting prep — same data shape as W-4 reused via `run_cross_cover_onboarding` plus a different prompt), W-8 (consult orientation), W-9 (re-consult / what changed), W-10 (panel med safety), W-11 (antibiotic stewardship). *(W-1 + W-4 + W-5 + W-10 framings landed; W-8, W-9, W-11 still pending.)*
-- [~] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 + W-4 + W-5 + W-10 added; W-8, W-9, W-11 still unmapped — selector default fall-through still applies.)*
-- [~] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(`run_panel_triage`, `run_panel_med_safety`, and `run_cross_cover_onboarding` descriptions done; remaining three composites pending.)*
+- [~] Synthesis prompts are authored and registered for: W-1 (panel triage / "who do I need to see first?"), W-4 (cross-cover onboarding), W-5 (family-meeting prep — same data shape as W-4 reused via `run_cross_cover_onboarding` plus a different prompt), W-8 (consult orientation), W-9 (re-consult / what changed), W-10 (panel med safety), W-11 (antibiotic stewardship). *(W-1 + W-4 + W-5 + W-9 + W-10 framings landed; W-8, W-11 still pending.)*
+- [~] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 + W-4 + W-5 + W-9 + W-10 added; W-8, W-11 still unmapped — selector default fall-through still applies.)*
+- [~] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(`run_panel_triage`, `run_panel_med_safety`, `run_cross_cover_onboarding`, and `run_recent_changes` descriptions done; remaining two composites pending.)*
 - [x] Panel-level composites (`run_panel_triage`, `run_panel_med_safety`) only operate over patients returned by `list_panel(user_id)`. Their nested per-pid calls are intrinsically CareTeam-bounded. *(Both composites now use `gate.list_panel(user_id)` for the roster source and re-run the per-call gate as defense in depth.)*
 - [ ] Eval cases added per workflow: at least one golden conversation per W-1, W-4, W-5, W-8, W-9, W-10, W-11. Per the PRD's *Testing Decisions*, the composite tools themselves are not unit-tested for synthesis quality; that is what the eval harness exists for. The gate enforcement and parallel fan-out behavior, however, are unit-tested. *(Eval-harness drift inherited from issue 003 still unaddressed — adding new W-1 cases on top of a drifting harness would compound the problem; deferred to a single recalibration pass alongside the remaining composites.)*
 
@@ -308,6 +308,139 @@ a DB on the sandbox; ruff clean on changed files. The 14
 inherited eval-harness failures from issue 003 carry over;
 recalibration remains scheduled for the joint pass alongside the
 remaining composites.
+
+### 2026-05-02 — `run_recent_changes` + W-9 synthesis framing landed
+
+Fourth composite slice in issue 007 and the second single-pid
+composite this session. Same in-pid fan-out template as cross-cover
+but the lookback window is supplied as an ISO 8601 ``since``
+timestamp rather than a relative ``hours`` value, and the branch
+set is the W-9 "what changed since I last looked" diff: vitals,
+labs, encounters, orders, imaging, MARs, and notes.
+
+Key decisions:
+
+- **``since`` is converted to a positive hours-ago delta and passed
+  to the existing time-windowed granular tools.** Rather than
+  threading a ``since=`` arg through every granular read (which
+  would expand the surface area for the same effect), the
+  composite computes ``hours = ceil((now - since) / 3600) + 1`` and
+  reuses the existing ``hours``-windowed branches. The +1 buffer
+  rounds the cutoff outward so the boundary timestamp is included
+  rather than excluded by integer truncation; the W-9 diff loses
+  very little by overshooting by an hour and would lose a real
+  signal by undershooting it. Asserted by the
+  ``test_run_recent_changes_propagates_since_to_branch_filters``
+  spy that captures every ``FhirClient.search`` and verifies the
+  ``ge<timestamp>`` filter on each branch is at-or-after the
+  supplied ``since``.
+
+- **Active problems and active medications are intentionally NOT in
+  the diff.** They describe current *state*, not changes. Including
+  them would either (a) require post-filtering on
+  ``recordedDate``/``authoredOn`` (fragile, and the granular tools
+  don't support it) or (b) make the LLM compare against the full
+  current med list — which is not what W-9 asks. The W-9 framing
+  explicitly tells the LLM to fetch active state with granular
+  tools when it needs to anchor a diff against current state.
+  Asserted by ``test_run_recent_changes_excludes_active_problems_and_meds``
+  so the boundary stays explicit.
+
+- **Malformed and future ``since`` return ``invalid_since`` rather
+  than an opaque exception.** Three rejection paths: a missing/empty
+  string, a value that doesn't parse as ISO 8601, and a value in
+  the future. All three return ``ToolResult(ok=False, error="invalid_since")``
+  with the same envelope shape as a granular tool, so the LLM gets
+  a structured refusal it can surface to the user instead of a
+  500-style crash. ``datetime.fromisoformat`` is permissive enough
+  to accept both ``"...Z"`` (after a swap to ``"+00:00"``) and
+  full RFC-3339 strings; naive timestamps are assumed UTC for
+  back-compat with simpler client formats.
+
+- **Defense-in-depth gate at every per-pid call.** Top-of-call gate
+  short-circuits the empty-pid / out-of-team path before paying
+  seven gate-denied roundtrips; per-branch gate consults catch a
+  buggy refactor that removed the gate from a single read. Counted
+  via spy in the test (>= 7 expected).
+
+- **Tool description biases the LLM toward composite for W-9
+  phrases.** "what's new on Hayes since rounds?", "anything happen
+  since I left at 4pm?", "diff me on Eduardo since yesterday",
+  "I last looked Tuesday — what changed?". Description names the
+  full branch set and explicitly notes that active problems / meds
+  are *not* in the diff so the LLM doesn't expect them.
+
+- **W-9 framing.** Lead with the *new* events in chronological
+  order, group by category, anchor each item by timestamp, cite
+  every change. Crucially the framing tells the LLM to say
+  "no new X since <since>" for empty branches rather than silently
+  dropping them — so the clinician knows the branch was checked.
+  Selector regression tests confirm W-9 framing doesn't bleed into
+  W-1 / W-2 / W-3 / W-4 / W-5 / W-7 / W-10 / unclear (and
+  vice-versa). The W-2 ↔ W-9 mutual-exclusion test is explicit
+  because the two are easy to confuse — both look at recent
+  events, but W-2 is the 24h overnight brief framing while W-9 is
+  scoped to a user-supplied cutoff.
+
+- **Patient-context-guard sweep updated.** The catch-all
+  ``test_all_patient_scoped_tools_enforce_gate_for_bound_user``
+  iterates every patient-scoped tool and asserts ``careteam_denied``
+  on an out-of-team pid. The new tool's required ``since`` arg
+  meant the test had to supply it alongside ``patient_id`` /
+  ``hours``; otherwise pydantic rejects the tool input before the
+  gate ever runs.
+
+Files changed:
+
+- ``agent/src/copilot/tools.py`` — ``_hours_until_now_from_iso``
+  helper (parses ISO 8601, rejects future timestamps, returns
+  hours-ago with a +1 boundary buffer); ``run_recent_changes``
+  closure + ``StructuredTool`` registration with description
+  authored to bias the LLM toward the composite for W-9 queries
+- ``agent/src/copilot/prompts.py`` — ``_W9_SYNTHESIS_FRAMING``
+  block; selector map extended to dispatch W-9
+- ``agent/tests/test_recent_changes.py`` (new, 15 cases) —
+  envelope shape, 7-branch ``sources_checked`` coverage, exclusion
+  of Condition/MedicationRequest from the diff, ``since``-required
+  schema assertion, malformed/future ``invalid_since`` rejection,
+  ``since``-propagated-to-branch-filters spy, parallel fan-out
+  wall-clock, gate enforcement per nested call, careteam_denied
+  for out-of-team pid, no_active_patient empty pid, admin bypass,
+  registration / arg shape, description signals W-9 intent
+- ``agent/tests/test_synthesis_prompt_selector.py`` — 3 new cases
+  (W-9 framing markers, W-9 ↮ everything-else mutual exclusion,
+  W-2 ↔ W-9 explicit mutual exclusion); existing W-7 / unclear /
+  W-4 / W-5 / default-framing cases extended to also exclude W-9
+- ``agent/tests/test_patient_context_guard.py`` — catch-all sweep
+  now also passes ``since`` when the tool requires it
+
+Tests: 242 backend unit tests pass (was 224; +15 recent-changes +
+3 selector cases) excluding the Postgres-required files which need
+a DB on the sandbox; ruff clean on changed files. The 14 inherited
+eval-harness failures from issue 003 carry over; recalibration
+remains scheduled for the joint pass alongside the remaining
+composites.
+
+Notes for next iteration:
+
+- ``run_abx_stewardship(patient_id)`` + W-11 framing is the
+  narrowest of the three remaining composites — it filters active
+  meds + medication administrations + cultures
+  (DiagnosticReport/Observation) + recent orders to antibiotics by
+  RxNorm/SNOMED. Like W-10 (renal/hepatic markers), the antibiotic
+  filter belongs at the synthesis layer, not the data layer — the
+  composite returns the raw envelopes and the W-11 framing tells
+  the LLM which RxNorm/SNOMED codes count.
+- ``run_consult_orientation(patient_id, domain)`` + W-8 framing is
+  the trickiest of the remaining composites because the fan-out
+  shape varies by domain. Likely uses an enum for ``domain`` and a
+  per-domain resource map (e.g., cardiology → echo + cath +
+  cardiac labs; nephrology → BMP + UA + dialysis encounters; ID →
+  cultures + abx + WBC + temperature). Easiest path: a per-domain
+  set of the existing granular reads composed at registration time.
+- Eval-harness recalibration alongside the remaining two
+  composites in one pass keeps from compounding the drift —
+  unchanged from the prior slice's note.
 
 ## Blocked by
 

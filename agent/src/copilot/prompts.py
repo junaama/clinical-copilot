@@ -144,6 +144,27 @@ plan (meds + orders) in one parallel fan-out.
 """
 
 
+_W9_SYNTHESIS_FRAMING = """\
+W-9 SYNTHESIS (re-consult / what changed since I last looked)
+The user has touched this chart before and is asking what changed
+since a specific cutoff — not a full brief, not a full hospital
+course. Lead with the *new* events grouped by category in
+chronological order: new vitals/lab excursions, new encounters
+(rapid responses, transfers, ED visits), new orders, new imaging
+results, medication administrations (especially held/stopped doses
+with reasons), and new clinical notes. For each item, anchor the
+timestamp so the clinician can place it in their own timeline.
+Cite every change. **Do not re-list stable findings or unchanged
+state — say "no new X since <since>" for any branch that came back
+empty.** If the user needs the current med list to anchor the diff
+(e.g., "what changed and what does she look like now?"), call
+``get_active_medications`` and ``get_active_problems`` granularly
+on top of the diff. Prefer ``run_recent_changes`` over chaining the
+seven granular reads — it fans them out in parallel against the
+same ``since`` cutoff and is materially faster.
+"""
+
+
 _W10_SYNTHESIS_FRAMING = """\
 W-10 SYNTHESIS (panel med-safety scan / pharmacist review)
 The user is asking for a pharmacist-style med-safety review across
@@ -323,8 +344,8 @@ def render_registry_block(
 
 
 # Workflow-id → synthesis framing block. Issue 006 wires W-2 and W-3;
-# issue 007 extends this map to W-1, W-4, W-5, and W-10 (and the
-# remaining W-8, W-9, W-11). W-4 and W-5 share one composite tool
+# issue 007 extends this map to W-1, W-4, W-5, W-9, and W-10 (and the
+# remaining W-8, W-11). W-4 and W-5 share one composite tool
 # (``run_cross_cover_onboarding``) but get different framings here:
 # cross-cover orientation vs. family-meeting prep. Every workflow not in
 # the map falls through to ``""`` (default framing — the generic
@@ -335,6 +356,7 @@ _WORKFLOW_SYNTHESIS_FRAMING: dict[str, str] = {
     "W-3": _W3_SYNTHESIS_FRAMING,
     "W-4": _W4_SYNTHESIS_FRAMING,
     "W-5": _W5_SYNTHESIS_FRAMING,
+    "W-9": _W9_SYNTHESIS_FRAMING,
     "W-10": _W10_SYNTHESIS_FRAMING,
 }
 

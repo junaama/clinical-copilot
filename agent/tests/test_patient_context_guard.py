@@ -114,18 +114,25 @@ async def test_all_patient_scoped_tools_enforce_gate_for_bound_user() -> None:
     """Every patient-scoped tool must consult the CareTeam gate. Panel-spanning
     tools like ``get_my_patient_list`` and ``resolve_patient`` are
     intentionally exempt."""
+    from datetime import UTC, datetime, timedelta
+
     set_active_user_id(PRACTITIONER_DR_SMITH)
     tools = make_tools(_settings())
     panel_tools = {"get_my_patient_list", "resolve_patient"}
+    since_iso = (datetime.now(UTC) - timedelta(hours=24)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     for tool in tools:
         if tool.name in panel_tools:
             continue
         properties = tool.args_schema.model_json_schema().get("properties", {})
         if "patient_id" not in properties:
             continue
-        kwargs = {"patient_id": "fixture-2"}
+        kwargs: dict[str, object] = {"patient_id": "fixture-2"}
         if "hours" in properties:
             kwargs["hours"] = 24
+        if "since" in properties:
+            kwargs["since"] = since_iso
         result = await tool.ainvoke(kwargs)
         assert result["ok"] is False, f"{tool.name} did not enforce CareTeam gate"
         assert result["error"] == "careteam_denied", tool.name
