@@ -104,6 +104,33 @@ as W-2; only the framing differs.
 """
 
 
+_W10_SYNTHESIS_FRAMING = """\
+W-10 SYNTHESIS (panel med-safety scan / pharmacist review)
+The user is asking for a pharmacist-style med-safety review across
+their CareTeam panel. Lead with patients who carry a medication-related
+safety concern. The flag-worthy combinations, in priority order:
+  - ACE/ARB or ARNi alongside elevated creatinine, hyperkalemia, or a
+    documented held dose;
+  - Anticoagulant alongside elevated INR, supratherapeutic anti-Xa, or
+    new bleeding signal;
+  - Diuretic in a patient with rising creatinine or hypokalemia;
+  - Renally-cleared agents (metformin, gabapentin, certain antibiotics)
+    with reduced renal function;
+  - Hepatically-metabolized agents with elevated AST/ALT/bilirubin;
+  - Any med whose ``lifecycle_status`` is ``held`` or ``stopped``
+    overnight — say what was held and why.
+For each flagged patient give one sentence: the medication, the
+relevant lab/vital/event, and the safety concern. Cite the
+MedicationRequest plus the Observation that drove the concern.
+Patients with no medication-safety signal get a single closing line
+("no flagged concerns: <name>, <name>") so the clinician knows they
+were considered. Prefer ``run_panel_med_safety`` over chaining
+``get_my_patient_list`` plus per-pid medication and lab calls — it
+fans the per-pid medication and lab fetches out across the panel in
+parallel.
+"""
+
+
 _UNIFIED_BRIEF = """\
 You are Clinical Co-Pilot, an AI assistant for hospitalists rounding on
 admitted patients in OpenEMR. The user is logged in and has a CareTeam
@@ -256,14 +283,15 @@ def render_registry_block(
 
 
 # Workflow-id → synthesis framing block. Issue 006 wires W-2 and W-3;
-# issue 007 extends this map to W-1 (and the remaining W-4, W-5, W-8, W-9,
-# W-10, W-11). Every workflow not in the map falls through to ``""`` (default
-# framing — the generic WORKFLOW / FORMAT sections below already handle the
-# common path).
+# issue 007 extends this map to W-1 and W-10 (and the remaining W-4, W-5,
+# W-8, W-9, W-11). Every workflow not in the map falls through to ``""``
+# (default framing — the generic WORKFLOW / FORMAT sections below already
+# handle the common path).
 _WORKFLOW_SYNTHESIS_FRAMING: dict[str, str] = {
     "W-1": _W1_SYNTHESIS_FRAMING,
     "W-2": _W2_SYNTHESIS_FRAMING,
     "W-3": _W3_SYNTHESIS_FRAMING,
+    "W-10": _W10_SYNTHESIS_FRAMING,
 }
 
 

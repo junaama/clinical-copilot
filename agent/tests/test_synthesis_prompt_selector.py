@@ -1,4 +1,4 @@
-"""W-1 / W-2 / W-3 synthesis-prompt selector — issues 006 and 007.
+"""W-1 / W-2 / W-3 / W-10 synthesis-prompt selector — issues 006 and 007.
 
 The classifier emits an advisory ``workflow_id``. After tool execution the
 synthesis prompt selector picks framing tuned to the workflow:
@@ -6,6 +6,8 @@ synthesis prompt selector picks framing tuned to the workflow:
 * ``W-1`` (panel triage) — emphasizes ranking and "see X first".
 * ``W-2`` (per-patient 24h brief) — emphasizes "what changed" overnight.
 * ``W-3`` (pager-driven acute) — emphasizes acuity / next-90-seconds.
+* ``W-10`` (panel med-safety scan) — emphasizes pharmacist-style review
+  with the renal/hepatic/anticoagulant lens.
 * anything else — falls through to the default framing.
 
 These tests exercise the selector through ``build_system_prompt`` (the
@@ -97,13 +99,49 @@ def test_w3_prompt_does_not_include_w2_framing() -> None:
     assert "W-2 SYNTHESIS" not in prompt
 
 
+def test_w10_prompt_includes_med_safety_framing() -> None:
+    """W-10 framing is panel-level pharmacist review. Marker phrases have to
+    be unique enough that we can assert it isn't present for other
+    workflows."""
+    prompt = _build("W-10")
+    assert "W-10 SYNTHESIS" in prompt
+    lowered = prompt.lower()
+    # The W-10 framing should reference the pharmacist / med-safety
+    # discipline and the renal/hepatic lens.
+    assert (
+        "med-safety" in lowered
+        or "pharmacist" in lowered
+        or "medication-safety" in lowered
+    )
+    assert "renal" in lowered or "hepatic" in lowered or "creatinine" in lowered
+    # And it points at the composite tool so the LLM picks it.
+    assert "run_panel_med_safety" in prompt
+
+
+def test_w10_prompt_does_not_include_other_framings() -> None:
+    """The selector must not double-include framings."""
+    prompt = _build("W-10")
+    assert "W-1 SYNTHESIS" not in prompt
+    assert "W-2 SYNTHESIS" not in prompt
+    assert "W-3 SYNTHESIS" not in prompt
+
+
+def test_w1_prompt_does_not_include_w10_framing() -> None:
+    """W-1 (panel triage) and W-10 (panel med-safety) both span the panel
+    but their framings differ — the selector must not bleed one into the
+    other."""
+    prompt = _build("W-1")
+    assert "W-10 SYNTHESIS" not in prompt
+
+
 def test_w7_prompt_uses_default_framing() -> None:
     """A workflow without a dedicated framing falls through cleanly: no
-    W-1, W-2, or W-3 framing appears in the prompt."""
+    W-1, W-2, W-3, or W-10 framing appears in the prompt."""
     prompt = _build("W-7")
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-10 SYNTHESIS" not in prompt
 
 
 def test_unclear_workflow_uses_default_framing() -> None:
@@ -111,6 +149,7 @@ def test_unclear_workflow_uses_default_framing() -> None:
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-10 SYNTHESIS" not in prompt
 
 
 def test_default_framing_preserves_hard_rules() -> None:

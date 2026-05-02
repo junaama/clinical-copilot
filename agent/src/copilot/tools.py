@@ -819,6 +819,52 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
             sentinel_fields=("body",),
         ).to_payload()
 
+    def _merge_panel_envelopes(
+        nested: list[tuple[dict[str, Any], ...]],
+        *,
+        panel_source: str,
+        elapsed_ms: int,
+    ) -> dict[str, Any]:
+        """Merge per-pid sub-fan-out results into one granular envelope.
+
+        Mirrors the granular ``ToolResult.to_payload()`` shape so the
+        verifier loop and citation-card mapper see the composite as just
+        another tool. Auth-class denials in any nested call bubble up as
+        the composite's response (so the LLM gets the same denial it
+        would see for a granular call); non-auth errors record the first
+        failure but let other branches' rows through, matching
+        granular-tool failure semantics.
+        """
+        merged_rows: list[dict[str, Any]] = []
+        merged_sources: list[str] = [panel_source]
+        first_error: str | None = None
+        any_failed = False
+        auth_denial_values = {
+            d.value for d in AuthDecision if d is not AuthDecision.ALLOWED
+        }
+        for per_pid_results in nested:
+            for payload in per_pid_results:
+                if (
+                    not payload.get("ok")
+                    and payload.get("error") in auth_denial_values
+                ):
+                    return payload
+                merged_rows.extend(payload.get("rows") or [])
+                for source in payload.get("sources_checked") or []:
+                    if source not in merged_sources:
+                        merged_sources.append(source)
+                if not payload.get("ok"):
+                    any_failed = True
+                    if first_error is None:
+                        first_error = payload.get("error")
+        return {
+            "ok": not any_failed,
+            "rows": merged_rows,
+            "sources_checked": merged_sources,
+            "error": first_error,
+            "latency_ms": elapsed_ms,
+        }
+
     async def run_panel_triage(hours: int = 24) -> dict[str, Any]:
         """Composite tool: rank the user's CareTeam panel by overnight signal.
 
@@ -866,40 +912,66 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         nested = await asyncio.gather(*[_per_pid(p.patient_id) for p in roster])
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
-        merged_rows: list[dict[str, Any]] = []
-        merged_sources: list[str] = ["CareTeam (panel)"]
-        first_error: str | None = None
-        any_failed = False
-        auth_denial_values = {
-            d.value for d in AuthDecision if d is not AuthDecision.ALLOWED
-        }
-        for per_pid_results in nested:
-            for payload in per_pid_results:
-                if (
-                    not payload.get("ok")
-                    and payload.get("error") in auth_denial_values
-                ):
-                    # Defense in depth: ``list_panel`` shouldn't return an
-                    # out-of-team patient, but if it ever does the per-call
-                    # gate catches it. Bubble the same denial the LLM
-                    # would see for a granular call.
-                    return payload
-                merged_rows.extend(payload.get("rows") or [])
-                for source in payload.get("sources_checked") or []:
-                    if source not in merged_sources:
-                        merged_sources.append(source)
-                if not payload.get("ok"):
-                    any_failed = True
-                    if first_error is None:
-                        first_error = payload.get("error")
+        return _merge_panel_envelopes(
+            list(nested), panel_source="CareTeam (panel)", elapsed_ms=elapsed_ms
+        )
 
-        return {
-            "ok": not any_failed,
-            "rows": merged_rows,
-            "sources_checked": merged_sources,
-            "error": first_error,
-            "latency_ms": elapsed_ms,
-        }
+    async def run_panel_med_safety(hours: int = 24) -> dict[str, Any]:
+        """Composite tool: pharmacist-style med-safety scan across the panel.
+
+        Implementation per issue 007: ``gate.list_panel(user_id)`` →
+        per-pid parallel fan-out of ``get_active_medications`` and
+        ``get_recent_labs`` (default 24h). All per-pid sub-fans-out run
+        concurrently under one outer ``asyncio.gather``, so wall-clock
+        time is roughly one slow call regardless of panel size.
+
+        The fan-out returns *all* recent labs, not just renal/hepatic
+        markers. The W-10 synthesis framing tells the LLM which lab
+        codes to lens through (creatinine, K+, AST/ALT, INR, anti-Xa,
+        etc.); pre-filtering at the data layer would couple the
+        composite to a specific lab vocabulary and break as we add
+        new med-safety patterns. Letting the model apply the lens means
+        new med-safety questions add a prompt change, not a tool change.
+
+        Authorization is intrinsically CareTeam-bounded by virtue of
+        ``list_panel`` returning only the user's own roster. Each
+        per-pid nested call re-runs the gate as defense in depth — a
+        buggy refactor that widened ``list_panel`` would still be
+        caught at the call site.
+
+        The merge envelope is byte-for-byte the granular tool shape
+        (``rows``, ``sources_checked``, ``latency_ms``, ``error``,
+        ``ok``) so the verifier loop and citation cards downstream
+        don't have to special-case the composite.
+        """
+        user_id = get_active_user_id() or ""
+        roster = await gate.list_panel(user_id)
+
+        if not roster:
+            # Empty panel is not an error — the user just has no patients
+            # assigned yet. Return an empty-but-ok envelope so the LLM
+            # can say so without a refusal narrative.
+            return ToolResult(
+                ok=True,
+                rows=(),
+                sources_checked=("CareTeam (panel)",),
+                latency_ms=0,
+            ).to_payload()
+
+        started = time.monotonic()
+
+        async def _per_pid(pid: str) -> tuple[dict[str, Any], ...]:
+            return await asyncio.gather(
+                get_active_medications(pid),
+                get_recent_labs(pid, hours),
+            )
+
+        nested = await asyncio.gather(*[_per_pid(p.patient_id) for p in roster])
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        return _merge_panel_envelopes(
+            list(nested), panel_source="CareTeam (panel)", elapsed_ms=elapsed_ms
+        )
 
     async def run_per_patient_brief(
         patient_id: str, hours: int = 24
@@ -1118,6 +1190,31 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
                 "CareTeam-bounded; no patient outside the user's panel can "
                 "appear. No arguments other than an optional ``hours`` "
                 "lookback window."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=run_panel_med_safety,
+            name="run_panel_med_safety",
+            description=(
+                "Composite panel med-safety scan: pharmacist-style review "
+                "across the user's CareTeam panel. Implementation: "
+                "list_panel → per-pid parallel fan-out of active "
+                "medications and recent labs (default 24h). Use this tool "
+                "whenever the user asks about medication-safety review "
+                "across the panel — 'which patients need a med review?', "
+                "'any pharmacy concerns this morning?', 'who's on a renally "
+                "cleared med with rising creatinine?', 'anyone hyperkalemic "
+                "on an ACE?'. The returned envelope contains all active "
+                "meds plus all recent labs per patient; the synthesis "
+                "framing applies the renal / hepatic / anticoagulant lens "
+                "and surfaces the safety-relevant combinations. Returns "
+                "the same envelope shape (rows, sources_checked, "
+                "latency_ms, error, ok) as a granular tool. The roster is "
+                "intrinsically CareTeam-bounded; no patient outside the "
+                "user's panel can appear. No arguments other than an "
+                "optional ``hours`` lookback window. For a single-patient "
+                "med-safety question (e.g., 'should THIS patient still be "
+                "on broad-spectrum?'), use the granular tools instead."
             ),
         ),
     ]
