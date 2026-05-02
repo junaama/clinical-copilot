@@ -85,6 +85,10 @@ def conv_client(monkeypatch: pytest.MonkeyPatch):
     with TestClient(server_mod.app) as client:
         server_mod.app.state.session_gateway = session_gateway
         server_mod.app.state.conversation_registry = conversation_registry
+        # Issue 008: default to None so the chat write-behind skips the
+        # Haiku call. Tests that exercise the summarizer wire override this
+        # to a stub that records the invocation synchronously.
+        server_mod.app.state.title_summarizer = None
         server_mod.app.state.graph = _StubGraph()
         yield client
 
@@ -408,3 +412,131 @@ async def test_get_messages_returns_metadata_for_owner(
 def test_get_messages_requires_auth(conv_client: TestClient) -> None:
     resp = conv_client.get("/conversations/anything/messages")
     assert resp.status_code == 401
+
+
+# ---------- Haiku title summarizer wire-in (issue 008) ----------
+
+
+class _StubSummarizer:
+    """Records every call and writes a deterministic title via the registry.
+
+    BackgroundTasks invokes this synchronously after the response is sent,
+    so the test's next ``GET /conversations`` sees the post-summarize title.
+    """
+
+    def __init__(self, registry: ConversationRegistry, title: str = "Haiku title") -> None:
+        self._registry = registry
+        self._title = title
+        self.calls: list[dict[str, str]] = []
+
+    async def summarize_and_set(
+        self,
+        *,
+        conversation_id: str,
+        first_user_message: str,
+        first_assistant_message: str,
+    ) -> None:
+        self.calls.append(
+            {
+                "conversation_id": conversation_id,
+                "first_user_message": first_user_message,
+                "first_assistant_message": first_assistant_message,
+            }
+        )
+        await self._registry.set_title(conversation_id, self._title)
+
+
+async def test_chat_first_turn_invokes_summarizer_once(
+    conv_client: TestClient,
+) -> None:
+    """First turn fires the summarizer exactly once; subsequent turns don't."""
+    from copilot import server as server_mod
+
+    cookie = await _seed_session()
+    new_id = conv_client.post(
+        "/conversations", cookies={"copilot_session": cookie}
+    ).json()["id"]
+
+    stub = _StubSummarizer(server_mod.app.state.conversation_registry)
+    server_mod.app.state.title_summarizer = stub
+
+    # Turn 1 — fires the summarizer.
+    conv_client.post(
+        "/chat",
+        cookies={"copilot_session": cookie},
+        json={"conversation_id": new_id, "message": "Tell me about Eduardo"},
+    )
+    # Turn 2 — must not fire again.
+    conv_client.post(
+        "/chat",
+        cookies={"copilot_session": cookie},
+        json={"conversation_id": new_id, "message": "And his vitals?"},
+    )
+
+    assert len(stub.calls) == 1
+    call = stub.calls[0]
+    assert call["conversation_id"] == new_id
+    assert call["first_user_message"] == "Tell me about Eduardo"
+    # Reply is whatever the stub graph emitted ("ack").
+    assert call["first_assistant_message"] == "ack"
+
+
+async def test_chat_summarizer_replaces_truncated_title_in_sidebar(
+    conv_client: TestClient,
+) -> None:
+    """End-to-end: after the first /chat call, the sidebar shows the
+    summarizer's title, not the truncated first message."""
+    from copilot import server as server_mod
+
+    cookie = await _seed_session()
+    new_id = conv_client.post(
+        "/conversations", cookies={"copilot_session": cookie}
+    ).json()["id"]
+
+    server_mod.app.state.title_summarizer = _StubSummarizer(
+        server_mod.app.state.conversation_registry,
+        title="Eduardo Perez 24h Brief",
+    )
+
+    conv_client.post(
+        "/chat",
+        cookies={"copilot_session": cookie},
+        json={
+            "conversation_id": new_id,
+            "message": "Tell me about Eduardo",
+        },
+    )
+
+    rows = conv_client.get(
+        "/conversations", cookies={"copilot_session": cookie}
+    ).json()["conversations"]
+    row = next(r for r in rows if r["id"] == new_id)
+    assert row["title"] == "Eduardo Perez 24h Brief"
+
+
+async def test_chat_skips_summarizer_when_unconfigured(
+    conv_client: TestClient,
+) -> None:
+    """No summarizer configured → chat still works, title stays as the
+    truncated first message."""
+    from copilot import server as server_mod
+
+    cookie = await _seed_session()
+    new_id = conv_client.post(
+        "/conversations", cookies={"copilot_session": cookie}
+    ).json()["id"]
+
+    server_mod.app.state.title_summarizer = None
+
+    chat_resp = conv_client.post(
+        "/chat",
+        cookies={"copilot_session": cookie},
+        json={"conversation_id": new_id, "message": "Tell me about Eduardo"},
+    )
+    assert chat_resp.status_code == 200
+
+    rows = conv_client.get(
+        "/conversations", cookies={"copilot_session": cookie}
+    ).json()["conversations"]
+    row = next(r for r in rows if r["id"] == new_id)
+    assert row["title"] == "Tell me about Eduardo"

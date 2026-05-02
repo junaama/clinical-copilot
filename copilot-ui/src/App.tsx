@@ -124,9 +124,21 @@ function StandaloneApp(): JSX.Element {
   // Bump the sidebar refresh token whenever messages grow — the sidebar
   // refetches its list and the new conversation appears with its title.
   // Skips empty-state to avoid a needless first fetch on mount.
+  //
+  // Issue 008: schedule a second refresh ~2.5s after each turn. The Haiku
+  // title summarizer fires after the chat response is sent, so the
+  // immediate refetch above will see the truncated-message placeholder;
+  // the delayed refetch picks up the Haiku title once it lands. Subsequent
+  // turns get a no-op refetch — cheap insurance vs. tracking first-turn
+  // separately, and avoids relying on a precise model-latency budget.
   useEffect(() => {
     if (messages.length === 0) return;
     setSidebarRefresh((n) => n + 1);
+    const timer = window.setTimeout(
+      () => setSidebarRefresh((n) => n + 1),
+      2500,
+    );
+    return () => window.clearTimeout(timer);
   }, [messages.length]);
 
   // Browser back/forward must update the active thread without a reload.
