@@ -819,13 +819,13 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
             sentinel_fields=("body",),
         ).to_payload()
 
-    def _merge_panel_envelopes(
-        nested: list[tuple[dict[str, Any], ...]],
+    def _merge_envelopes(
+        results: list[dict[str, Any]],
         *,
-        panel_source: str,
+        initial_sources: tuple[str, ...] = (),
         elapsed_ms: int,
     ) -> dict[str, Any]:
-        """Merge per-pid sub-fan-out results into one granular envelope.
+        """Merge fan-out tool-result payloads into one granular envelope.
 
         Mirrors the granular ``ToolResult.to_payload()`` shape so the
         verifier loop and citation-card mapper see the composite as just
@@ -834,29 +834,32 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         would see for a granular call); non-auth errors record the first
         failure but let other branches' rows through, matching
         granular-tool failure semantics.
+
+        ``initial_sources`` is prepended to the merged ``sources_checked``
+        list — panel composites use this to advertise the
+        ``CareTeam (panel)`` sentinel.
         """
         merged_rows: list[dict[str, Any]] = []
-        merged_sources: list[str] = [panel_source]
+        merged_sources: list[str] = list(initial_sources)
         first_error: str | None = None
         any_failed = False
         auth_denial_values = {
             d.value for d in AuthDecision if d is not AuthDecision.ALLOWED
         }
-        for per_pid_results in nested:
-            for payload in per_pid_results:
-                if (
-                    not payload.get("ok")
-                    and payload.get("error") in auth_denial_values
-                ):
-                    return payload
-                merged_rows.extend(payload.get("rows") or [])
-                for source in payload.get("sources_checked") or []:
-                    if source not in merged_sources:
-                        merged_sources.append(source)
-                if not payload.get("ok"):
-                    any_failed = True
-                    if first_error is None:
-                        first_error = payload.get("error")
+        for payload in results:
+            if (
+                not payload.get("ok")
+                and payload.get("error") in auth_denial_values
+            ):
+                return payload
+            merged_rows.extend(payload.get("rows") or [])
+            for source in payload.get("sources_checked") or []:
+                if source not in merged_sources:
+                    merged_sources.append(source)
+            if not payload.get("ok"):
+                any_failed = True
+                if first_error is None:
+                    first_error = payload.get("error")
         return {
             "ok": not any_failed,
             "rows": merged_rows,
@@ -864,6 +867,28 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
             "error": first_error,
             "latency_ms": elapsed_ms,
         }
+
+    def _merge_panel_envelopes(
+        nested: list[tuple[dict[str, Any], ...]],
+        *,
+        panel_source: str,
+        elapsed_ms: int,
+    ) -> dict[str, Any]:
+        """Flatten per-pid sub-fan-out results and merge via ``_merge_envelopes``.
+
+        Thin adapter for panel composites: the outer fan-out yields a list
+        of per-pid result tuples; flatten them and forward to the shared
+        merger with the ``CareTeam (panel)`` sentinel as the initial
+        source.
+        """
+        flat: list[dict[str, Any]] = [
+            payload for per_pid in nested for payload in per_pid
+        ]
+        return _merge_envelopes(
+            flat,
+            initial_sources=(panel_source,),
+            elapsed_ms=elapsed_ms,
+        )
 
     async def run_panel_triage(hours: int = 24) -> dict[str, Any]:
         """Composite tool: rank the user's CareTeam panel by overnight signal.
@@ -1005,34 +1030,50 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
-        merged_rows: list[dict[str, Any]] = []
-        merged_sources: list[str] = []
-        first_error: str | None = None
-        any_failed = False
-        for payload in results:
-            # If any nested call hit the gate's deny path, bubble that
-            # decision up — the LLM should see the same authorization
-            # error it would see for a granular call.
-            if not payload.get("ok") and payload.get("error") in {
-                d.value for d in AuthDecision if d is not AuthDecision.ALLOWED
-            }:
-                return payload
-            merged_rows.extend(payload.get("rows") or [])
-            for source in payload.get("sources_checked") or []:
-                if source not in merged_sources:
-                    merged_sources.append(source)
-            if not payload.get("ok"):
-                any_failed = True
-                if first_error is None:
-                    first_error = payload.get("error")
+        return _merge_envelopes(list(results), elapsed_ms=elapsed_ms)
 
-        return {
-            "ok": not any_failed,
-            "rows": merged_rows,
-            "sources_checked": merged_sources,
-            "error": first_error,
-            "latency_ms": elapsed_ms,
-        }
+    async def run_cross_cover_onboarding(
+        patient_id: str, hours: int = 168
+    ) -> dict[str, Any]:
+        """Composite tool: hospital-course orientation for cross-cover / family meetings.
+
+        Wider-history single-patient fan-out for the W-4 (cross-cover
+        onboarding) and W-5 (family-meeting prep) workflows: active
+        problems, active medications, recent encounters, recent orders
+        (ServiceRequest), and clinical notes (DocumentReference) over
+        the lookback window. Defaults to 168 hours (7 days) so the
+        envelope captures the admission encounter, orders authored
+        across the stay, and the chronological note trail — what a
+        physician picking up the service or sitting down with a family
+        needs to read the chart story.
+
+        The composite returns the same data shape for both W-4 and W-5;
+        the synthesis-prompt selector swaps in the workflow-specific
+        framing (cross-cover orientation vs. diagnosis story / prognosis
+        / treatment plan for family communication).
+
+        Authorization is enforced **per nested call** by reusing the
+        granular tools' ``_enforce_patient_authorization`` helper. A
+        buggy refactor that removed the gate from a single branch
+        would still be caught by the gate at the other branches;
+        defense in depth.
+        """
+        # Top-of-call gate: short-circuits the empty-pid / out-of-team path
+        # so we don't fan out five gate-denied calls when one would do.
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
+            return denied
+
+        started = time.monotonic()
+        results = await asyncio.gather(
+            get_active_problems(patient_id),
+            get_active_medications(patient_id),
+            get_recent_encounters(patient_id, hours),
+            get_recent_orders(patient_id, hours),
+            get_clinical_notes(patient_id, hours),
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        return _merge_envelopes(list(results), elapsed_ms=elapsed_ms)
 
     return [
         StructuredTool.from_function(
@@ -1215,6 +1256,30 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
                 "optional ``hours`` lookback window. For a single-patient "
                 "med-safety question (e.g., 'should THIS patient still be "
                 "on broad-spectrum?'), use the granular tools instead."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=run_cross_cover_onboarding,
+            name="run_cross_cover_onboarding",
+            description=(
+                "Composite hospital-course orientation for ONE patient: "
+                "fans out active problems, active medications, recent "
+                "encounters, recent orders (ServiceRequest), and clinical "
+                "notes (DocumentReference) over a wider lookback window "
+                "(default 168 hours / 7 days) in PARALLEL and returns one "
+                "merged envelope. Prefer this tool whenever the user asks "
+                "to be oriented on a patient they haven't met — "
+                "'I'm cross-covering, get me up to speed on Hayes', "
+                "'I've never seen this patient — what do I need to know?', "
+                "'I'm meeting with the family this afternoon, what's the "
+                "story?', 'walk me through this admission'. Same data "
+                "shape works for both cross-cover (W-4) and "
+                "family-meeting prep (W-5); the synthesis framing handles "
+                "the rest. Returns the same envelope shape (rows, "
+                "sources_checked, latency_ms, error, ok) as a granular "
+                "tool. For a 24-hour overnight brief, use "
+                "``run_per_patient_brief`` instead — it pulls vitals and "
+                "labs that the cross-cover composite intentionally omits."
             ),
         ),
     ]

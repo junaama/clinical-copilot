@@ -1,4 +1,4 @@
-"""W-1 / W-2 / W-3 / W-10 synthesis-prompt selector — issues 006 and 007.
+"""W-1 / W-2 / W-3 / W-4 / W-5 / W-10 synthesis-prompt selector — issues 006 and 007.
 
 The classifier emits an advisory ``workflow_id``. After tool execution the
 synthesis prompt selector picks framing tuned to the workflow:
@@ -6,6 +6,11 @@ synthesis prompt selector picks framing tuned to the workflow:
 * ``W-1`` (panel triage) — emphasizes ranking and "see X first".
 * ``W-2`` (per-patient 24h brief) — emphasizes "what changed" overnight.
 * ``W-3`` (pager-driven acute) — emphasizes acuity / next-90-seconds.
+* ``W-4`` (cross-cover onboarding) — hospital-course orientation for a
+  patient the clinician hasn't met.
+* ``W-5`` (family-meeting prep) — diagnosis / trajectory / plan /
+  prognosis surface for a family conversation. Same data shape as W-4
+  via the shared ``run_cross_cover_onboarding`` composite.
 * ``W-10`` (panel med-safety scan) — emphasizes pharmacist-style review
   with the renal/hepatic/anticoagulant lens.
 * anything else — falls through to the default framing.
@@ -99,6 +104,70 @@ def test_w3_prompt_does_not_include_w2_framing() -> None:
     assert "W-2 SYNTHESIS" not in prompt
 
 
+def test_w4_prompt_includes_cross_cover_framing() -> None:
+    """W-4 framing is hospital-course orientation for a patient the
+    clinician hasn't met. Marker phrases have to be unique enough that
+    we can assert it isn't present for other workflows."""
+    prompt = _build("W-4")
+    assert "W-4 SYNTHESIS" in prompt
+    lowered = prompt.lower()
+    # The W-4 framing should reference the cross-cover / orientation
+    # discipline and the hospital-course narrative.
+    assert "cross-cover" in lowered or "cross cover" in lowered or "shift" in lowered
+    assert "course" in lowered or "admission" in lowered or "story" in lowered
+    # And it points at the composite tool so the LLM picks it.
+    assert "run_cross_cover_onboarding" in prompt
+
+
+def test_w5_prompt_includes_family_meeting_framing() -> None:
+    """W-5 framing is family-meeting prep — diagnosis, trajectory, plan,
+    prognosis. Marker phrases have to be unique enough that we can assert
+    it isn't present for other workflows."""
+    prompt = _build("W-5")
+    assert "W-5 SYNTHESIS" in prompt
+    lowered = prompt.lower()
+    # The W-5 framing should reference the family / diagnosis-story shape.
+    assert "family" in lowered
+    assert (
+        "diagnosis" in lowered
+        or "prognosis" in lowered
+        or "trajectory" in lowered
+        or "goals-of-care" in lowered
+        or "code status" in lowered
+    )
+    # Same composite as W-4 — the framing differs, the data shape does not.
+    assert "run_cross_cover_onboarding" in prompt
+
+
+def test_w4_prompt_does_not_include_w5_framing() -> None:
+    """W-4 (cross-cover) and W-5 (family-meeting) share a composite tool
+    but their framings differ — the selector must not bleed one into the
+    other."""
+    prompt = _build("W-4")
+    assert "W-5 SYNTHESIS" not in prompt
+
+
+def test_w5_prompt_does_not_include_w4_framing() -> None:
+    prompt = _build("W-5")
+    assert "W-4 SYNTHESIS" not in prompt
+
+
+def test_w4_prompt_does_not_include_other_framings() -> None:
+    prompt = _build("W-4")
+    assert "W-1 SYNTHESIS" not in prompt
+    assert "W-2 SYNTHESIS" not in prompt
+    assert "W-3 SYNTHESIS" not in prompt
+    assert "W-10 SYNTHESIS" not in prompt
+
+
+def test_w5_prompt_does_not_include_other_framings() -> None:
+    prompt = _build("W-5")
+    assert "W-1 SYNTHESIS" not in prompt
+    assert "W-2 SYNTHESIS" not in prompt
+    assert "W-3 SYNTHESIS" not in prompt
+    assert "W-10 SYNTHESIS" not in prompt
+
+
 def test_w10_prompt_includes_med_safety_framing() -> None:
     """W-10 framing is panel-level pharmacist review. Marker phrases have to
     be unique enough that we can assert it isn't present for other
@@ -136,11 +205,13 @@ def test_w1_prompt_does_not_include_w10_framing() -> None:
 
 def test_w7_prompt_uses_default_framing() -> None:
     """A workflow without a dedicated framing falls through cleanly: no
-    W-1, W-2, W-3, or W-10 framing appears in the prompt."""
+    W-1, W-2, W-3, W-4, W-5, or W-10 framing appears in the prompt."""
     prompt = _build("W-7")
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-4 SYNTHESIS" not in prompt
+    assert "W-5 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
 
 
@@ -149,6 +220,8 @@ def test_unclear_workflow_uses_default_framing() -> None:
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-4 SYNTHESIS" not in prompt
+    assert "W-5 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
 
 
