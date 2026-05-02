@@ -22,6 +22,9 @@ dependencies = [
     "langfuse>=4.5.0",
     "pyyaml>=6.0",
     "langchain>=1.2.16",
+    # AES-GCM for token-bundle encryption at rest (issue 009). Required
+    # at agent backend startup whenever CHECKPOINTER_DSN is set.
+    "cryptography>=43.0.0",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +44,6 @@ eval = [
     "deepeval>=1.4.0",
 ]
 seed = [
-    "cryptography>=43.0.0",
     "pyjwt[crypto]>=2.9.0",
 ]
 

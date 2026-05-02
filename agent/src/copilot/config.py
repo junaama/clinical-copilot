@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     # Secret used to sign session cookies. Required for standalone auth.
     session_secret: SecretStr = Field(default=SecretStr(""), alias="SESSION_SECRET")
 
+    # AES-256 key (base64-encoded, 32 bytes raw) used to encrypt token
+    # columns in ``copilot_token_bundle`` at rest. Required when
+    # ``CHECKPOINTER_DSN`` is set; the agent fails to start otherwise. Not
+    # consulted in fixture/dev mode (in-memory store doesn't persist
+    # to disk). See ``copilot.token_crypto``.
+    token_enc_key: SecretStr = Field(default=SecretStr(""), alias="COPILOT_TOKEN_ENC_KEY")
+
     # Session lifetime in seconds (default 8 hours).
     session_ttl_seconds: int = Field(default=28800, alias="SESSION_TTL_SECONDS")
 

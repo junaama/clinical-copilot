@@ -19,11 +19,16 @@ or instantiate ``InMemorySessionStore`` directly for tests.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
+
+from .token_crypto import TokenDecryptionError, TokenEncryptor
+
+_log = logging.getLogger(__name__)
 
 # Refresh tokens this many seconds before their nominal expiry so an in-flight
 # request whose first leg uses the bundle doesn't race a server that's already
@@ -197,15 +202,54 @@ class PostgresSessionStore:
     ``open_session_store(dsn)`` rather than constructing directly so the pool
     is opened and closed cleanly.
 
-    Token columns are stored as plaintext today; encryption-at-rest is
-    finalized in ``issues/009-token-encryption-at-rest.md``.
+    When ``encryptor`` is supplied, ``access_token``, ``refresh_token``, and
+    ``id_token`` are encrypted in place on insert and decrypted transparently
+    on read. Callers above the store never see ciphertext. Rows whose
+    ciphertext fails authentication (tampered, wrong key, or never-encrypted
+    plaintext) are deleted and reported as missing — the user gets a clean
+    re-login rather than an opaque crash. ``encryptor=None`` keeps the
+    legacy plaintext path for tests and dev.
     """
 
-    def __init__(self, pool: object) -> None:
+    def __init__(
+        self,
+        pool: object,
+        *,
+        encryptor: TokenEncryptor | None = None,
+    ) -> None:
         # Typed as ``object`` to avoid a hard import of psycopg_pool at module
         # import time (the postgres extra is optional). The pool is duck-typed
         # against ``AsyncConnectionPool``.
         self._pool = pool
+        self._encryptor = encryptor
+
+    def _encrypt_or_passthrough(self, value: str) -> str:
+        """Encrypt with the configured encryptor, or return unchanged.
+
+        Empty strings are encrypted too — token endpoints occasionally
+        return no ``id_token`` / ``refresh_token`` and we want every
+        non-null column to live in the same shape.
+        """
+        if self._encryptor is None:
+            return value
+        return self._encryptor.encrypt(value)
+
+    def _decrypt_or_passthrough(self, value: str) -> str | None:
+        """Decrypt a column value or return it unchanged when no encryptor.
+
+        Returns ``None`` to signal that the row is unrecoverable
+        (auth-tag failure, never-encrypted plaintext where ciphertext
+        was expected, malformed bytes). The caller treats the bundle
+        as missing.
+        """
+        if self._encryptor is None:
+            return value
+        try:
+            return self._encryptor.decrypt(value)
+        except TokenDecryptionError:
+            # Do NOT log the ciphertext — exception strings end up in
+            # support tickets and we don't want raw token material there.
+            return None
 
     async def ensure_schema(self) -> None:
         """Create the three session tables idempotently. Safe to call repeatedly."""
@@ -330,6 +374,9 @@ class PostgresSessionStore:
     # -- Token bundles --
 
     async def put_token_bundle(self, row: TokenBundleRow) -> None:
+        access = self._encrypt_or_passthrough(row.access_token)
+        refresh = self._encrypt_or_passthrough(row.refresh_token)
+        id_tok = self._encrypt_or_passthrough(row.id_token)
         async with self._pool.connection() as conn:  # type: ignore[attr-defined]
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -348,9 +395,9 @@ class PostgresSessionStore:
                     """,
                     (
                         row.session_id,
-                        row.access_token,
-                        row.refresh_token,
-                        row.id_token,
+                        access,
+                        refresh,
+                        id_tok,
                         row.scope,
                         row.issuer,
                         row.expires_at,
@@ -372,23 +419,111 @@ class PostgresSessionStore:
                 fetched = await cur.fetchone()
         if fetched is None:
             return None
+
+        access = self._decrypt_or_passthrough(fetched[1])
+        refresh = self._decrypt_or_passthrough(fetched[2])
+        id_tok = self._decrypt_or_passthrough(fetched[3])
+        if access is None or refresh is None or id_tok is None:
+            # Tampered or unencrypted-where-ciphertext-was-expected. Drop
+            # the row so the next attempt is a clean miss → re-login.
+            _log.error(
+                "token bundle decryption failed; deleting row",
+                extra={"session_id": session_id},
+            )
+            async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "DELETE FROM copilot_token_bundle WHERE session_id = %s",
+                        (session_id,),
+                    )
+            return None
+
         return TokenBundleRow(
             session_id=fetched[0],
-            access_token=fetched[1],
-            refresh_token=fetched[2],
-            id_token=fetched[3],
+            access_token=access,
+            refresh_token=refresh,
+            id_token=id_tok,
             scope=fetched[4],
             issuer=fetched[5],
             expires_at=float(fetched[6]),
         )
 
+    # -- Migration --
+
+    async def encrypt_existing_token_bundles(self) -> int:
+        """Encrypt any plaintext rows in ``copilot_token_bundle`` in place.
+
+        Idempotent: rows already carrying the ``enc1:`` prefix are
+        skipped. Returns the count of rows that were rewritten.
+
+        Issue 001 wrote token columns as plaintext; this migration is the
+        one-shot upgrade that closes that hole. Run on agent startup
+        when an encryptor is configured — a second call is a no-op.
+        Requires ``self._encryptor`` to be set; raises otherwise so an
+        operator can't silently no-op a migration they meant to apply.
+        """
+        if self._encryptor is None:
+            raise RuntimeError(
+                "encrypt_existing_token_bundles requires an encryptor; "
+                "construct PostgresSessionStore with encryptor=... first"
+            )
+        rewritten = 0
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT session_id, access_token, refresh_token, id_token
+                    FROM copilot_token_bundle
+                    """
+                )
+                rows = await cur.fetchall()
+                for session_id, access, refresh, id_tok in rows:
+                    new_access = self._migrate_value(access)
+                    new_refresh = self._migrate_value(refresh)
+                    new_id = self._migrate_value(id_tok)
+                    if new_access is None and new_refresh is None and new_id is None:
+                        continue  # row already fully encrypted — leave alone
+                    await cur.execute(
+                        """
+                        UPDATE copilot_token_bundle
+                        SET access_token = %s,
+                            refresh_token = %s,
+                            id_token = %s
+                        WHERE session_id = %s
+                        """,
+                        (
+                            new_access if new_access is not None else access,
+                            new_refresh if new_refresh is not None else refresh,
+                            new_id if new_id is not None else id_tok,
+                            session_id,
+                        ),
+                    )
+                    rewritten += 1
+        return rewritten
+
+    def _migrate_value(self, stored: str) -> str | None:
+        """Return the encrypted form of ``stored`` if it isn't already
+        ciphertext, else ``None`` to signal "leave as is"."""
+        assert self._encryptor is not None  # checked by caller
+        if self._encryptor.looks_like_ciphertext(stored):
+            return None
+        return self._encryptor.encrypt(stored)
+
 
 @asynccontextmanager
-async def open_session_store(dsn: str) -> AsyncIterator[PostgresSessionStore]:
+async def open_session_store(
+    dsn: str,
+    *,
+    encryptor: TokenEncryptor | None = None,
+) -> AsyncIterator[PostgresSessionStore]:
     """Open a Postgres-backed session store for the lifetime of the block.
 
     Opens an ``AsyncConnectionPool``, runs ``ensure_schema()`` so callers can
     use the store immediately, and closes the pool on exit.
+
+    When ``encryptor`` is supplied, also runs the one-shot
+    ``encrypt_existing_token_bundles`` migration so any plaintext rows from
+    issue 001 are upgraded transparently. The migration is idempotent.
 
     Requires the ``postgres`` extra: ``uv sync --extra postgres``.
     """
@@ -403,8 +538,15 @@ async def open_session_store(dsn: str) -> AsyncIterator[PostgresSessionStore]:
     pool = AsyncConnectionPool(dsn, open=False, min_size=1, max_size=4)
     await pool.open()
     try:
-        store = PostgresSessionStore(pool)
+        store = PostgresSessionStore(pool, encryptor=encryptor)
         await store.ensure_schema()
+        if encryptor is not None:
+            rewritten = await store.encrypt_existing_token_bundles()
+            if rewritten:
+                _log.info(
+                    "encrypted %d pre-existing plaintext token bundle row(s)",
+                    rewritten,
+                )
         yield store
     finally:
         await pool.close()
