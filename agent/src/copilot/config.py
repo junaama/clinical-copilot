@@ -103,6 +103,37 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
+    # User ids (FHIR Practitioner UUIDs) that bypass the CareTeam gate.
+    # The PRD calls this the deliberate week-1 admin backdoor: ACL-bound
+    # users in OpenEMR are mirrored here as a flat allow-list rather than
+    # round-tripping through OpenEMR's ACL framework on every tool call.
+    # Driven by env (CSV or JSON-array) — the validator below normalizes
+    # both like ``allowed_origins``.
+    admin_user_ids: Annotated[list[str], NoDecode] = Field(
+        default_factory=list,
+        alias="COPILOT_ADMIN_USER_IDS",
+    )
+
+    @field_validator("admin_user_ids", mode="before")
+    @classmethod
+    def _split_admin_csv(cls, value: object) -> object:
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("["):
+                import json
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        return [str(v).strip() for v in parsed if str(v).strip()]
+                except json.JSONDecodeError:
+                    pass
+            return [v.strip() for v in stripped.split(",") if v.strip()]
+        return value
+
     # CORS allow-list. ``NoDecode`` opts out of pydantic-settings' default
     # JSON-decode for list[str] fields, so the env value can be either a
     # comma-separated string or a JSON array — the validator below normalizes
