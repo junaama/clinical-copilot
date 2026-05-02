@@ -8,16 +8,20 @@ Two storage backends:
 
 - **InMemorySessionStore** — zero-setup, single-process.  Used by tests and
   dev when ``CHECKPOINTER_DSN`` is unset.
-- **PostgresSessionStore** (future) — durable, multi-replica.  Created when a
-  DSN is available.  Tables are created idempotently via ``ensure_schema()``.
+- **PostgresSessionStore** — durable, multi-replica.  Created when a DSN is
+  available.  Tables are created idempotently via ``ensure_schema()``.
 
 The ``SessionGateway`` facade delegates to whichever store is injected at
-construction.  Callers never import the store classes directly.
+construction.  Callers never import the store classes directly — use the
+``open_session_store(dsn)`` async context manager for the Postgres backend
+or instantiate ``InMemorySessionStore`` directly for tests.
 """
 
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -145,6 +149,260 @@ class InMemorySessionStore:
 
     async def get_token_bundle(self, session_id: str) -> TokenBundleRow | None:
         return self._token_bundles.get(session_id)
+
+
+# ---------------------------------------------------------------------------
+# Postgres store (production)
+# ---------------------------------------------------------------------------
+
+
+_SCHEMA_DDL = """
+CREATE TABLE IF NOT EXISTS copilot_oauth_launch_state (
+    state TEXT PRIMARY KEY,
+    code_verifier TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    expires_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS copilot_session (
+    session_id TEXT PRIMARY KEY,
+    oe_user_id INTEGER NOT NULL,
+    display_name TEXT NOT NULL,
+    fhir_user TEXT NOT NULL,
+    created_at DOUBLE PRECISION NOT NULL,
+    expires_at DOUBLE PRECISION NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS copilot_token_bundle (
+    session_id TEXT PRIMARY KEY,
+    access_token TEXT NOT NULL,
+    refresh_token TEXT NOT NULL,
+    id_token TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    expires_at DOUBLE PRECISION NOT NULL
+);
+"""
+
+
+class PostgresSessionStore:
+    """Postgres-backed implementation of ``SessionStore``.
+
+    Owns an ``AsyncConnectionPool`` for the lifetime of the store. Use via
+    ``open_session_store(dsn)`` rather than constructing directly so the pool
+    is opened and closed cleanly.
+
+    Token columns are stored as plaintext today; encryption-at-rest is
+    finalized in ``issues/009-token-encryption-at-rest.md``.
+    """
+
+    def __init__(self, pool: object) -> None:
+        # Typed as ``object`` to avoid a hard import of psycopg_pool at module
+        # import time (the postgres extra is optional). The pool is duck-typed
+        # against ``AsyncConnectionPool``.
+        self._pool = pool
+
+    async def ensure_schema(self) -> None:
+        """Create the three session tables idempotently. Safe to call repeatedly."""
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(_SCHEMA_DDL)
+
+    # -- Launch state --
+
+    async def put_launch_state(self, row: LaunchStateRow) -> None:
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO copilot_oauth_launch_state
+                        (state, code_verifier, redirect_uri, expires_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (state) DO UPDATE SET
+                        code_verifier = EXCLUDED.code_verifier,
+                        redirect_uri = EXCLUDED.redirect_uri,
+                        expires_at = EXCLUDED.expires_at
+                    """,
+                    (row.state, row.code_verifier, row.redirect_uri, row.expires_at),
+                )
+
+    async def pop_launch_state(self, state: str) -> LaunchStateRow | None:
+        # Single-shot DELETE … RETURNING handles the replay-rejection
+        # invariant: the row is gone after the first successful pop.
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    DELETE FROM copilot_oauth_launch_state
+                    WHERE state = %s
+                    RETURNING state, code_verifier, redirect_uri, expires_at
+                    """,
+                    (state,),
+                )
+                fetched = await cur.fetchone()
+        if fetched is None:
+            return None
+        row = LaunchStateRow(
+            state=fetched[0],
+            code_verifier=fetched[1],
+            redirect_uri=fetched[2],
+            expires_at=float(fetched[3]),
+        )
+        if row.expires_at < time.time():
+            return None
+        return row
+
+    # -- Sessions --
+
+    async def put_session(self, row: SessionRow) -> None:
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO copilot_session
+                        (session_id, oe_user_id, display_name, fhir_user,
+                         created_at, expires_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        oe_user_id = EXCLUDED.oe_user_id,
+                        display_name = EXCLUDED.display_name,
+                        fhir_user = EXCLUDED.fhir_user,
+                        created_at = EXCLUDED.created_at,
+                        expires_at = EXCLUDED.expires_at
+                    """,
+                    (
+                        row.session_id,
+                        row.oe_user_id,
+                        row.display_name,
+                        row.fhir_user,
+                        row.created_at,
+                        row.expires_at,
+                    ),
+                )
+
+    async def get_session(self, session_id: str) -> SessionRow | None:
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT session_id, oe_user_id, display_name, fhir_user,
+                           created_at, expires_at
+                    FROM copilot_session
+                    WHERE session_id = %s
+                    """,
+                    (session_id,),
+                )
+                fetched = await cur.fetchone()
+        if fetched is None:
+            return None
+        row = SessionRow(
+            session_id=fetched[0],
+            oe_user_id=int(fetched[1]),
+            display_name=fetched[2],
+            fhir_user=fetched[3],
+            created_at=float(fetched[4]),
+            expires_at=float(fetched[5]),
+        )
+        if row.expires_at < time.time():
+            await self.delete_session(session_id)
+            return None
+        return row
+
+    async def delete_session(self, session_id: str) -> None:
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                # Token bundle is dropped first to avoid orphan rows. Same
+                # transaction so a /logout never leaves tokens behind.
+                await cur.execute(
+                    "DELETE FROM copilot_token_bundle WHERE session_id = %s",
+                    (session_id,),
+                )
+                await cur.execute(
+                    "DELETE FROM copilot_session WHERE session_id = %s",
+                    (session_id,),
+                )
+
+    # -- Token bundles --
+
+    async def put_token_bundle(self, row: TokenBundleRow) -> None:
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO copilot_token_bundle
+                        (session_id, access_token, refresh_token, id_token,
+                         scope, issuer, expires_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (session_id) DO UPDATE SET
+                        access_token = EXCLUDED.access_token,
+                        refresh_token = EXCLUDED.refresh_token,
+                        id_token = EXCLUDED.id_token,
+                        scope = EXCLUDED.scope,
+                        issuer = EXCLUDED.issuer,
+                        expires_at = EXCLUDED.expires_at
+                    """,
+                    (
+                        row.session_id,
+                        row.access_token,
+                        row.refresh_token,
+                        row.id_token,
+                        row.scope,
+                        row.issuer,
+                        row.expires_at,
+                    ),
+                )
+
+    async def get_token_bundle(self, session_id: str) -> TokenBundleRow | None:
+        async with self._pool.connection() as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT session_id, access_token, refresh_token, id_token,
+                           scope, issuer, expires_at
+                    FROM copilot_token_bundle
+                    WHERE session_id = %s
+                    """,
+                    (session_id,),
+                )
+                fetched = await cur.fetchone()
+        if fetched is None:
+            return None
+        return TokenBundleRow(
+            session_id=fetched[0],
+            access_token=fetched[1],
+            refresh_token=fetched[2],
+            id_token=fetched[3],
+            scope=fetched[4],
+            issuer=fetched[5],
+            expires_at=float(fetched[6]),
+        )
+
+
+@asynccontextmanager
+async def open_session_store(dsn: str) -> AsyncIterator[PostgresSessionStore]:
+    """Open a Postgres-backed session store for the lifetime of the block.
+
+    Opens an ``AsyncConnectionPool``, runs ``ensure_schema()`` so callers can
+    use the store immediately, and closes the pool on exit.
+
+    Requires the ``postgres`` extra: ``uv sync --extra postgres``.
+    """
+    try:
+        from psycopg_pool import AsyncConnectionPool
+    except ImportError as exc:
+        raise RuntimeError(
+            "open_session_store requires the 'postgres' extra. "
+            "Install with: uv sync --extra postgres"
+        ) from exc
+
+    pool = AsyncConnectionPool(dsn, open=False, min_size=1, max_size=4)
+    await pool.open()
+    try:
+        store = PostgresSessionStore(pool)
+        await store.ensure_schema()
+        yield store
+    finally:
+        await pool.close()
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,7 @@ from .session import (
     SessionGateway,
     SessionRow,
     TokenBundleRow,
+    open_session_store,
 )
 from .smart import (
     LaunchState,
@@ -66,13 +67,19 @@ async def lifespan(app: FastAPI):
     # unset, so this same path serves dev (no DSN) and production (Postgres).
     async with open_checkpointer(settings) as checkpointer:
         app.state.graph = build_graph(settings, checkpointer=checkpointer)
-        # Session gateway for standalone auth (in-memory for now; Postgres
-        # backend when CHECKPOINTER_DSN is set — wired in a future pass).
-        if not hasattr(app.state, "session_gateway"):
-            app.state.session_gateway = SessionGateway(
-                store=InMemorySessionStore()
-            )
-        yield
+        # Session gateway for standalone auth: Postgres-backed when DSN is
+        # set, in-memory otherwise. Tests inject their own gateway before
+        # entering the lifespan, so respect a pre-existing one.
+        if hasattr(app.state, "session_gateway"):
+            yield
+            return
+        if settings.checkpointer_dsn:
+            async with open_session_store(settings.checkpointer_dsn) as store:
+                app.state.session_gateway = SessionGateway(store=store)
+                yield
+        else:
+            app.state.session_gateway = SessionGateway(store=InMemorySessionStore())
+            yield
 
 
 app = FastAPI(title="OpenEMR Clinical Co-Pilot", version="0.1.0", lifespan=lifespan)
