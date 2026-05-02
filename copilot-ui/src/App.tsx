@@ -1,19 +1,27 @@
 /**
- * Top-level app — wires SMART launch params, Tweaks, and the AgentPanel.
+ * Top-level app — detects standalone vs EHR-launch mode.
  *
- * Cross-frame contract:
- *   • emits `copilot:flash-card` when a citation chip is clicked, so the host
- *     OpenEMR window can flash the matching chart card.
- *   • the host posts the SMART launch params as URL query/hash; we read them
- *     once on first paint and forward to the agent service.
+ * EHR-launch mode (SMART params in URL):
+ *   Renders the original AgentPanel + Launcher + TweaksPanel.
+ *
+ * Standalone mode (no SMART params):
+ *   Calls GET /me to detect session. Shows LoginPage on 401, AppShell +
+ *   AgentPanel on 200.
+ *
+ * Cross-frame contract (EHR-launch only):
+ *   - emits `copilot:flash-card` when a citation chip is clicked
+ *   - reads SMART launch params from the URL once on first paint
  */
 
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { AgentPanel, type ChatMessage, type Density, type Surface } from './components/AgentPanel';
+import { AppShell } from './components/AppShell';
 import { Launcher } from './components/Launcher';
+import { LoginPage } from './components/LoginPage';
 import { TweaksPanel } from './components/Tweaks/TweaksPanel';
 import { TweakButton, TweakColor, TweakRadio, TweakSection, TweakToggle } from './components/Tweaks/controls';
 import { useTweaks, type TweakValues } from './components/Tweaks/useTweaks';
+import { useSession } from './hooks/useSession';
 import { parseSmartLaunch, type SmartLaunchContext } from './api/smart';
 import type { Citation } from './api/types';
 
@@ -35,28 +43,88 @@ const TWEAK_DEFAULTS: CopilotTweaks = {
 
 const DEFAULT_PATIENT_NAME = 'this patient';
 
-// In dev / fixture mode the SMART launch may not be present; we still want a
-// usable conversation_id that's stable across re-renders.
 function makeConversationId(): string {
   return `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * Detect whether SMART launch params are present in the URL (EHR-launch mode).
+ */
+function isEhrLaunch(smart: SmartLaunchContext): boolean {
+  return !!(smart.conversationId || smart.patientId || smart.launch);
+}
+
 export function App(): JSX.Element {
-  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [open, setOpen] = useState<boolean>(true);
-  const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
-  const [highlights, setHighlights] = useState<Record<string, boolean>>({});
   const smart: SmartLaunchContext = useMemo(
     () => parseSmartLaunch(window.location.href),
     [],
   );
-  // Prefer the conversation_id issued by the agent's /smart/callback so the
-  // backend can resolve the SMART token bundle for FHIR tool calls. Fall back
-  // to a client-generated id for dev / fixture mode where no SMART round-trip
-  // has happened yet.
+
+  // If SMART launch params are in the URL, render the EHR-launch UI.
+  // Otherwise, render the standalone login flow.
+  if (isEhrLaunch(smart)) {
+    return <EhrLaunchApp smart={smart} />;
+  }
+  return <StandaloneApp />;
+}
+
+// ---------------------------------------------------------------------------
+// Standalone mode
+// ---------------------------------------------------------------------------
+
+function StandaloneApp(): JSX.Element {
+  const session = useSession();
+  const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
+  const conversationIdRef = useRef<string>(makeConversationId());
+
+  if (session.state === 'loading') {
+    return (
+      <div className="login-page">
+        <div className="login-page__card">
+          <p>Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (session.state === 'unauthenticated') {
+    return <LoginPage />;
+  }
+
+  return (
+    <AppShell user={session.user}>
+      <AgentPanel
+        open={true}
+        surface="panel"
+        density="regular"
+        showCitations={true}
+        accent="#4abfac"
+        conversationId={conversationIdRef.current}
+        patientId=""
+        userId=""
+        smartAccessToken=""
+        patientName={DEFAULT_PATIENT_NAME}
+        messages={messages}
+        setMessages={(updater) => setMessages((prev) => updater(prev))}
+        onClose={() => {}}
+        onCite={() => {}}
+      />
+    </AppShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EHR-launch mode (original behavior, preserved)
+// ---------------------------------------------------------------------------
+
+function EhrLaunchApp({ smart }: { readonly smart: SmartLaunchContext }): JSX.Element {
+  const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [open, setOpen] = useState<boolean>(true);
+  const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
+  const [highlights, setHighlights] = useState<Record<string, boolean>>({});
+
   const conversationIdRef = useRef<string>(smart.conversationId ?? makeConversationId());
 
-  // ⌘K / Ctrl-K toggles the panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -69,12 +137,9 @@ export function App(): JSX.Element {
   }, []);
 
   function onCite(citation: Citation): void {
-    // 1. Local in-frame flash (so demo without a host parent still shows feedback).
     setHighlights({ [citation.card]: true });
     window.setTimeout(() => setHighlights({}), 1700);
 
-    // 2. Cross-frame postMessage so the host OpenEMR window can flash the
-    //    chart card on its side. The host subscribes to `copilot:flash-card`.
     try {
       window.parent.postMessage(
         {
@@ -85,11 +150,9 @@ export function App(): JSX.Element {
         '*',
       );
     } catch {
-      // ignore — non-iframe context
+      // ignore - non-iframe context
     }
 
-    // 3. Local DOM scroll (works in standalone preview where chart cards live
-    //    in this document via [data-card]).
     const el = document.querySelector(`[data-card="${citation.card}"]`);
     if (el instanceof HTMLElement) {
       const r = el.getBoundingClientRect();
@@ -99,7 +162,6 @@ export function App(): JSX.Element {
     }
   }
 
-  // Apply the highlight class to local cards if they exist (standalone mode).
   useEffect(() => {
     const cards = document.querySelectorAll<HTMLElement>('[data-card]');
     cards.forEach((el) => {

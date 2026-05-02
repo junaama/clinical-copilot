@@ -61,6 +61,34 @@ class Settings(BaseSettings):
         alias="SMART_SCOPES",
     )
 
+    # --- Standalone OAuth (copilot-standalone client) ---
+    smart_standalone_client_id: str = Field(default="", alias="SMART_STANDALONE_CLIENT_ID")
+    smart_standalone_client_secret: SecretStr = Field(
+        default=SecretStr(""), alias="SMART_STANDALONE_CLIENT_SECRET"
+    )
+    smart_standalone_redirect_uri: str = Field(
+        default="http://localhost:8000/auth/smart/callback",
+        alias="SMART_STANDALONE_REDIRECT_URI",
+    )
+    smart_standalone_scopes: str = Field(
+        default=(
+            "openid fhirUser launch/user offline_access "
+            "user/Patient.rs user/Observation.rs "
+            "user/Condition.rs user/MedicationRequest.rs "
+            "user/MedicationAdministration.rs user/Encounter.rs "
+            "user/AllergyIntolerance.rs user/DocumentReference.rs "
+            "user/DiagnosticReport.rs user/ServiceRequest.rs "
+            "user/CareTeam.rs user/Practitioner.rs"
+        ),
+        alias="SMART_STANDALONE_SCOPES",
+    )
+
+    # Secret used to sign session cookies. Required for standalone auth.
+    session_secret: SecretStr = Field(default=SecretStr(""), alias="SESSION_SECRET")
+
+    # Session lifetime in seconds (default 8 hours).
+    session_ttl_seconds: int = Field(default=28800, alias="SESSION_TTL_SECONDS")
+
     # Where to send the user after /smart/callback completes the OAuth dance.
     # The frontend reads conversation_id (and patient_id, scope, etc.) off the
     # URL and bootstraps the chat panel from there.
