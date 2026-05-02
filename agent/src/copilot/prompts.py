@@ -59,6 +59,33 @@ sentences.
 """
 
 
+_W2_SYNTHESIS_FRAMING = """\
+W-2 SYNTHESIS (per-patient 24h brief)
+The user is asking for a brief on a single patient. Lead the response
+with what changed in the last 24 hours — overnight events (rapid
+responses, hypotensive episodes, transfers, new orders, meds held), then
+a tight chronological timeline of significant events with citations.
+Group routine vitals and stable findings into a one-line summary at the
+end ("otherwise stable: routine vitals, no new orders since 22:00").
+Prefer ``run_per_patient_brief`` over chaining the six granular reads —
+it fans them out in parallel and is materially faster.
+"""
+
+_W3_SYNTHESIS_FRAMING = """\
+W-3 SYNTHESIS (acute / pager-driven)
+The clinician is being paged about this patient and needs the picture
+fast. Lead with the current acute threat — the active deterioration,
+the most recent abnormal vital, the active intervention in flight — not
+with demographics or stable history. Aim for "what does the user need
+to know in the next 90 seconds before they walk into the room."
+Compress aggressively: one sentence of context, then the threat, then
+what's been done, then what's outstanding. Preserve every citation
+discipline; brevity is not an excuse to drop refs. Prefer
+``run_per_patient_brief`` for the fan-out — the data shape is the same
+as W-2; only the framing differs.
+"""
+
+
 _UNIFIED_BRIEF = """\
 You are Clinical Co-Pilot, an AI assistant for hospitalists rounding on
 admitted patients in OpenEMR. The user is logged in and has a CareTeam
@@ -88,6 +115,8 @@ The classifier suggests this turn is most likely workflow {workflow_id}
 with confidence {confidence:.2f}. Use it as a hint to bias your tool
 selection but do NOT let it constrain you — pick whatever tools you
 actually need to answer.
+
+{synthesis_framing}
 
 HARD RULES
 1. Every clinical claim you make must carry a citation handle of the form
@@ -208,6 +237,25 @@ def render_registry_block(
     return "\n".join(lines)
 
 
+# Workflow-id → synthesis framing block. Issue 006 wires W-2 and W-3;
+# issue 007 extends this map to W-1, W-4, W-5, W-8, W-9, W-10, W-11. Every
+# workflow not in the map falls through to ``""`` (default framing — the
+# generic WORKFLOW / FORMAT sections below already handle the common path).
+_WORKFLOW_SYNTHESIS_FRAMING: dict[str, str] = {
+    "W-2": _W2_SYNTHESIS_FRAMING,
+    "W-3": _W3_SYNTHESIS_FRAMING,
+}
+
+
+def select_synthesis_framing(workflow_id: str | None) -> str:
+    """Pick the synthesis-framing block for ``workflow_id``.
+
+    Workflows without a dedicated framing return an empty string; the
+    template's generic WORKFLOW / FORMAT sections still apply.
+    """
+    return _WORKFLOW_SYNTHESIS_FRAMING.get(workflow_id or "", "")
+
+
 def build_system_prompt(
     *,
     registry: dict[str, dict[str, Any]] | None,
@@ -220,6 +268,7 @@ def build_system_prompt(
         registry_block=render_registry_block(registry, focus_pid),
         workflow_id=workflow_id or "unclear",
         confidence=float(confidence or 0.0),
+        synthesis_framing=select_synthesis_framing(workflow_id),
     )
 
 
