@@ -22,10 +22,12 @@ import {
   type Surface,
 } from './components/AgentPanel';
 import { AppShell } from './components/AppShell';
+import { ConversationSidebar } from './components/ConversationSidebar';
 import { Launcher } from './components/Launcher';
 import { LoginPage } from './components/LoginPage';
 import { PanelView } from './components/PanelView';
 import type { PanelPatient } from './api/panel';
+import { fetchConversationMessages } from './api/conversations';
 import { TweaksPanel } from './components/Tweaks/TweaksPanel';
 import { TweakButton, TweakColor, TweakRadio, TweakSection, TweakToggle } from './components/Tweaks/controls';
 import { useTweaks, type TweakValues } from './components/Tweaks/useTweaks';
@@ -53,6 +55,23 @@ const DEFAULT_PATIENT_NAME = 'this patient';
 
 function makeConversationId(): string {
   return `conv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const CONVERSATION_PATH_PREFIX = '/c/';
+
+function readConversationIdFromUrl(): string | null {
+  const path = window.location.pathname;
+  if (!path.startsWith(CONVERSATION_PATH_PREFIX)) return null;
+  const id = path.slice(CONVERSATION_PATH_PREFIX.length).replace(/\/+$/, '');
+  return id.length > 0 ? id : null;
+}
+
+function navigateToConversation(conversationId: string): void {
+  window.history.pushState({}, '', `${CONVERSATION_PATH_PREFIX}${conversationId}`);
+}
+
+function navigateToRoot(): void {
+  window.history.pushState({}, '', '/');
 }
 
 /**
@@ -83,8 +102,83 @@ export function App(): JSX.Element {
 function StandaloneApp(): JSX.Element {
   const session = useSession();
   const [messages, setMessages] = useState<readonly ChatMessage[]>([]);
-  const [conversationId, setConversationId] = useState<string>(() => makeConversationId());
+  // Conversation id starts from the URL (deep-link-friendly: /c/<id> opens a
+  // specific thread). When absent, we mint a fresh id so the chat can fire
+  // even before the user creates an explicit thread via the sidebar's "+".
+  const [conversationId, setConversationId] = useState<string>(
+    () => readConversationIdFromUrl() ?? makeConversationId(),
+  );
+  // Tracks whether the URL-derived thread has been opened from the server
+  // (messages rehydrated from the LangGraph checkpoint via
+  // GET /conversations/:id/messages). Without this flag the sidebar would
+  // miss prior turns when the user reloads on /c/<id>.
+  const messageIdCounter = useRef<number>(0);
+  const nextLocalMessageId = useCallback((): string => {
+    messageIdCounter.current += 1;
+    return `local-${Date.now()}-${messageIdCounter.current}`;
+  }, []);
+
   const [pendingMessage, setPendingMessage] = useState<PendingUserMessage | null>(null);
+  const [sidebarRefresh, setSidebarRefresh] = useState<number>(0);
+
+  // Bump the sidebar refresh token whenever messages grow — the sidebar
+  // refetches its list and the new conversation appears with its title.
+  // Skips empty-state to avoid a needless first fetch on mount.
+  useEffect(() => {
+    if (messages.length === 0) return;
+    setSidebarRefresh((n) => n + 1);
+  }, [messages.length]);
+
+  // Browser back/forward must update the active thread without a reload.
+  useEffect(() => {
+    function handlePop(): void {
+      const fromUrl = readConversationIdFromUrl();
+      if (fromUrl !== null) {
+        setConversationId(fromUrl);
+        setMessages([]);
+      } else {
+        // Root URL → fresh thread on the panel.
+        setConversationId(makeConversationId());
+        setMessages([]);
+      }
+    }
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
+  }, []);
+
+  // Rehydrate messages whenever the active conversation changes to one the
+  // server already knows about (deep-link or sidebar-click). A fresh thread
+  // (no server-side state yet) returns 404 / null and stays empty.
+  useEffect(() => {
+    if (session.state !== 'authenticated') return;
+    let cancelled = false;
+    fetchConversationMessages(conversationId).then((resp) => {
+      if (cancelled) return;
+      if (resp === null) return;
+      const rehydrated: readonly ChatMessage[] = resp.messages.map((m) => {
+        if (m.role === 'user') {
+          return {
+            id: nextLocalMessageId(),
+            role: 'user',
+            text: m.content,
+          } satisfies ChatMessage;
+        }
+        return {
+          id: nextLocalMessageId(),
+          role: 'agent',
+          agent: {
+            role: 'agent',
+            block: { kind: 'plain', lead: m.content },
+            streaming: false,
+          },
+        } satisfies ChatMessage;
+      });
+      setMessages(rehydrated);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, session.state, nextLocalMessageId]);
 
   // Click-to-brief (issue 005). Each click injects a synthetic
   //   "Give me a brief on <given> <family>."
@@ -95,8 +189,10 @@ function StandaloneApp(): JSX.Element {
     (patient: PanelPatient): void => {
       const text = `Give me a brief on ${patient.given_name} ${patient.family_name}.`;
       if (messages.length > 0) {
-        setConversationId(makeConversationId());
+        const fresh = makeConversationId();
+        setConversationId(fresh);
         setMessages([]);
+        navigateToConversation(fresh);
       }
       setPendingMessage({
         id: `click-${patient.patient_id}-${Date.now().toString(36)}`,
@@ -105,6 +201,25 @@ function StandaloneApp(): JSX.Element {
     },
     [messages.length],
   );
+
+  // Sidebar callbacks. ``onSelect`` switches the active thread; ``onCreate``
+  // navigates to the freshly-minted thread on the panel. Both push history
+  // so the URL is shareable.
+  const handleSelectConversation = useCallback(
+    (id: string): void => {
+      if (id === conversationId) return;
+      setConversationId(id);
+      setMessages([]);
+      navigateToConversation(id);
+    },
+    [conversationId],
+  );
+
+  const handleCreateConversation = useCallback((id: string): void => {
+    setConversationId(id);
+    setMessages([]);
+    navigateToConversation(id);
+  }, []);
 
   if (session.state === 'loading') {
     return (
@@ -122,27 +237,39 @@ function StandaloneApp(): JSX.Element {
 
   return (
     <AppShell user={session.user}>
-      {messages.length === 0 && pendingMessage === null ? (
-        <PanelView onPatientClick={handlePatientClick} />
-      ) : null}
-      <AgentPanel
-        open={true}
-        surface="panel"
-        density="regular"
-        showCitations={true}
-        accent="#4abfac"
-        conversationId={conversationId}
-        patientId=""
-        userId=""
-        smartAccessToken=""
-        patientName={DEFAULT_PATIENT_NAME}
-        messages={messages}
-        setMessages={(updater) => setMessages((prev) => updater(prev))}
-        pendingUserMessage={pendingMessage}
-        onPendingMessageHandled={() => setPendingMessage(null)}
-        onClose={() => {}}
-        onCite={() => {}}
-      />
+      <div className="standalone-body">
+        <ConversationSidebar
+          activeConversationId={conversationId}
+          refreshToken={sidebarRefresh}
+          onSelect={handleSelectConversation}
+          onCreate={handleCreateConversation}
+        />
+        <div className="standalone-main">
+          {messages.length === 0 && pendingMessage === null ? (
+            <PanelView onPatientClick={handlePatientClick} />
+          ) : null}
+          <AgentPanel
+            open={true}
+            surface="panel"
+            density="regular"
+            showCitations={true}
+            accent="#4abfac"
+            conversationId={conversationId}
+            patientId=""
+            userId=""
+            smartAccessToken=""
+            patientName={DEFAULT_PATIENT_NAME}
+            messages={messages}
+            setMessages={(updater) => setMessages((prev) => updater(prev))}
+            pendingUserMessage={pendingMessage}
+            onPendingMessageHandled={() => setPendingMessage(null)}
+            onClose={() => {
+              navigateToRoot();
+            }}
+            onCite={() => {}}
+          />
+        </div>
+      </div>
     </AppShell>
   );
 }

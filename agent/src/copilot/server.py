@@ -35,6 +35,11 @@ from .api.schemas import (
 from .care_team import CareTeamGate
 from .checkpointer import open_checkpointer
 from .config import get_settings
+from .conversations import (
+    ConversationRegistry,
+    InMemoryConversationStore,
+    open_conversation_store,
+)
 from .fhir import FhirClient
 from .graph import build_graph
 from .observability import get_callback_handler
@@ -70,18 +75,39 @@ async def lifespan(app: FastAPI):
     # unset, so this same path serves dev (no DSN) and production (Postgres).
     async with open_checkpointer(settings) as checkpointer:
         app.state.graph = build_graph(settings, checkpointer=checkpointer)
-        # Session gateway for standalone auth: Postgres-backed when DSN is
-        # set, in-memory otherwise. Tests inject their own gateway before
-        # entering the lifespan, so respect a pre-existing one.
-        if hasattr(app.state, "session_gateway"):
+        app.state.checkpointer = checkpointer
+        # Session gateway and conversation registry for standalone auth +
+        # sidebar metadata: Postgres-backed when DSN is set, in-memory
+        # otherwise. Tests inject their own instances before entering the
+        # lifespan, so respect pre-existing ones.
+        existing_session = hasattr(app.state, "session_gateway")
+        existing_conv = hasattr(app.state, "conversation_registry")
+        if existing_session and existing_conv:
             yield
             return
         if settings.checkpointer_dsn:
-            async with open_session_store(settings.checkpointer_dsn) as store:
-                app.state.session_gateway = SessionGateway(store=store)
-                yield
+            async with open_session_store(settings.checkpointer_dsn) as session_store:
+                async with open_conversation_store(
+                    settings.checkpointer_dsn
+                ) as conv_store:
+                    if not existing_session:
+                        app.state.session_gateway = SessionGateway(
+                            store=session_store
+                        )
+                    if not existing_conv:
+                        app.state.conversation_registry = ConversationRegistry(
+                            store=conv_store
+                        )
+                    yield
         else:
-            app.state.session_gateway = SessionGateway(store=InMemorySessionStore())
+            if not existing_session:
+                app.state.session_gateway = SessionGateway(
+                    store=InMemorySessionStore()
+                )
+            if not existing_conv:
+                app.state.conversation_registry = ConversationRegistry(
+                    store=InMemoryConversationStore()
+                )
             yield
 
 
@@ -266,6 +292,33 @@ async def chat(
         raise HTTPException(status_code=500, detail="graph returned no messages")
     reply_raw = messages[-1].content
     reply = reply_raw if isinstance(reply_raw, str) else str(reply_raw)
+
+    # Sidebar write-behind. We touch the conversation row after the graph
+    # has produced a result so a graph error doesn't leave a sidebar entry
+    # for a turn that didn't actually happen. The registry is the only
+    # place that owns sidebar-shape metadata; the LangGraph checkpointer
+    # remains the source of truth for messages and CoPilotState.
+    #
+    # Auto-create on unknown id matches click-to-brief's flow: the front
+    # end mints a conversation_id without an explicit POST /conversations
+    # in some paths, so the first /chat call needs to register the row.
+    # Skipped when there's no authenticated user — anonymous chat doesn't
+    # land in any sidebar.
+    registry: ConversationRegistry | None = getattr(
+        app.state, "conversation_registry", None
+    )
+    if registry is not None and user_id:
+        existing_row = await registry.get(req.conversation_id)
+        if existing_row is None:
+            await registry.create(
+                conversation_id=req.conversation_id,
+                user_id=user_id,
+            )
+        await registry.ensure_first_turn_title(req.conversation_id, req.message)
+        focus_pid = (
+            result.get("focus_pid") or result.get("patient_id") or ""
+        )
+        await registry.touch(req.conversation_id, focus_pid=focus_pid)
 
     block = _coerce_block_dict(result.get("block"), fallback_text=reply)
     # Frontend reads block.lead for the typewriter; reply is duplicated for
@@ -674,3 +727,121 @@ async def auth_logout(
 
     response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     return {"status": "logged_out"}
+
+
+# ---------------------------------------------------------------------------
+# Conversation sidebar endpoints
+# ---------------------------------------------------------------------------
+
+
+async def _resolve_user_id_from_cookie(copilot_session: str | None) -> str:
+    """Map session cookie → Practitioner UUID. Raises 401 when unauthenticated."""
+    if not copilot_session:
+        raise HTTPException(status_code=401, detail="not authenticated")
+
+    gateway: SessionGateway = app.state.session_gateway
+    session = await gateway.get_session(copilot_session)
+    if session is None:
+        raise HTTPException(status_code=401, detail="session expired or invalid")
+
+    _, practitioner_id = parse_fhir_user(session.fhir_user)
+    return practitioner_id
+
+
+@app.get("/conversations")
+async def list_conversations(
+    copilot_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Return the authenticated user's threads, ``updated_at DESC``.
+
+    Powers the ConversationSidebar component. Archived rows are excluded by
+    the registry; an admin / archive-recovery UI is deferred (the column
+    exists but isn't surfaced in week 1).
+    """
+    user_id = await _resolve_user_id_from_cookie(copilot_session)
+    registry: ConversationRegistry = app.state.conversation_registry
+    rows = await registry.list_for_user(user_id)
+    return {
+        "conversations": [
+            {
+                "id": r.id,
+                "title": r.title,
+                "last_focus_pid": r.last_focus_pid,
+                "updated_at": r.updated_at,
+                "created_at": r.created_at,
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.post("/conversations")
+async def create_conversation(
+    copilot_session: str | None = Cookie(default=None),
+) -> dict[str, str]:
+    """Mint a fresh thread row. The returned id is usable as a LangGraph
+    ``thread_id`` immediately — the next /chat call attaches turns to it.
+    """
+    user_id = await _resolve_user_id_from_cookie(copilot_session)
+    registry: ConversationRegistry = app.state.conversation_registry
+
+    conversation_id = secrets.token_urlsafe(16)
+    await registry.create(conversation_id=conversation_id, user_id=user_id)
+    return {"id": conversation_id}
+
+
+@app.get("/conversations/{conversation_id}/messages")
+async def get_conversation_messages(
+    conversation_id: str,
+    copilot_session: str | None = Cookie(default=None),
+) -> dict[str, Any]:
+    """Return the prior turns for a conversation, loaded from the LangGraph
+    checkpoint. Drives sidebar reopen — clicking a thread fetches its
+    messages and rehydrates the chat surface.
+
+    Returns turn pairs as ``[{role: 'user' | 'agent', content: str}, ...]``
+    so the frontend doesn't have to know about LangChain message types.
+    Authorization: the row must belong to the requesting user.
+    """
+    user_id = await _resolve_user_id_from_cookie(copilot_session)
+    registry: ConversationRegistry = app.state.conversation_registry
+
+    row = await registry.get(conversation_id)
+    if row is None or row.user_id != user_id:
+        # 404 vs 403 collapse — the privacy decision mirrors resolve_patient:
+        # owner-mismatch is indistinguishable from non-existence.
+        raise HTTPException(status_code=404, detail="conversation not found")
+
+    messages: list[dict[str, str]] = []
+    graph = getattr(app.state, "graph", None)
+    if graph is not None and hasattr(graph, "aget_state"):
+        config: dict[str, Any] = {"configurable": {"thread_id": conversation_id}}
+        try:
+            snapshot = await graph.aget_state(config)
+        except Exception:
+            # Missing checkpoint shouldn't fail the endpoint — return the
+            # row metadata with an empty message list and let the UI handle
+            # the rehydration gap.
+            snapshot = None
+        if snapshot is not None and snapshot.values:
+            from langchain_core.messages import AIMessage, HumanMessage
+
+            for m in snapshot.values.get("messages") or []:
+                content = (
+                    m.content if isinstance(m.content, str) else str(m.content or "")
+                )
+                if isinstance(m, HumanMessage):
+                    messages.append({"role": "user", "content": content})
+                elif isinstance(m, AIMessage):
+                    # Skip empty AIMessages (tool-only turns); the user-
+                    # visible transcript only carries the synthesized
+                    # reply, not intermediate tool calls.
+                    if content:
+                        messages.append({"role": "agent", "content": content})
+
+    return {
+        "id": row.id,
+        "title": row.title,
+        "last_focus_pid": row.last_focus_pid,
+        "messages": messages,
+    }
