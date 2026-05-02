@@ -1100,6 +1100,56 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
 
         return _merge_envelopes(list(results), elapsed_ms=elapsed_ms)
 
+    async def run_abx_stewardship(
+        patient_id: str, hours: int = 72
+    ) -> dict[str, Any]:
+        """Composite tool: antibiotic stewardship review for ONE patient.
+
+        W-11 ("should this patient still be on broad-spectrum?"). Fans
+        out the four resource branches a stewardship review needs:
+        active medications (the abx orders themselves), medication
+        administrations (was the abx actually given, was it held?),
+        recent labs (Observation laboratory — culture sensitivities,
+        gram stains, WBC trends), and recent orders (ServiceRequest —
+        culture orders authored over the window). Default lookback is
+        72 hours so the envelope captures a full course's worth of
+        cultures and dosing.
+
+        Antibiotic filtering lives at the synthesis layer, not the data
+        layer. The composite returns *all* active meds / MARs / labs /
+        orders; the W-11 framing tells the LLM which RxNorm / SNOMED
+        codes are antibiotics and how to read the culture / sensitivity
+        data. Mirrors the W-10 (renal/hepatic markers) design — pre-
+        filtering at the data layer would couple the composite to a
+        vocabulary and break as new abx are added.
+
+        Active problems and demographics are intentionally NOT in the
+        fan-out; the W-11 framing tells the LLM to fetch them
+        granularly when it needs to anchor the indication or compute
+        a duration of therapy.
+
+        Authorization is enforced **per nested call** by reusing the
+        granular tools' ``_enforce_patient_authorization`` helper. A
+        buggy refactor that removed the gate from a single branch
+        would still be caught by the gate at the other branches;
+        defense in depth.
+        """
+        # Top-of-call gate: short-circuits the empty-pid / out-of-team path
+        # so we don't fan out four gate-denied calls when one would do.
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
+            return denied
+
+        started = time.monotonic()
+        results = await asyncio.gather(
+            get_active_medications(patient_id),
+            get_medication_administrations(patient_id, hours),
+            get_recent_labs(patient_id, hours),
+            get_recent_orders(patient_id, hours),
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        return _merge_envelopes(list(results), elapsed_ms=elapsed_ms)
+
     async def run_recent_changes(
         patient_id: str, since: str
     ) -> dict[str, Any]:
@@ -1384,6 +1434,35 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
                 "(rows, sources_checked, latency_ms, error, ok) as a "
                 "granular tool. Malformed or future ``since`` values "
                 "return ``error='invalid_since'``."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=run_abx_stewardship,
+            name="run_abx_stewardship",
+            description=(
+                "Composite antibiotic-stewardship review for ONE patient: "
+                "fans out active medications, medication administrations, "
+                "recent labs (Observation laboratory — where culture "
+                "sensitivities, gram stains, and WBC trends live), and "
+                "recent orders (ServiceRequest — where culture orders "
+                "were authored) over a wider lookback window (default "
+                "72 hours / 3 days) in PARALLEL and returns one merged "
+                "envelope. Prefer this tool whenever the user asks an "
+                "antibiotic-specific question for a single patient — "
+                "'should this patient still be on broad-spectrum?', "
+                "'is Hayes still on vanc/zosyn?', 'time to de-escalate "
+                "Eduardo's antibiotics?', 'what's growing on Linda's "
+                "cultures and is the abx coverage right?', 'how many "
+                "days has she been on cefepime?'. The composite returns "
+                "ALL active meds / MARs / labs / orders — the synthesis "
+                "framing applies the antibiotic / culture / WBC lens. "
+                "Active problems and demographics are intentionally NOT "
+                "in the fan-out; fetch them granularly if you need to "
+                "anchor the indication or compute a precise duration. "
+                "Returns the same envelope shape (rows, sources_checked, "
+                "latency_ms, error, ok) as a granular tool. For a "
+                "panel-level med-safety scan (multiple patients), use "
+                "``run_panel_med_safety`` instead."
             ),
         ),
     ]
