@@ -104,6 +104,46 @@ as W-2; only the framing differs.
 """
 
 
+_W4_SYNTHESIS_FRAMING = """\
+W-4 SYNTHESIS (cross-cover onboarding)
+The clinician is picking up this patient cold — they have not met
+them and need the hospital course to make safe decisions over the
+shift. Lead with the admission story in one sentence: who they are,
+why they came in, and where they are now in the course (improving,
+plateaued, deteriorating). Then give the active problem list with
+the leading diagnosis first; then the active medications grouped by
+indication so the relationship to the problem list is obvious; then
+the chronological course as bullet points anchored on encounters,
+orders, and significant notes. Close with explicit "what to watch
+overnight" items the day team flagged in the most recent
+cross-cover or progress note. Cite every fact. Prefer
+``run_cross_cover_onboarding`` over chaining the granular reads —
+it pulls problems, meds, encounters, orders, and notes across a
+7-day window in parallel and is materially faster.
+"""
+
+
+_W5_SYNTHESIS_FRAMING = """\
+W-5 SYNTHESIS (family-meeting prep)
+The clinician is preparing to talk to the family — not to write a
+note, not to round. Surface what a family will ask, in the order
+they will ask it: the diagnosis (in plain language, not just a
+SNOMED label), the trajectory so far (better, worse, plateaued),
+the current treatment plan (what's actively being done and why),
+and the prognosis-relevant context (response to treatment so far,
+goals-of-care notes if present, code status if documented). Quote
+documented goals-of-care or code-status discussions verbatim from
+the chart so the clinician walks in with the family's own prior
+words. **Do NOT recommend what to say or how to break news — that's
+the clinician's judgement.** Surface what the chart says; cite
+every claim. Skip routine vitals and lab values unless the family
+is asking about a specific concerning trend. Prefer
+``run_cross_cover_onboarding`` — it pulls the diagnosis story
+(problems + admission encounter + recent notes) plus the active
+plan (meds + orders) in one parallel fan-out.
+"""
+
+
 _W10_SYNTHESIS_FRAMING = """\
 W-10 SYNTHESIS (panel med-safety scan / pharmacist review)
 The user is asking for a pharmacist-style med-safety review across
@@ -283,14 +323,18 @@ def render_registry_block(
 
 
 # Workflow-id → synthesis framing block. Issue 006 wires W-2 and W-3;
-# issue 007 extends this map to W-1 and W-10 (and the remaining W-4, W-5,
-# W-8, W-9, W-11). Every workflow not in the map falls through to ``""``
-# (default framing — the generic WORKFLOW / FORMAT sections below already
-# handle the common path).
+# issue 007 extends this map to W-1, W-4, W-5, and W-10 (and the
+# remaining W-8, W-9, W-11). W-4 and W-5 share one composite tool
+# (``run_cross_cover_onboarding``) but get different framings here:
+# cross-cover orientation vs. family-meeting prep. Every workflow not in
+# the map falls through to ``""`` (default framing — the generic
+# WORKFLOW / FORMAT sections below already handle the common path).
 _WORKFLOW_SYNTHESIS_FRAMING: dict[str, str] = {
     "W-1": _W1_SYNTHESIS_FRAMING,
     "W-2": _W2_SYNTHESIS_FRAMING,
     "W-3": _W3_SYNTHESIS_FRAMING,
+    "W-4": _W4_SYNTHESIS_FRAMING,
+    "W-5": _W5_SYNTHESIS_FRAMING,
     "W-10": _W10_SYNTHESIS_FRAMING,
 }
 

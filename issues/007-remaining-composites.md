@@ -12,13 +12,13 @@ This slice covers everything in the PRD's *Tool surface & routing* workflow ↔ 
 
 - [x] `run_panel_triage()` is registered. Implementation: `gate.list_panel(user_id)` (same call that powers `get_my_patient_list` in real mode and the empty-state UI) → parallel `get_change_signal` + `get_patient_demographics` + `get_active_problems` per pid → returns ranked panel envelope. Every per-pid nested call passes through `_enforce_patient_authorization`. *(Hours arg defaults to 24; outer `asyncio.gather` over the pid list, inner `gather` over the three branches per pid; merged envelope is byte-for-byte the granular `ToolResult.to_payload()` shape.)*
 - [x] `run_panel_med_safety()` is registered. Implementation: `gate.list_panel(user_id)` → parallel `get_active_medications` + `get_recent_labs` per pid → returns scan envelope. Per-pid gate enforced. *(Hours arg defaults to 24; outer `asyncio.gather` over the pid list, inner `gather` over the two branches per pid; merge logic shared with `run_panel_triage` via `_merge_panel_envelopes`. Renal/hepatic-marker filtering is applied at the synthesis layer, not the data layer — the W-10 framing tells the LLM which lab codes to lens through.)*
-- [ ] `run_cross_cover_onboarding(patient_id)` is registered. Implementation: wider-history fan-out (problems + meds + recent encounters + active orders + hospital-course notes). Gate enforced per nested call.
+- [x] `run_cross_cover_onboarding(patient_id)` is registered. Implementation: wider-history fan-out (problems + meds + recent encounters + active orders + hospital-course notes). Gate enforced per nested call. *(Hours arg defaults to 168 / 7 days so the envelope captures the admission encounter, orders authored across the stay, and the chronological note trail. Single-pid fan-out under one ``asyncio.gather``; merge logic shared with ``run_per_patient_brief`` via the new ``_merge_envelopes`` helper. Defense-in-depth gate at every per-pid call.)*
 - [ ] `run_consult_orientation(patient_id, domain)` is registered. `domain` is a constrained string (e.g., `cardiology`, `nephrology`, `id`); the composite filters its fan-out to resources relevant to the domain. Gate enforced per nested call.
 - [ ] `run_recent_changes(patient_id, since)` is registered. `since` is an ISO timestamp; composite returns a diff envelope of resources updated/created since that time. Gate enforced per nested call.
 - [ ] `run_abx_stewardship(patient_id)` is registered. Implementation: active meds (filtered to antibiotics) + medication administrations + relevant cultures (`DiagnosticReport`/`Observation`) + recent orders. Gate enforced per nested call.
-- [~] Synthesis prompts are authored and registered for: W-1 (panel triage / "who do I need to see first?"), W-4 (cross-cover onboarding), W-5 (family-meeting prep — same data shape as W-4 reused via `run_cross_cover_onboarding` plus a different prompt), W-8 (consult orientation), W-9 (re-consult / what changed), W-10 (panel med safety), W-11 (antibiotic stewardship). *(W-1 + W-10 framings landed; W-4, W-5, W-8, W-9, W-11 still pending.)*
-- [~] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 + W-10 added; W-4, W-5, W-8, W-9, W-11 still unmapped — selector default fall-through still applies.)*
-- [~] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(`run_panel_triage` and `run_panel_med_safety` descriptions done; remaining four composites pending.)*
+- [~] Synthesis prompts are authored and registered for: W-1 (panel triage / "who do I need to see first?"), W-4 (cross-cover onboarding), W-5 (family-meeting prep — same data shape as W-4 reused via `run_cross_cover_onboarding` plus a different prompt), W-8 (consult orientation), W-9 (re-consult / what changed), W-10 (panel med safety), W-11 (antibiotic stewardship). *(W-1 + W-4 + W-5 + W-10 framings landed; W-8, W-9, W-11 still pending.)*
+- [~] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 + W-4 + W-5 + W-10 added; W-8, W-9, W-11 still unmapped — selector default fall-through still applies.)*
+- [~] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(`run_panel_triage`, `run_panel_med_safety`, and `run_cross_cover_onboarding` descriptions done; remaining three composites pending.)*
 - [x] Panel-level composites (`run_panel_triage`, `run_panel_med_safety`) only operate over patients returned by `list_panel(user_id)`. Their nested per-pid calls are intrinsically CareTeam-bounded. *(Both composites now use `gate.list_panel(user_id)` for the roster source and re-run the per-call gate as defense in depth.)*
 - [ ] Eval cases added per workflow: at least one golden conversation per W-1, W-4, W-5, W-8, W-9, W-10, W-11. Per the PRD's *Testing Decisions*, the composite tools themselves are not unit-tested for synthesis quality; that is what the eval harness exists for. The gate enforcement and parallel fan-out behavior, however, are unit-tested. *(Eval-harness drift inherited from issue 003 still unaddressed — adding new W-1 cases on top of a drifting harness would compound the problem; deferred to a single recalibration pass alongside the remaining composites.)*
 
@@ -191,7 +191,8 @@ composites.
 Remaining for this issue (next iterations):
 
 1. `run_cross_cover_onboarding` + W-4 framing (and W-5 framing reusing
-   the same composite — different framing only).
+   the same composite — different framing only). *(Done — see the
+   2026-05-02 cross-cover progress note below.)*
 2. `run_consult_orientation` + W-8 framing — `domain` is a constrained
    string; this is the trickiest composite because the fan-out shape
    varies by domain. Likely uses an enum for `domain` and a per-domain
@@ -206,6 +207,107 @@ Remaining for this issue (next iterations):
    from issue 003 would compound the problem. The single recalibration
    pass is best paired with the composite tool registrations so the
    harness exercises the real production tool surface in one shot.
+
+### 2026-05-02 — `run_cross_cover_onboarding` + W-4/W-5 synthesis framings landed
+
+Third composite slice in issue 007 and the first single-pid composite
+since `run_per_patient_brief` (issue 006). Same in-pid fan-out
+template, but with a wider history (default 168h / 7d) and a
+different branch set: active problems, active medications, recent
+encounters, recent orders (ServiceRequest), and clinical notes
+(DocumentReference). The same composite drives both W-4 (cross-cover
+onboarding) and W-5 (family-meeting prep) — only the synthesis
+framing differs.
+
+Key decisions:
+
+- **One composite, two framings (W-4 vs W-5).** The data shape a
+  cross-cover physician needs and the data shape a clinician
+  preparing for a family meeting needs is the same: the
+  hospital-course narrative (problem list, active plan, encounters,
+  orders, recent notes). The thing that differs is what the
+  clinician *does* with it. Rather than ship two near-identical
+  composites, ship one and let the synthesis prompt selector pick
+  the framing. The W-5 framing explicitly tells the LLM not to
+  recommend what to say to the family (that's the clinician's
+  judgement) and emphasizes diagnosis / trajectory / plan / prognosis
+  with code-status quotes verbatim from the chart. The W-4 framing
+  emphasizes admission story, leading diagnosis, active plan, and
+  "what to watch overnight" items.
+
+- **Wider-history default (168h / 7 days).** Cross-cover and family
+  meetings span the admission, not just the overnight events. A
+  24-hour window would miss the admission encounter, the first day
+  of orders, and the chronological note trail that gives the chart
+  story shape. Asserted by the schema test — the default is a hard
+  guarantee now, so a regression that flipped it back to 24h would
+  fail loudly.
+
+- **Vitals and labs are intentionally NOT in the cross-cover
+  composite.** The per-patient brief (W-2 / W-3) handles those.
+  Cross-cover orientation is about the *narrative* — what's wrong,
+  what's being done, what happened along the way. Vital and lab
+  noise distracts from the story when a clinician is reading to
+  understand the case for the first time. The fan-out's source
+  labels are tested to assert the absence of "vital-signs" and
+  "laboratory" branches so the boundary stays explicit.
+
+- **`_merge_envelopes` extraction.** This is the second single-pid
+  composite, so the merge logic now appears in three places:
+  `run_per_patient_brief`, the new composite, and (via
+  `_merge_panel_envelopes`) the panel composites. Extracting a
+  shared `_merge_envelopes` helper that takes an optional
+  `initial_sources` tuple unifies all three. The panel helper
+  becomes a thin adapter that flattens nested per-pid tuples and
+  forwards. Per CLAUDE.md "three similar lines is past the
+  abstraction threshold" — and the W-10 slice already set the
+  precedent for extracting on the second instance.
+
+- **Defense-in-depth gate at every per-pid call.** Top-of-call gate
+  short-circuits the empty-pid / out-of-team path before paying
+  five gate-denied roundtrips; per-branch gate consults catch a
+  buggy refactor that removed the gate from a single read. Counted
+  via spy in the test (>= 5 expected).
+
+- **Tool description biases the LLM toward composite for both
+  cross-cover and family-meeting questions.** Description names
+  the W-4 / W-5 trigger phrases ("I'm cross-covering", "I've never
+  seen this patient", "meeting with the family") and contrasts
+  with `run_per_patient_brief` for the 24-hour overnight case.
+
+- **W-4 and W-5 framing mutual exclusion verified.** The selector
+  must not double-include framings; tests confirm W-4 ↮ W-5 ↮ W-1
+  ↮ W-2 ↮ W-3 ↮ W-10 mutual exclusion.
+
+Files changed:
+
+- `agent/src/copilot/tools.py` — `_merge_envelopes` helper
+  (extraction); `_merge_panel_envelopes` refactored to wrap it;
+  `run_per_patient_brief` refactored to use it;
+  `run_cross_cover_onboarding` closure + `StructuredTool`
+  registration with description authored to bias the LLM toward
+  the composite for cross-cover / family-meeting queries
+- `agent/src/copilot/prompts.py` — `_W4_SYNTHESIS_FRAMING` +
+  `_W5_SYNTHESIS_FRAMING` blocks; selector map extended to
+  dispatch W-4 and W-5
+- `agent/tests/test_cross_cover_onboarding.py` (new, 12 cases) —
+  envelope shape, 5-resource fan-out, vitals/labs absence (data
+  boundary), wider-history default (schema-asserted), parallel
+  fan-out wall-clock, gate enforcement per nested call,
+  out-of-team denial, no-active-patient empty pid, admin bypass,
+  registration / arg shape, description signals W-4/W-5 intent
+- `agent/tests/test_synthesis_prompt_selector.py` — 6 new cases
+  (W-4 framing markers, W-5 framing markers, W-4 ↮ W-5 mutual
+  exclusion, W-4 ↮ everything-else, W-5 ↮ everything-else);
+  existing W-7 / unclear-fallthrough cases extended to also
+  exclude W-4 and W-5
+
+Tests: 224 backend unit tests pass (was 206; +12 cross-cover + 6
+selector cases) excluding the Postgres-required files which need
+a DB on the sandbox; ruff clean on changed files. The 14
+inherited eval-harness failures from issue 003 carry over;
+recalibration remains scheduled for the joint pass alongside the
+remaining composites.
 
 ## Blocked by
 
