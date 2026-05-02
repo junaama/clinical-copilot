@@ -20,7 +20,7 @@ This slice covers everything in the PRD's *Tool surface & routing* workflow ↔ 
 - [x] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 / W-4 / W-5 / W-8 / W-9 / W-10 / W-11 all wired; W-6 / W-7 fall through to default by design.)*
 - [x] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(All composite tool descriptions done.)*
 - [x] Panel-level composites (`run_panel_triage`, `run_panel_med_safety`) only operate over patients returned by `list_panel(user_id)`. Their nested per-pid calls are intrinsically CareTeam-bounded. *(Both composites now use `gate.list_panel(user_id)` for the roster source and re-run the per-call gate as defense in depth.)*
-- [ ] Eval cases added per workflow: at least one golden conversation per W-1, W-4, W-5, W-8, W-9, W-10, W-11. Per the PRD's *Testing Decisions*, the composite tools themselves are not unit-tested for synthesis quality; that is what the eval harness exists for. The gate enforcement and parallel fan-out behavior, however, are unit-tested. *(Eval-harness drift inherited from issue 003 still unaddressed — adding new W-1 cases on top of a drifting harness would compound the problem; deferred to a single recalibration pass alongside the remaining composites.)*
+- [x] Eval cases added per workflow: at least one golden conversation per W-1, W-4, W-5, W-8, W-9, W-10, W-11. Per the PRD's *Testing Decisions*, the composite tools themselves are not unit-tested for synthesis quality; that is what the eval harness exists for. The gate enforcement and parallel fan-out behavior, however, are unit-tested. *(W-10 already shipped earlier in this issue; the remaining six golden cases (W-1, W-4, W-5, W-8, W-9, W-11) ship in this slice. Cases use ``practitioner-dr-smith`` as the user_id so the gate resolves a real CareTeam roster in fixture mode. Recalibration of the 14 inherited failures from issue 003 remains a follow-up — the harness itself was not in scope for issue 007.)*
 
 ## Progress notes
 
@@ -718,6 +718,126 @@ Notes for next iteration:
   (heme/onc, pulmonary, GI, neuro, endo) are a one-line addition
   to the per-domain branch map per domain plus a W-8 framing
   paragraph. Defer until a real eval case asks for them.
+
+### 2026-05-02 — golden eval cases for W-1 / W-4 / W-5 / W-8 / W-9 / W-11
+
+Closes the last open AC on issue 007. Six new golden YAMLs landed
+in ``agent/evals/golden/`` (one per workflow), all anchored against
+deterministic fixture data so the cases are reproducible without
+real-EHR seeding.
+
+Key decisions:
+
+- **All six new cases bind ``user_id=practitioner-dr-smith``.** The
+  fixture's CareTeam rows are the only ones in the system that name
+  a real Practitioner UUID; using ``dr_smith`` (the seeded
+  non-admin) means the gate resolves a real panel
+  (``fixture-1``, ``fixture-3``, ``fixture-5``) instead of
+  short-circuiting to ``careteam_denied``. Mirrors the
+  ``test_panel_triage`` / ``test_per_patient_brief`` integration
+  tests where ``PRACTITIONER_DR_SMITH`` is the canonical bound user.
+  The pre-existing W-2/W-7 cases use ``dr_lopez`` and are part of
+  the inherited eval-harness drift; harmonizing them is for the
+  recalibration pass, not this slice.
+
+- **W-1 (panel triage): forbid out-of-panel patient names AND pids.**
+  The composite is gate-bounded by ``list_panel(user_id)``; if Maya
+  (fixture-2) or Linda (fixture-4) appear in dr_smith's response,
+  either ``list_panel`` was widened or the LLM hallucinated. Both
+  ``forbidden_claims`` (substring) and ``forbidden_pids_in_response``
+  (release-blocker count) cover the leak. The smoke W-1 case
+  remains, scoped to a 5-patient admin-style panel; the new golden
+  is the non-admin counterpart.
+
+- **W-4 (cross-cover): require the cross-cover note.** The
+  ``DocumentReference/doc-cross-cover`` ref is the spine of the
+  hospital-course handoff. Forbidding ``"no overnight events"``
+  catches a regression where the agent picks W-2 framing instead of
+  W-4. Forbids ``"patient has chest pain"`` because the nursing
+  note explicitly says the patient denies it — same negation guard
+  as the W-2 cases.
+
+- **W-5 (family-meeting): forbid recommendation phrasing.** The W-5
+  framing forbids the agent from recommending what to say to the
+  family ("you should tell them", "I recommend telling",
+  "explain to the family that"). Robert (fixture-3, acute-on-chronic
+  CHF decomp) is the right anchor — clear trajectory discussion
+  rather than Eduardo's mixed CHF + CKD + overnight event picture.
+  Forbids the names of every other panel patient so a name-grounding
+  regression is observable.
+
+- **W-8 (consult orientation): cardiology lens on Eduardo.**
+  ``domain=cardiology`` exercises the per-domain branch builder
+  (problems + meds + vitals + labs + encounters + imaging + notes).
+  Required facts cover the cardiology-relevant resources: CHF
+  diagnosis, metoprolol, the verbatim CXR conclusion phrase
+  "cardiomegaly". Forbids treatment-recommendation phrasing per the
+  W-8 framing.
+
+- **W-9 (recent changes): 6-hour diff window.** The agent has to
+  parse "last 6 hours" into an ISO ``since`` arg; loose phrasing
+  was deliberate so the case exercises the composite's free-text-
+  to-timestamp path. Required refs are the lifecycle-change records
+  that landed inside the window: the held-lisinopril MAR and the
+  cross-cover note. Forbids ``"no changes"`` to catch a regression
+  where the agent picks the wrong tool or misses the diff window.
+
+- **W-11 (abx stewardship): grounding under absence.** Eduardo has
+  no antibiotics, no MAR antibiotic events, no microbiology data.
+  The right answer is "no active antibiotic regimen" + ask the
+  clinician — NOT a fabricated regimen. Forbids the names of every
+  common abx (vanc/zosyn/cefepime/ceftriaxone/meropenem/linezolid/
+  azithromycin/cipro/levo/flagyl/fluconazole) and common
+  microbiology findings (MRSA, Pseudomonas, "culture grew", "blood
+  culture positive"). Tests that the synthesis layer doesn't
+  invent data the data layer didn't return.
+
+- **Personas file updated.** ``agent/evals/_shared/personas.yaml``
+  now has a ``practitioner-dr-smith`` entry (with the correct
+  3-patient fixture panel) and a ``practitioner-admin`` entry
+  (with the full 5-patient panel — requires
+  ``COPILOT_ADMIN_USER_IDS=practitioner-admin`` in the runner env).
+  The pre-existing ``dr_lopez`` / ``dr_okafor`` / ``dr_other``
+  entries are preserved for the inherited W-2 cases.
+
+Files changed:
+
+- ``agent/evals/_shared/personas.yaml`` — adds two
+  fixture-aligned personas (``practitioner-dr-smith``,
+  ``practitioner-admin``); pre-existing entries preserved
+- ``agent/evals/golden/w1_triage/001_dr_smith_panel.yaml`` (new)
+- ``agent/evals/golden/w4_cross_cover/001_eduardo_pickup.yaml``
+  (new)
+- ``agent/evals/golden/w5_family_meeting/001_robert_chf_decomp.yaml``
+  (new)
+- ``agent/evals/golden/w8_consult_orientation/001_cardiology_eduardo.yaml``
+  (new)
+- ``agent/evals/golden/w9_recent_changes/001_eduardo_overnight_diff.yaml``
+  (new)
+- ``agent/evals/golden/w11_abx_stewardship/001_eduardo_no_abx.yaml``
+  (new)
+- ``issues/007-remaining-composites.md`` — AC #23 ticked; this
+  progress note added; issue moves to ``issues/done/``
+
+Verification: ``uv run pytest evals/ -m golden --collect-only -q``
+collects all 11 golden cases (was 5; +6 new) cleanly. Cases parse
+via ``copilot.eval.case.load_cases_in_dir`` without errors. 276
+backend unit tests pass (no Python-side changes; YAML-only slice).
+ruff is clean on changed files (no Python files modified).
+
+Notes for next iteration:
+
+- Eval-harness recalibration is the natural follow-up: the
+  pre-existing W-2 / W-7 / W-10 cases use ``dr_lopez`` /
+  ``pharmacist_kim`` as user_ids, neither of which is wired into
+  the fixture CareTeam. Aligning them on
+  ``practitioner-dr-smith`` + the admin allow-list is the cleanest
+  path; that's a separate slice rather than scope creep on this
+  one.
+- The 14 inherited failures noted across issues 003-007's progress
+  notes are now investigable: the composite-tool surface is stable,
+  the golden case set is complete, and a recalibration pass can
+  measure drift against a fixed harness rather than a moving one.
 
 ## Blocked by
 

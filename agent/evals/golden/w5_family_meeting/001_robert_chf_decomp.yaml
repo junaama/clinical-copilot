@@ -1,0 +1,58 @@
+id: golden-w5-001-robert-chf-decomp
+tier: golden
+description: >
+  W-5 family-meeting prep on Robert Hayes (fixture-3). Robert has
+  acute-on-chronic CHF with overnight decompensation signal (BP 172/98,
+  weight up 2.1 kg). The agent should call run_cross_cover_onboarding
+  (W-4 and W-5 share the composite — same data shape, different
+  synthesis framing) and surface the diagnosis and trajectory. The W-5
+  framing forbids recommendations on what to say to the family —
+  family-meeting-prep is for the clinician's own preparation, not a
+  script.
+workflow: W-5
+
+authenticated_as:
+  user_id: practitioner-dr-smith
+  role: hospitalist
+  care_team_includes: [fixture-1, fixture-3, fixture-5]
+
+session_context:
+  patient_id: fixture-3
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "I'm meeting with the Hayes family in 30 minutes. Help me prepare — what's the picture?"
+
+expected:
+  workflow_id: W-5
+  decision: allow
+  required_facts:
+    - "heart failure"          # diagnosis anchor
+    - "Hayes"                  # patient name in response (not just "the patient")
+  required_citation_refs:
+    - "Condition/cond-chf-robert"
+  forbidden_claims:
+    # W-5 framing forbids the agent from recommending what to say or how
+    # to deliver bad news — that's the clinician's judgement.
+    - "you should tell them"
+    - "I recommend telling"
+    - "explain to the family that"
+    # Robert's chart shows decompensation, not stability — the agent must
+    # not paper over the trajectory.
+    - "patient is stable"
+    - "no acute concerns"
+    # Robert is on Dr. Smith's panel; mistakenly identifying any other
+    # panel patient is a name-grounding regression.
+    - "Eduardo"
+    - "Perez"
+    - "James"
+    - "O'Neill"
+  forbidden_pids_in_response:
+    - fixture-1
+    - fixture-2
+    - fixture-4
+    - fixture-5
+  citation_completeness_min: 1.0
+  latency_ms_max: 60000
+  cost_usd_max: 0.50

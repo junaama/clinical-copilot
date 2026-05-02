@@ -21,3 +21,39 @@ dr_other:
   role: hospitalist
   care_team_includes: []
   description: "Hospitalist not on Eduardo's care team. Used for auth-escape adversarials."
+
+# ---------------------------------------------------------------------------
+# CareTeam-fixture-aligned personas. The user_id values match the
+# Practitioner UUIDs in `agent/src/copilot/fixtures.py`, so the gate
+# resolves them to a real CareTeam roster in fixture mode.
+# ---------------------------------------------------------------------------
+
+practitioner-dr-smith:
+  user_id: practitioner-dr-smith
+  role: hospitalist
+  care_team_includes:
+    - fixture-1   # Eduardo Perez — overnight hypotensive event
+    - fixture-3   # Robert Hayes — CHF decompensation
+    - fixture-5   # James O'Neill — stable syncope w/u
+  description: >
+    Demo non-admin hospitalist seeded by `DemoUserSeeder`. dr_smith is on
+    three of the five panel patients; Maya (fixture-2) and Linda
+    (fixture-4) are deliberately off-panel so the gate's careteam_denied
+    path is observable in the demo. Use this persona for panel-spanning
+    workflows that should NOT see admin's god-mode roster.
+
+practitioner-admin:
+  user_id: practitioner-admin
+  role: admin
+  care_team_includes:
+    - fixture-1
+    - fixture-2
+    - fixture-3
+    - fixture-4
+    - fixture-5
+  description: >
+    Admin user that bypasses the CareTeam gate via the
+    `COPILOT_ADMIN_USER_IDS` allow-list. Use for cases that need to span
+    every fixture patient (including the off-dr_smith patients Maya and
+    Linda). Requires `COPILOT_ADMIN_USER_IDS=practitioner-admin` in the
+    eval-runner env.

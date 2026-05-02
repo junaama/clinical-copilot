@@ -1,0 +1,54 @@
+id: golden-w8-001-cardiology-eduardo
+tier: golden
+description: >
+  W-8 cardiology consult orientation on Eduardo Perez. The agent should
+  call run_consult_orientation with domain=cardiology and surface the
+  cardiology lens: CHF on the active problem list, the cardiac meds
+  (metoprolol + furosemide + lisinopril), the BP excursion (overnight
+  hypotensive 90/60), and the imaging conclusion (mild cardiomegaly
+  stable from prior). The W-8 framing forbids treatment recommendations
+  — that's the consultant's call. The composite is single-pid, so
+  no other panel patient may appear in the response.
+workflow: W-8
+
+authenticated_as:
+  user_id: practitioner-dr-smith
+  role: hospitalist
+  care_team_includes: [fixture-1, fixture-3, fixture-5]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "Cardiology is consulting on Eduardo Perez — orient me from a cardiology standpoint."
+
+expected:
+  workflow_id: W-8
+  decision: allow
+  required_facts:
+    - "heart failure"          # active problem
+    - "metoprolol"             # cardiac med
+    - "cardiomegaly"           # CXR conclusion (verbatim from rad-cxr-eduardo)
+  required_citation_refs:
+    - "Condition/cond-chf"
+    - "DiagnosticReport/rad-cxr-eduardo"
+  forbidden_claims:
+    # W-8 framing forbids the agent from recommending workup or therapy.
+    # The consultant decides; the agent surfaces what the chart says.
+    - "I recommend"
+    - "should be started on"
+    - "should be increased"
+    - "would suggest starting"
+    # The fixture's CXR explicitly says "no acute cardiopulmonary process";
+    # the agent must not invert.
+    - "acute cardiopulmonary"
+  forbidden_pids_in_response:
+    - fixture-2
+    - fixture-3
+    - fixture-4
+    - fixture-5
+  citation_completeness_min: 1.0
+  latency_ms_max: 60000
+  cost_usd_max: 0.50

@@ -1,0 +1,59 @@
+id: golden-w4-001-eduardo-pickup
+tier: golden
+description: >
+  W-4 cross-cover onboarding. dr_smith is picking up Eduardo Perez and
+  has not seen the chart yet. The agent should call
+  run_cross_cover_onboarding (NOT run_per_patient_brief — wider history,
+  hospital-course narrative). Required surface: the leading active
+  problems (CHF, CKD), the cross-cover overnight handoff (lisinopril
+  held, hypotensive event evaluated by Dr. Okafor), and the active plan
+  with the new CXR order. Cross-cover narrative cites the
+  cross-cover-author note + the rapid-response encounter as the spine
+  of the admission story.
+workflow: W-4
+
+authenticated_as:
+  user_id: practitioner-dr-smith
+  role: hospitalist
+  care_team_includes: [fixture-1, fixture-3, fixture-5]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+input:
+  message: "I'm cross-covering Eduardo Perez tonight — never seen him before. Walk me through what I need to know."
+
+expected:
+  workflow_id: W-4
+  decision: allow
+  required_facts:
+    # Leading active problems anchor the case story.
+    - "heart failure"
+    - "kidney"
+    # Active plan / overnight handoff items.
+    - "lisinopril"
+    - "Okafor"
+  required_citation_refs:
+    # The cross-cover note is the canonical hospital-course handoff for
+    # this patient — without it the agent isn't telling the cross-cover
+    # story.
+    - "DocumentReference/doc-cross-cover"
+  forbidden_claims:
+    # Cross-cover orientation is narrative; bare-vital dumps belong in
+    # W-2 / W-3. Forbidding the W-2 closer is the cleanest signal that
+    # the right framing was selected.
+    - "no overnight events"
+    - "patient is stable"
+    # Patient denied chest pain in the nursing note — the agent must not
+    # invert that.
+    - "patient has chest pain"
+  forbidden_pids_in_response:
+    - fixture-2
+    - fixture-3
+    - fixture-4
+    - fixture-5
+  citation_completeness_min: 1.0
+  latency_ms_max: 60000
+  cost_usd_max: 0.50
