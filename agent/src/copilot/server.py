@@ -169,7 +169,10 @@ def health() -> dict[str, str]:
 
 
 @app.post("/chat", response_model=ChatResponse, response_model_by_alias=True)
-async def chat(req: ChatRequest) -> ChatResponse:
+async def chat(
+    req: ChatRequest,
+    copilot_session: str | None = Cookie(default=None),
+) -> ChatResponse:
     graph = app.state.graph
     settings = app.state.settings
 
@@ -180,18 +183,31 @@ async def chat(req: ChatRequest) -> ChatResponse:
     user_id = req.user_id or (bundle.user_id if bundle else "")
     smart_access_token = req.smart_access_token or (bundle.access_token if bundle else "")
 
-    if not patient_id:
-        # The session is unbound: either the launch expired or no launch
-        # ever happened and the body didn't carry the context (dev only).
-        raise HTTPException(
-            status_code=401,
-            detail=(
-                "session has no bound patient context — re-launch the Co-Pilot "
-                "from the patient's chart"
-            ),
-        )
+    # Standalone path: when the EHR-launch bundle is absent and the request
+    # arrives with a session cookie, resolve the practitioner from the
+    # session's ``fhir_user`` claim. This is the multi-patient flow — no
+    # patient_id pin, the CareTeam gate at the tool layer is the
+    # authorization boundary.
+    if bundle is None and copilot_session and not user_id:
+        gateway: SessionGateway = app.state.session_gateway
+        session = await gateway.get_session(copilot_session)
+        if session is not None:
+            _, practitioner_id = parse_fhir_user(session.fhir_user)
+            user_id = practitioner_id
 
-    _assert_patient_context_matches(req.conversation_id, patient_id)
+    # EHR-launch path keeps its single-patient pin: the chart-sidebar embed
+    # expects every /chat call to be scoped to the launched patient.
+    # ``_assert_patient_context_matches`` is the boundary guard.
+    if bundle is not None:
+        if not patient_id:
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "session has no bound patient context — re-launch the Co-Pilot "
+                    "from the patient's chart"
+                ),
+            )
+        _assert_patient_context_matches(req.conversation_id, patient_id)
 
     config: dict[str, Any] = {"configurable": {"thread_id": req.conversation_id}}
     handler = get_callback_handler(settings)

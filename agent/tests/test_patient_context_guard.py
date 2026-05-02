@@ -1,18 +1,18 @@
-"""Tool-layer authorization gate (issue 002, ARCHITECTURE.md §7).
+"""Tool-layer authorization gate (issue 003 final shape).
 
-Two coexisting paths:
+The legacy SMART-pin shim is gone — every patient-data tool consults the
+CareTeam gate, with the active practitioner bound on the ``user_id``
+contextvar by the graph (or by tests).
 
-1. Production / SMART-launched: ``user_id`` is bound on the contextvar by
-   ``graph.agent_node``; the tool delegates to ``CareTeamGate`` and returns
-   ``careteam_denied`` for patients off the user's team.
+* In-team patient → ``ok=True``, real rows.
+* Out-of-team patient → ``careteam_denied`` refusal payload.
+* No ``user_id`` bound → gate denies (callers must bind a practitioner
+  even in tests).
+* ``COPILOT_ADMIN_USER_IDS`` allow-list bypasses the gate so admin actions
+  are still authorized while remaining auditable.
 
-2. Isolated / dev: no ``user_id`` is bound; the tool falls back to the
-   legacy SMART-pin check and returns ``patient_context_mismatch`` when a
-   bound active patient doesn't equal the call's ``patient_id``. Bypasses
-   the gate entirely so unit tests don't need a CareTeam fixture.
-
-The contract test at the bottom of the file walks every patient-scoped
-tool to ensure neither path was forgotten.
+The contract test at the bottom walks every patient-scoped tool to ensure
+the gate is consulted across the surface.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from copilot.config import Settings
 from copilot.fixtures import PRACTITIONER_DR_SMITH
 from copilot.tools import (
     make_tools,
-    set_active_patient_id,
     set_active_user_id,
 )
 
@@ -39,10 +38,8 @@ def _settings(*, admins: tuple[str, ...] = ()) -> Settings:
 
 @pytest.fixture(autouse=True)
 def _reset_context():
-    set_active_patient_id(None)
     set_active_user_id(None)
     yield
-    set_active_patient_id(None)
     set_active_user_id(None)
 
 
@@ -51,41 +48,6 @@ def _tool_by_name(name: str, *, admins: tuple[str, ...] = ()):
         if tool.name == name:
             return tool
     raise KeyError(name)
-
-
-# ---------------------------------------------------------------------------
-# Legacy SMART-pin path (no active user_id)
-# ---------------------------------------------------------------------------
-
-
-async def test_tool_rejects_mismatched_patient_id_when_no_user_bound() -> None:
-    set_active_patient_id("fixture-1")
-    tool = _tool_by_name("get_active_medications")
-
-    result = await tool.ainvoke({"patient_id": "intruder-2"})
-
-    assert result["ok"] is False
-    assert result["error"] == "patient_context_mismatch"
-    assert result["rows"] == []
-
-
-async def test_tool_allows_matching_patient_id_when_no_user_bound() -> None:
-    set_active_patient_id("fixture-1")
-    tool = _tool_by_name("get_active_medications")
-
-    result = await tool.ainvoke({"patient_id": "fixture-1"})
-
-    assert result["ok"] is True
-    assert any(r["fhir_ref"].startswith("MedicationRequest/") for r in result["rows"])
-
-
-async def test_tool_allows_when_no_context_bound_at_all() -> None:
-    """Unit tests / scripts that don't bind a context still work."""
-    tool = _tool_by_name("get_patient_demographics")
-
-    result = await tool.ainvoke({"patient_id": "fixture-1"})
-
-    assert result["ok"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -126,12 +88,38 @@ async def test_admin_user_bypasses_care_team_gate() -> None:
     assert result["ok"] is True
 
 
+async def test_tool_denies_when_no_user_bound() -> None:
+    """The legacy SMART-pin fallback was removed in issue 003; tools now
+    require an active user_id to authorize. An empty user_id collapses to
+    careteam_denied."""
+    tool = _tool_by_name("get_active_medications")
+
+    result = await tool.ainvoke({"patient_id": "fixture-1"})
+
+    assert result["ok"] is False
+    assert result["error"] == "careteam_denied"
+
+
+async def test_tool_returns_no_active_patient_for_empty_pid() -> None:
+    set_active_user_id(PRACTITIONER_DR_SMITH)
+    tool = _tool_by_name("get_active_medications")
+
+    result = await tool.ainvoke({"patient_id": ""})
+
+    assert result["ok"] is False
+    assert result["error"] == "no_active_patient"
+
+
 async def test_all_patient_scoped_tools_enforce_gate_for_bound_user() -> None:
     """Every patient-scoped tool must consult the CareTeam gate. Panel-spanning
-    tools like ``get_my_patient_list`` are intentionally exempt."""
+    tools like ``get_my_patient_list`` and ``resolve_patient`` are
+    intentionally exempt."""
     set_active_user_id(PRACTITIONER_DR_SMITH)
     tools = make_tools(_settings())
+    panel_tools = {"get_my_patient_list", "resolve_patient"}
     for tool in tools:
+        if tool.name in panel_tools:
+            continue
         properties = tool.args_schema.model_json_schema().get("properties", {})
         if "patient_id" not in properties:
             continue

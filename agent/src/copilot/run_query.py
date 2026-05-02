@@ -19,11 +19,11 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from .config import get_settings
-from .fixtures import PATIENT_ID
+from .fixtures import PATIENT_ID, PRACTITIONER_DR_SMITH
 from .llm import build_chat_model
 from .observability import get_callback_handler
-from .prompts import PER_PATIENT_BRIEF
-from .tools import make_tools
+from .prompts import build_system_prompt
+from .tools import make_tools, set_active_registry, set_active_user_id
 
 DEFAULT_QUERY = "What happened to this patient since I last saw them?"
 
@@ -43,10 +43,21 @@ async def main() -> int:
     tools = make_tools(settings)
 
     patient_id = os.environ.get("PATIENT_ID", PATIENT_ID)
+    # Bind a fixture practitioner so the CareTeam gate authorizes panel
+    # patients during the dev script's tool calls. ``run_query`` is a
+    # fixture-mode utility; in production the agent is invoked through the
+    # graph, which binds ``user_id`` from session state.
+    set_active_user_id(PRACTITIONER_DR_SMITH)
+    set_active_registry({})
     agent = create_agent(
         model=chat_model,
         tools=tools,
-        system_prompt=PER_PATIENT_BRIEF.format(patient_id=patient_id),
+        system_prompt=build_system_prompt(
+            registry={},
+            focus_pid=None,
+            workflow_id="W-2",
+            confidence=1.0,
+        ),
     )
     user = HumanMessage(content=query)
 

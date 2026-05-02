@@ -1,16 +1,15 @@
 """Co-Pilot StateGraph.
 
-UC-2 per-patient brief: ``agent`` (langchain.agents.create_agent) →
-``verifier`` (deterministic citation-resolution check, ARCHITECTURE.md §13) →
-END (or back to agent for up to 2 regenerations).
+Issue 003 collapsed the EHR-launch-era ``triage_node`` / ``agent_node`` split
+into a single tool-calling node and demoted the classifier to an advisory
+hint. The graph topology is now ``classifier → (clarify | agent) → verifier
+→ END`` with verifier-driven regen looping back to ``agent``.
 
-The verifier is the §13 safety contract: every clinical claim must cite a
-FHIR resource that was actually fetched in this turn, otherwise the loop
-regenerates with feedback. After two failed retries the agent emits an
-explicit ``refused_unsourced`` refusal.
-
-Classifier, planner, and UC-1 nodes are tracked in
-``agentforge-docs/AGENT-TODO.md`` and will land alongside this spine.
+The classifier still emits ``{ workflow_id, confidence }`` and the runtime
+records both in the audit row, but the values do not gate the tool surface:
+all tools are bound to one node and the LLM picks. Workflow-specific
+behavior comes from the synthesis prompts (issues 006/007) and from the
+LLM choosing composite vs granular tools.
 """
 
 from __future__ import annotations
@@ -18,8 +17,6 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
-
-_log = logging.getLogger(__name__)
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -30,39 +27,37 @@ from pydantic import BaseModel, Field
 from .audit import AuditEvent, now_iso, write_audit_event
 from .blocks import (
     block_from_clarify_text,
-    plain_block_from_text,
     refusal_plain_block,
     synthesize_overnight_block,
-    synthesize_triage_block,
 )
+from .care_team import AuthDecision
 from .checkpointer import build_memory_checkpointer
 from .config import Settings, get_settings
 from .llm import build_chat_model
-from .prompts import CLARIFY_SYSTEM, CLASSIFIER_SYSTEM, PER_PATIENT_BRIEF, TRIAGE_BRIEF
+from .prompts import CLARIFY_SYSTEM, CLASSIFIER_SYSTEM, build_system_prompt
 from .state import CoPilotState
 from .tools import (
     make_tools,
-    set_active_patient_id,
+    set_active_registry,
     set_active_smart_token,
     set_active_user_id,
 )
 
+_log = logging.getLogger(__name__)
+
 MAX_REGENS = 2
 CLASSIFIER_CONFIDENCE_THRESHOLD = 0.8
 
-# Workflows we have agent wiring for today. Anything outside this set with a
-# confident classification still routes through the agent (so the system
-# fails open as more workflows light up), but UC-1 triage will get its own
-# branch when the two-stage flow lands (AGENT-TODO).
-SUPPORTED_WORKFLOWS = {"W-2", "W-7"}
-# Panel-spanning workflows: triage_node clears patient context so calls can
-# fan out across the care-team panel. Per-patient workflows (W-2..W-9, W-11)
-# fall through to agent_node with patient context bound.
-TRIAGE_WORKFLOWS = {"W-1", "W-10"}
+# Auth-class errors emitted by the tool layer. Used to map a ToolMessage's
+# error payload to a per-call gate decision for the audit row.
+_AUTH_DECISIONS: frozenset[str] = frozenset(d.value for d in AuthDecision)
+_DENIED_DECISIONS: frozenset[str] = frozenset(
+    d.value for d in AuthDecision if d is not AuthDecision.ALLOWED
+)
 
 
 class WorkflowDecision(BaseModel):
-    """Structured output from the classifier node (ARCHITECTURE.md §9 step 3)."""
+    """Structured output from the classifier node (advisory)."""
 
     workflow_id: str = Field(
         description='One of "W-1"..."W-11" or "unclear"',
@@ -73,11 +68,15 @@ class WorkflowDecision(BaseModel):
         description="Classifier confidence in [0.0, 1.0]",
     )
 
+
 _CITE_PATTERN = re.compile(
     r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]\s*/?\s*>',
     flags=re.IGNORECASE,
 )
 _FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
+_TOOL_ERROR_PATTERN = re.compile(r'"error"\s*:\s*"([^"]+)"')
+_TOOL_OK_PATTERN = re.compile(r'"ok"\s*:\s*(true|false)')
+_TOOL_STATUS_PATTERN = re.compile(r'"status"\s*:\s*"([^"]+)"')
 
 
 def _extract_citations(text: str) -> list[str]:
@@ -94,10 +93,9 @@ def _refs_from_tool_message(msg: ToolMessage) -> set[str]:
     return set(_FHIR_REF_PATTERN.findall(content))
 
 
-# Tool source labels that disambiguate Observation rows by FHIR category. Used
-# to feed the citation-card mapper so cited Observation refs land on the right
-# OpenEMR chart card. Aligned with the ``sources_checked`` strings the tools
-# in ``tools.py`` already emit.
+# Tool source labels that disambiguate Observation rows by FHIR category.
+# Used to feed the citation-card mapper so cited Observation refs land on
+# the right OpenEMR chart card.
 _OBSERVATION_SOURCE_TO_CATEGORY = {
     "Observation (vital-signs)": "vital-signs",
     "Observation (laboratory)": "laboratory",
@@ -107,14 +105,6 @@ _OBSERVATION_SOURCE_TO_CATEGORY = {
 def _observation_categories_from_tool_message(
     msg: ToolMessage,
 ) -> dict[str, str]:
-    """Extract a {fhir_ref: 'vital-signs' | 'laboratory'} map from a tool result.
-
-    Tools tag their results with ``sources_checked`` already; we read that
-    label and apply it to every Observation row in the same payload. This
-    runs without parsing JSON — simple substring sniffing is enough because
-    we control the producer.
-    """
-
     content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
     category: str | None = None
     for source_label, cat in _OBSERVATION_SOURCE_TO_CATEGORY.items():
@@ -130,6 +120,62 @@ def _observation_categories_from_tool_message(
     }
 
 
+def _gate_decision_for_tool_message(msg: ToolMessage) -> str:
+    """Map a ToolMessage's payload to one ``AuthDecision`` value.
+
+    ``careteam_denied`` / ``patient_context_mismatch`` / ``no_active_patient``
+    map to themselves. Anything else (success or non-auth error) collapses
+    to ``allowed`` — gate decisions only track authorization, not
+    operational outcomes.
+    """
+    content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+    error_match = _TOOL_ERROR_PATTERN.search(content)
+    if error_match is None:
+        return AuthDecision.ALLOWED.value
+    error = error_match.group(1)
+    if error in _AUTH_DECISIONS:
+        return error
+    return AuthDecision.ALLOWED.value
+
+
+def _resolved_patients_from_tool_message(
+    msg: ToolMessage,
+) -> dict[str, dict[str, Any]]:
+    """Extract newly-resolved patients from a ``resolve_patient`` ToolMessage.
+
+    Returns a dict keyed on ``patient_id`` carrying the display fields the
+    registry stores (given_name, family_name, birth_date). Only ``status:
+    "resolved"`` payloads contribute — ambiguous, not_found, and clarify
+    intentionally do not populate the registry because the LLM still owes
+    the user a follow-up.
+    """
+    if (msg.name or "") != "resolve_patient":
+        return {}
+    content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+    status_match = _TOOL_STATUS_PATTERN.search(content)
+    if status_match is None or status_match.group(1) != "resolved":
+        return {}
+    # The payload is JSON; parse it for structured access.
+    try:
+        import json
+
+        payload = json.loads(content)
+    except (ValueError, TypeError):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for p in payload.get("patients") or []:
+        pid = p.get("patient_id")
+        if not pid:
+            continue
+        out[pid] = {
+            "patient_id": pid,
+            "given_name": p.get("given_name") or "",
+            "family_name": p.get("family_name") or "",
+            "birth_date": p.get("birth_date") or "",
+        }
+    return out
+
+
 def _audit(
     state: CoPilotState,
     settings: Settings,
@@ -143,16 +189,21 @@ def _audit(
     Free text (user prompt, assistant body) is intentionally NOT recorded
     here — that's the §9 step 11 "encrypted prompts/responses" table's job.
     The audit log carries only structural/decision metadata.
+
+    ``extra.gate_decisions`` and ``extra.denied_count`` carry the per-turn
+    gate-decision summary called out in issue 003.
     """
     tool_results = state.get("tool_results") or []
     fetched_refs = state.get("fetched_refs") or []
     user_messages = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
+    gate_decisions = list(state.get("gate_decisions") or [])
+    denied_count = sum(1 for d in gate_decisions if d in _DENIED_DECISIONS)
 
     event = AuditEvent(
         ts=now_iso(),
         conversation_id=state.get("conversation_id") or "",
         user_id=state.get("user_id") or "",
-        patient_id=state.get("patient_id") or "",
+        patient_id=state.get("focus_pid") or state.get("patient_id") or "",
         turn_index=len(user_messages),
         workflow_id=state.get("workflow_id") or "unclear",
         classifier_confidence=float(state.get("classifier_confidence") or 0.0),
@@ -166,7 +217,11 @@ def _audit(
         model_provider=settings.llm_provider,
         model_name=settings.llm_model,
         escalation_reason=escalation_reason,
-        extra={"final_response_chars": len(final_text) if final_text else 0},
+        extra={
+            "final_response_chars": len(final_text) if final_text else 0,
+            "gate_decisions": gate_decisions,
+            "denied_count": denied_count,
+        },
     )
     write_audit_event(event, settings)
 
@@ -201,12 +256,6 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
                 [SystemMessage(content=CLASSIFIER_SYSTEM), HumanMessage(content=latest)]
             )
         except Exception as exc:  # noqa: BLE001 — classifier failure fails open to clarify
-            # Surface the cause so an opaque "unclear/0.0" response in
-            # production can be debugged without pulling traces. The free-text
-            # of the user message is *not* logged (PHI leak risk) — only the
-            # exception class, message, and traceback (for the framework
-            # surface). ``exc_info=True`` is required because Python's default
-            # logging formatter ignores ``extra=`` keys.
             _log.warning(
                 "classifier_failed model=%s err=%s: %s",
                 settings.llm_model,
@@ -222,18 +271,13 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         workflow_id = decision.workflow_id
         confidence = decision.confidence
 
-        # Below threshold or explicitly unclear → ask a disambiguating question.
+        # Below threshold or explicitly unclear → ask a disambiguating
+        # question. The classifier is otherwise advisory and never gates
+        # the tool surface — the only routing decision left is
+        # clarify-vs-agent.
         if workflow_id == "unclear" or confidence < CLASSIFIER_CONFIDENCE_THRESHOLD:
             return Command(
                 goto="clarify",
-                update={"workflow_id": workflow_id, "classifier_confidence": confidence},
-            )
-
-        # UC-1 triage gets its own branch (different system prompt + no
-        # patient-context binding since triage spans the whole panel).
-        if workflow_id in TRIAGE_WORKFLOWS:
-            return Command(
-                goto="triage",
                 update={"workflow_id": workflow_id, "classifier_confidence": confidence},
             )
 
@@ -253,8 +297,8 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             content = response.content if isinstance(response.content, str) else str(response.content)
         except Exception:  # noqa: BLE001 — never block on clarify failure
             content = (
-                "I'm not sure whether you want a triage across your panel or a brief "
-                "on a specific patient. Could you say which?"
+                "I'm not sure what you want to look at. Could you say which "
+                "patient (or which question across your panel)?"
             )
         _audit(state, settings, decision="clarify", final_text=content)
         clarify_block = block_from_clarify_text(content)
@@ -265,19 +309,25 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         }
 
     async def agent_node(state: CoPilotState) -> dict[str, Any]:
-        patient_id = state.get("patient_id") or ""
         feedback = state.get("verifier_feedback") or ""
         smart_token = state.get("smart_access_token") or ""
+        user_id = state.get("user_id") or ""
+        registry = dict(state.get("resolved_patients") or {})
+        focus_pid = state.get("focus_pid") or state.get("patient_id") or None
 
-        # Bind the active SMART patient_id into the tool layer's contextvar so
-        # every tool call independently validates per ARCHITECTURE.md §7. The
-        # access token rides the same contextvar pattern so FhirClient picks
-        # the right authorization for this turn.
-        set_active_patient_id(patient_id or None)
+        # Bind context for the tool layer. ``set_active_registry`` lets
+        # ``resolve_patient`` do O(1) cache hits on previously-resolved
+        # names; the gate consults ``user_id`` directly.
         set_active_smart_token(smart_token or None)
-        set_active_user_id(state.get("user_id") or None)
+        set_active_user_id(user_id or None)
+        set_active_registry(registry)
 
-        system_prompt = PER_PATIENT_BRIEF.format(patient_id=patient_id)
+        system_prompt = build_system_prompt(
+            registry=registry,
+            focus_pid=focus_pid,
+            workflow_id=state.get("workflow_id") or "unclear",
+            confidence=float(state.get("classifier_confidence") or 0.0),
+        )
         if feedback:
             system_prompt += (
                 "\n\nVERIFIER FEEDBACK FROM PRIOR ATTEMPT:\n"
@@ -294,17 +344,17 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         sub_messages = result.get("messages", [])
         fetched: list[str] = []
         tool_calls: list[dict] = []
-        context_mismatch = False
         observation_categories: dict[str, str] = {}
+        gate_decisions: list[str] = []
+        new_resolved: dict[str, dict[str, Any]] = {}
         for msg in sub_messages:
             if isinstance(msg, ToolMessage):
-                content = msg.content if isinstance(msg.content, str) else str(msg.content)
-                if "patient_context_mismatch" in content:
-                    context_mismatch = True
                 fetched.extend(_refs_from_tool_message(msg))
                 observation_categories.update(
                     _observation_categories_from_tool_message(msg)
                 )
+                gate_decisions.append(_gate_decision_for_tool_message(msg))
+                new_resolved.update(_resolved_patients_from_tool_message(msg))
             if isinstance(msg, AIMessage) and msg.tool_calls:
                 for tc in msg.tool_calls:
                     tool_calls.append(
@@ -314,20 +364,24 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         final = sub_messages[-1] if sub_messages else AIMessage(content="")
         final_text = final.content if isinstance(final.content, str) else str(final.content)
 
+        # Carry forward the new focus: prefer the most recently resolved pid,
+        # falling back to the prior focus when no resolution happened.
+        new_focus = focus_pid
+        if new_resolved:
+            new_focus = next(reversed(new_resolved))
+
         update: dict[str, Any] = {
             "messages": [final],
             "fetched_refs": fetched,
             "tool_results": tool_calls,
             "observation_categories": observation_categories,
-            # Clear feedback so the next verifier pass evaluates the new response cleanly.
+            "gate_decisions": gate_decisions,
             "verifier_feedback": "",
         }
-        if context_mismatch:
-            # §7: mismatch is a hard deny that takes precedence over the
-            # verifier's allow/refused_unsourced decision.
-            update["decision"] = "denied_authz"
-            update["block"] = plain_block_from_text(final_text).model_dump(by_alias=True)
-            return update
+        if new_resolved:
+            update["resolved_patients"] = new_resolved
+        if new_focus and new_focus != state.get("focus_pid"):
+            update["focus_pid"] = new_focus
 
         # Synthesize the structured overnight block. Validation failures fall
         # back to a PlainBlock inside the helper so the wire shape is always
@@ -414,71 +468,28 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             "\n  3. If you cannot answer the question with the fetched refs, say so "
             "explicitly and stop."
         )
-        # Route the retry back to whichever node produced this turn.
-        retry_target = "triage" if state.get("workflow_id") in TRIAGE_WORKFLOWS else "agent"
         return Command(
-            goto=retry_target,
+            goto="agent",
             update={"regen_count": regen + 1, "verifier_feedback": feedback},
         )
 
-    async def triage_node(state: CoPilotState) -> dict[str, Any]:
-        # Triage explicitly does NOT bind a single active patient; the
-        # workflow spans the user's panel. The SMART token still applies —
-        # it's the same authenticated user's care team.
-        set_active_patient_id(None)
-        set_active_smart_token(state.get("smart_access_token") or None)
-        set_active_user_id(state.get("user_id") or None)
-
-        feedback = state.get("verifier_feedback") or ""
-        system_prompt = TRIAGE_BRIEF
-        if feedback:
-            system_prompt += f"\n\nVERIFIER FEEDBACK FROM PRIOR ATTEMPT:\n{feedback}\n"
-
-        agent = create_agent(model=chat_model, tools=tools, system_prompt=system_prompt)
-        result = await agent.ainvoke({"messages": state.get("messages", [])})
-
-        sub_messages = result.get("messages", [])
-        fetched: list[str] = []
-        tool_calls: list[dict] = []
-        observation_categories: dict[str, str] = {}
-        for msg in sub_messages:
-            if isinstance(msg, ToolMessage):
-                fetched.extend(_refs_from_tool_message(msg))
-                observation_categories.update(
-                    _observation_categories_from_tool_message(msg)
-                )
-            if isinstance(msg, AIMessage) and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    tool_calls.append(
-                        {"name": tc.get("name"), "args": tc.get("args") or {}, "id": tc.get("id")}
-                    )
-
-        final = sub_messages[-1] if sub_messages else AIMessage(content="")
-        final_text = final.content if isinstance(final.content, str) else str(final.content)
-
-        block = await synthesize_triage_block(
-            chat_model,
-            synthesis_text=final_text,
-            fetched_refs=fetched,
-            active_patient_id=state.get("patient_id") or None,
-        )
-        return {
-            "messages": [final],
-            "fetched_refs": fetched,
-            "tool_results": tool_calls,
-            "observation_categories": observation_categories,
-            "verifier_feedback": "",
-            "block": block.model_dump(by_alias=True),
-        }
-
     builder = StateGraph(CoPilotState)
-    builder.add_node("classifier", classifier_node, ends=["agent", "clarify", "triage"])
+    builder.add_node("classifier", classifier_node, ends=["agent", "clarify"])
     builder.add_node("clarify", clarify_node)
     builder.add_node("agent", agent_node)
-    builder.add_node("triage", triage_node)
-    builder.add_node("verifier", verifier_node, ends=["agent", "triage", END])
+    builder.add_node("verifier", verifier_node, ends=["agent", END])
     builder.add_edge(START, "classifier")
     builder.add_edge("clarify", END)
     builder.add_edge("agent", "verifier")
-    builder.add_edge("triage", "verifier")
     return builder.compile(checkpointer=checkpointer)
+
+
+# Compatibility re-exports so callers that import the constants for tests
+# continue to work — both are advisory now and used only for clarify-route
+# decisioning.
+__all__ = [
+    "CLASSIFIER_CONFIDENCE_THRESHOLD",
+    "MAX_REGENS",
+    "WorkflowDecision",
+    "build_graph",
+]
