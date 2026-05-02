@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlencode
 
-from fastapi import Cookie, FastAPI, HTTPException, Response
+from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from langchain_core.messages import HumanMessage
@@ -63,8 +63,31 @@ from .smart import (
     get_default_stores,
     token_bundle_from_response,
 )
+from .title_summarizer import (
+    HaikuTitleSummarizer,
+    build_default_haiku_factory,
+)
 
 _log = logging.getLogger(__name__)
+
+
+def _maybe_build_title_summarizer(
+    settings: Any, registry: ConversationRegistry
+) -> HaikuTitleSummarizer | None:
+    """Build the Haiku summarizer when an Anthropic key is available.
+
+    Returns ``None`` when the key is missing — the chat path then skips the
+    write-behind silently and the sidebar keeps its truncated-message
+    placeholder. We deliberately don't fall back to the configured
+    ``LLM_PROVIDER`` model: the issue calls for a Haiku-class model
+    specifically, and using the (potentially Sonnet/GPT-4o) main model
+    would silently inflate cost per turn.
+    """
+    api_key = settings.anthropic_api_key.get_secret_value()
+    if not api_key:
+        return None
+    factory = build_default_haiku_factory(api_key)
+    return HaikuTitleSummarizer(registry=registry, model_factory=factory)
 
 
 @asynccontextmanager
@@ -82,7 +105,8 @@ async def lifespan(app: FastAPI):
         # lifespan, so respect pre-existing ones.
         existing_session = hasattr(app.state, "session_gateway")
         existing_conv = hasattr(app.state, "conversation_registry")
-        if existing_session and existing_conv:
+        existing_summarizer = hasattr(app.state, "title_summarizer")
+        if existing_session and existing_conv and existing_summarizer:
             yield
             return
         if settings.checkpointer_dsn:
@@ -98,6 +122,10 @@ async def lifespan(app: FastAPI):
                         app.state.conversation_registry = ConversationRegistry(
                             store=conv_store
                         )
+                    if not existing_summarizer:
+                        app.state.title_summarizer = _maybe_build_title_summarizer(
+                            settings, app.state.conversation_registry
+                        )
                     yield
         else:
             if not existing_session:
@@ -107,6 +135,10 @@ async def lifespan(app: FastAPI):
             if not existing_conv:
                 app.state.conversation_registry = ConversationRegistry(
                     store=InMemoryConversationStore()
+                )
+            if not existing_summarizer:
+                app.state.title_summarizer = _maybe_build_title_summarizer(
+                    settings, app.state.conversation_registry
                 )
             yield
 
@@ -226,6 +258,7 @@ def health() -> dict[str, str]:
 @app.post("/chat", response_model=ChatResponse, response_model_by_alias=True)
 async def chat(
     req: ChatRequest,
+    background_tasks: BackgroundTasks,
     copilot_session: str | None = Cookie(default=None),
 ) -> ChatResponse:
     graph = app.state.graph
@@ -314,11 +347,30 @@ async def chat(
                 conversation_id=req.conversation_id,
                 user_id=user_id,
             )
-        await registry.ensure_first_turn_title(req.conversation_id, req.message)
+        first_turn_title_written = await registry.ensure_first_turn_title(
+            req.conversation_id, req.message
+        )
         focus_pid = (
             result.get("focus_pid") or result.get("patient_id") or ""
         )
         await registry.touch(req.conversation_id, focus_pid=focus_pid)
+
+        # Issue 008: schedule the Haiku title summarizer when this was the
+        # first turn. Returns ``True`` exactly once per conversation —
+        # ``ensure_first_turn_title`` no-ops on subsequent turns — so the
+        # summarizer is invoked at most once. ``BackgroundTasks`` runs the
+        # call after the response is sent so the user sees the chat reply
+        # immediately and the better title lands a beat later.
+        summarizer: HaikuTitleSummarizer | None = getattr(
+            app.state, "title_summarizer", None
+        )
+        if first_turn_title_written and summarizer is not None:
+            background_tasks.add_task(
+                summarizer.summarize_and_set,
+                conversation_id=req.conversation_id,
+                first_user_message=req.message,
+                first_assistant_message=reply,
+            )
 
     block = _coerce_block_dict(result.get("block"), fallback_text=reply)
     # Frontend reads block.lead for the typewriter; reply is duplicated for
