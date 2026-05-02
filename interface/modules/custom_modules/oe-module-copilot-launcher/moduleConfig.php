@@ -54,6 +54,12 @@ return [
             'default' => '',
             'description' => 'OAuth2 client secret for the standalone client copilot-standalone (auto-generated at install time).',
         ],
+        [
+            'name' => 'copilot_demo_user_password',
+            'type' => 'text',
+            'default' => 'dr_smith_pass',
+            'description' => 'Initial password for the seeded demo provider (dr_smith). Change after first login or rotate via the standard user-admin UI.',
+        ],
     ],
 
     'install' => [

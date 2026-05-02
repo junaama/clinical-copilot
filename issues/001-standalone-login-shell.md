@@ -22,7 +22,7 @@ The existing EHR-launch flow (`/smart/launch` and `/smart/callback`) remains wir
 - [ ] Token refresh runs server-side without user action; an in-flight chat call whose access token is expired refreshes transparently before retry.
 - [x] copilot-ui's floating `Launcher` is replaced by a full-screen `AppShell` layout. The existing `AgentPanel` continues to work as the conversation surface inside the shell (no redesign of the chat UI in this slice).
 - [x] copilot-ui has routes `/login` and `/`; on boot it calls `GET /me` with `credentials: 'include'`. 401 → render login button that links to `/auth/login`. 200 → render the app body (placeholder content showing the user's display name is acceptable for this slice).
-- [ ] `dr_smith` user row exists in OpenEMR `users` (provider role, non-admin); a corresponding `Practitioner` FHIR resource exists with the same UUID.
+- [x] `dr_smith` user row exists in OpenEMR `users` (provider role, non-admin); a corresponding `Practitioner` FHIR resource exists with the same UUID. *(`DemoUserSeeder::ensureSeeded()` inserts the user, `users_secure` row, and `uuid_registry` mirror idempotently. FHIR `Practitioner` is derived automatically from the same uuid.)*
 - [x] The existing `/smart/launch` + `/smart/callback` EHR-launch endpoints remain functional; an EHR-launch round-trip still produces a working chat session via the URL-parameter handoff.
 - [x] `SessionGateway` tests cover: successful login round-trip, expired launch state, replayed/unknown state rejected, logout revocation. *(Refresh-token rotation test deferred to token-refresh implementation.)*
 
@@ -68,10 +68,46 @@ and expiry, session CRUD with lazy eviction, token-bundle upsert, and
 durability across store instances. All 85 unit tests pass; ruff clean
 on changed files.
 
+### 2026-05-02 — `dr_smith` demo provider seeded on module enable
+
+`DemoUserSeeder` (mirrors `CopilotClientRegistration`'s injected-deps
+shape) idempotently inserts the demo non-admin provider used by the
+standalone login flow and the (forthcoming) CareTeam-gate evals. One
+short-circuiting `SELECT id FROM users WHERE username='dr_smith'` runs
+on each Bootstrap pass; on the cold path it issues an INSERT into
+`users` (provider role: `authorized=1, active=1`, taxonomy + abook_type
+populated, legacy `users.password` left empty), an INSERT into
+`users_secure` with the AuthHash-hashed password (FK on the new
+`users.id`), and a mirror INSERT into `uuid_registry` so the FHIR
+Practitioner endpoint resolves `Practitioner/<uuid>` back to this user
+without an external `populateAllMissingUuids()` pass. The FHIR
+Practitioner resource itself is derived automatically by OpenEMR's FHIR
+layer — no separate write needed.
+
+Password is sourced from a new `copilot_demo_user_password` global
+(default `dr_smith_pass`). Hash + uuid generation are injected as
+Closures so the seeder is unit-testable without OpenEMR's runtime
+hashing or random plumbing. 5 new isolated tests in
+`DemoUserSeederTest` cover the early-return branch, the full insert
+path (verifies users.id flows into users_secure FK and uuid_registry
+table_id), the empty-hash and non-16-byte-uuid validation guards, and
+the constructor's empty-password rejection. All 23 CopilotLauncher
+isolated tests pass; phpcs clean on changed files; phpstan clean on
+changed files (full-codebase phpstan exceeds sandbox memory budget,
+4288 files at level 10).
+
 Remaining for this issue:
-1. `dr_smith` user + Practitioner seed
-2. Token refresh on access-token expiry
-3. fhirUser → users.id mapping via users.uuid lookup
+1. Token refresh on access-token expiry — needs to bridge the standalone
+   `SessionGateway` token bundle into `/chat`, which still resolves
+   tokens via `smart.py`'s in-memory `SmartStores` keyed by
+   conversation_id. That coupling is what issue 003 unwinds when
+   `CoPilotState` grows the multi-patient registry.
+2. `fhirUser` → `users.id` mapping via `users.uuid` lookup — currently
+   stamped as `oe_user_id=0` placeholder. Issue 002's CareTeam gate
+   needs the real id, so the mapping lands as a precursor inside that
+   slice rather than retrofitted here. Easiest path: a thin
+   `/apis/oemr/copilot-launcher/users/by-uuid/{uuid}` endpoint
+   authenticated by the user's bearer token, returning `{user_id}`.
 
 ## Blocked by
 

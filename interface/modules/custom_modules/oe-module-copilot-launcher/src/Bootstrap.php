@@ -16,10 +16,12 @@ declare(strict_types=1);
 namespace OpenEMR\Modules\CopilotLauncher;
 
 use OpenEMR\BC\ServiceContainer;
+use OpenEMR\Common\Auth\AuthHash;
 use OpenEMR\Core\OEGlobalsBag;
 use OpenEMR\Events\PatientDemographics\RenderEvent;
 use OpenEMR\Modules\CopilotLauncher\Listeners\ChartSidebarListener;
 use OpenEMR\Modules\CopilotLauncher\Service\CopilotClientRegistration;
+use OpenEMR\Modules\CopilotLauncher\Service\DemoUserSeeder;
 use OpenEMR\Modules\CopilotLauncher\Service\QueryUtilsExecutor;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
@@ -92,6 +94,32 @@ final class Bootstrap
                 // (e.g. during install). The admin UI can rerun the registration.
                 $logger->warning('Co-Pilot client registration deferred', ['exception' => $e]);
             }
+        }
+
+        // Best-effort: seed the demo non-admin provider used by standalone
+        // login flow demos and CareTeam-gate evals. Idempotent — the seeder
+        // short-circuits if the row already exists, so this is safe to leave
+        // in the page-load path (it's a single SELECT in the steady state).
+        $demoPassword = OEGlobalsBag::getInstance()->getString('copilot_demo_user_password');
+        if ($demoPassword === '') {
+            $demoPassword = 'dr_smith_pass';
+        }
+        try {
+            $seeder = new DemoUserSeeder(
+                db: new QueryUtilsExecutor(),
+                logger: $logger,
+                password: $demoPassword,
+                passwordHasher: static function (string $raw): string {
+                    $copy = $raw; // AuthHash::passwordHash takes by reference
+                    return (new AuthHash())->passwordHash($copy);
+                },
+                uuidGenerator: static fn (): string => random_bytes(16),
+            );
+            $seeder->ensureSeeded();
+        } catch (\RuntimeException | \LogicException $e) {
+            // Mirrors the registration path: the install flow may run before
+            // the users/users_secure tables are ready. Logged, not fatal.
+            $logger->warning('Co-Pilot demo user seed deferred', ['exception' => $e]);
         }
     }
 }
