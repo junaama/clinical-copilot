@@ -20,8 +20,10 @@ gate can decide.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextvars
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -817,6 +819,67 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
             sentinel_fields=("body",),
         ).to_payload()
 
+    async def run_per_patient_brief(
+        patient_id: str, hours: int = 24
+    ) -> dict[str, Any]:
+        """Composite tool: fan out the six per-patient brief reads in parallel.
+
+        Wraps demographics, active problems, active meds, recent vitals,
+        recent labs, and recent encounters in one ``asyncio.gather`` and
+        merges their rows into one envelope shaped exactly like a granular
+        tool's ``ToolResult.to_payload()``. The verifier loop and citation
+        machinery downstream don't have to special-case the composite.
+
+        Authorization is enforced **per nested call** by reusing the
+        granular tools' ``_enforce_patient_authorization`` helper. A buggy
+        refactor that removed the gate from a single branch would still
+        be caught by the gate at the other branches; defense in depth.
+        """
+        # Top-of-call gate: short-circuits the empty-pid / out-of-team path
+        # so we don't fan out six gate-denied calls when one would do.
+        if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
+            return denied
+
+        started = time.monotonic()
+        results = await asyncio.gather(
+            get_patient_demographics(patient_id),
+            get_active_problems(patient_id),
+            get_active_medications(patient_id),
+            get_recent_vitals(patient_id, hours),
+            get_recent_labs(patient_id, hours),
+            get_recent_encounters(patient_id, hours),
+        )
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        merged_rows: list[dict[str, Any]] = []
+        merged_sources: list[str] = []
+        first_error: str | None = None
+        any_failed = False
+        for payload in results:
+            # If any nested call hit the gate's deny path, bubble that
+            # decision up — the LLM should see the same authorization
+            # error it would see for a granular call.
+            if not payload.get("ok") and payload.get("error") in {
+                d.value for d in AuthDecision if d is not AuthDecision.ALLOWED
+            }:
+                return payload
+            merged_rows.extend(payload.get("rows") or [])
+            for source in payload.get("sources_checked") or []:
+                if source not in merged_sources:
+                    merged_sources.append(source)
+            if not payload.get("ok"):
+                any_failed = True
+                if first_error is None:
+                    first_error = payload.get("error")
+
+        return {
+            "ok": not any_failed,
+            "rows": merged_rows,
+            "sources_checked": merged_sources,
+            "error": first_error,
+            "latency_ms": elapsed_ms,
+        }
+
     return [
         StructuredTool.from_function(
             coroutine=resolve_patient,
@@ -935,6 +998,24 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
                 "Return clinical notes (nursing progress, cross-cover physician, "
                 "consultant) for the patient within the lookback window (default 24 hours). "
                 "Note bodies are length-capped; consult the chart for full text."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=run_per_patient_brief,
+            name="run_per_patient_brief",
+            description=(
+                "Composite per-patient brief: fans out demographics, active "
+                "problems, active medications, recent vitals (24h), recent "
+                "labs (24h), and recent encounters (24h) in PARALLEL and "
+                "returns one merged envelope. Prefer this tool over the "
+                "granular reads whenever the user asks for an overview, a "
+                "brief, a quick picture, or 'what happened to <patient>' — "
+                "it is materially faster than chaining the six granular "
+                "calls. Returns the same envelope shape (rows, "
+                "sources_checked, latency_ms, error, ok) so citation "
+                "verification is unchanged. For a single targeted question "
+                "(one specific lab, one specific vital), use the granular "
+                "tool instead."
             ),
         ),
     ]
