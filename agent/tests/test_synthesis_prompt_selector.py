@@ -1,4 +1,4 @@
-"""W-1 / W-2 / W-3 / W-4 / W-5 / W-9 / W-10 synthesis-prompt selector — issues 006 and 007.
+"""W-1 / W-2 / W-3 / W-4 / W-5 / W-9 / W-10 / W-11 synthesis-prompt selector — issues 006 and 007.
 
 The classifier emits an advisory ``workflow_id``. After tool execution the
 synthesis prompt selector picks framing tuned to the workflow:
@@ -15,6 +15,8 @@ synthesis prompt selector picks framing tuned to the workflow:
   framing scoped to a user-supplied ``since`` cutoff.
 * ``W-10`` (panel med-safety scan) — emphasizes pharmacist-style review
   with the renal/hepatic/anticoagulant lens.
+* ``W-11`` (antibiotic stewardship) — single-patient abx review, lens on
+  the active abx + culture + WBC + duration / de-escalation.
 * anything else — falls through to the default framing.
 
 These tests exercise the selector through ``build_system_prompt`` (the
@@ -161,6 +163,7 @@ def test_w4_prompt_does_not_include_other_framings() -> None:
     assert "W-3 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
+    assert "W-11 SYNTHESIS" not in prompt
 
 
 def test_w5_prompt_does_not_include_other_framings() -> None:
@@ -170,6 +173,7 @@ def test_w5_prompt_does_not_include_other_framings() -> None:
     assert "W-3 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
+    assert "W-11 SYNTHESIS" not in prompt
 
 
 def test_w9_prompt_includes_recent_changes_framing() -> None:
@@ -199,6 +203,7 @@ def test_w9_prompt_does_not_include_other_framings() -> None:
     assert "W-4 SYNTHESIS" not in prompt
     assert "W-5 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
+    assert "W-11 SYNTHESIS" not in prompt
 
 
 def test_w2_prompt_does_not_include_w9_framing() -> None:
@@ -233,6 +238,7 @@ def test_w10_prompt_does_not_include_other_framings() -> None:
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
     assert "W-3 SYNTHESIS" not in prompt
+    assert "W-11 SYNTHESIS" not in prompt
 
 
 def test_w1_prompt_does_not_include_w10_framing() -> None:
@@ -243,9 +249,56 @@ def test_w1_prompt_does_not_include_w10_framing() -> None:
     assert "W-10 SYNTHESIS" not in prompt
 
 
+def test_w11_prompt_includes_abx_stewardship_framing() -> None:
+    """W-11 framing is single-patient antibiotic stewardship — review the
+    active abx alongside cultures and WBC trends. Marker phrases have to
+    be unique enough that we can assert it isn't present for other
+    workflows."""
+    prompt = _build("W-11")
+    assert "W-11 SYNTHESIS" in prompt
+    lowered = prompt.lower()
+    # The W-11 framing should reference antibiotic / stewardship vocab
+    # and the culture / WBC / duration lens.
+    assert (
+        "antibiotic" in lowered
+        or "stewardship" in lowered
+        or "broad-spectrum" in lowered
+    )
+    assert (
+        "culture" in lowered
+        or "wbc" in lowered
+        or "de-escalat" in lowered
+        or "duration" in lowered
+    )
+    # And it points at the composite tool so the LLM picks it.
+    assert "run_abx_stewardship" in prompt
+
+
+def test_w11_prompt_does_not_include_other_framings() -> None:
+    """The selector must not double-include framings."""
+    prompt = _build("W-11")
+    assert "W-1 SYNTHESIS" not in prompt
+    assert "W-2 SYNTHESIS" not in prompt
+    assert "W-3 SYNTHESIS" not in prompt
+    assert "W-4 SYNTHESIS" not in prompt
+    assert "W-5 SYNTHESIS" not in prompt
+    assert "W-9 SYNTHESIS" not in prompt
+    assert "W-10 SYNTHESIS" not in prompt
+
+
+def test_w10_prompt_does_not_include_w11_framing() -> None:
+    """W-10 (panel med-safety) and W-11 (single-patient abx stewardship)
+    are easy to confuse — both apply a med-safety lens — but their scope
+    differs (panel-wide vs single-pid). The selector must keep them
+    distinct."""
+    prompt = _build("W-10")
+    assert "W-11 SYNTHESIS" not in prompt
+
+
 def test_w7_prompt_uses_default_framing() -> None:
     """A workflow without a dedicated framing falls through cleanly: no
-    W-1, W-2, W-3, W-4, W-5, W-9, or W-10 framing appears in the prompt."""
+    W-1, W-2, W-3, W-4, W-5, W-9, W-10, or W-11 framing appears in the
+    prompt."""
     prompt = _build("W-7")
     assert "W-1 SYNTHESIS" not in prompt
     assert "W-2 SYNTHESIS" not in prompt
@@ -254,6 +307,7 @@ def test_w7_prompt_uses_default_framing() -> None:
     assert "W-5 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
+    assert "W-11 SYNTHESIS" not in prompt
 
 
 def test_unclear_workflow_uses_default_framing() -> None:
@@ -265,6 +319,7 @@ def test_unclear_workflow_uses_default_framing() -> None:
     assert "W-5 SYNTHESIS" not in prompt
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
+    assert "W-11 SYNTHESIS" not in prompt
 
 
 def test_default_framing_preserves_hard_rules() -> None:

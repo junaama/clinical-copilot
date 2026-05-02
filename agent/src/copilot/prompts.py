@@ -192,6 +192,41 @@ parallel.
 """
 
 
+_W11_SYNTHESIS_FRAMING = """\
+W-11 SYNTHESIS (antibiotic stewardship — single patient)
+The user is asking a stewardship question on ONE patient: are they on
+the right antibiotic, for the right indication, at the right duration?
+Lead with the active antibiotic regimen — name each agent, dose,
+route, and start date (from the MedicationRequest's ``authored_on``).
+Then show what's actually being given: the medication-administration
+trail with held/given/stopped lifecycle status (an abx ordered but
+held for AKI is materially different from one given on schedule).
+Then surface the microbiology evidence: culture orders authored over
+the window (ServiceRequest), and culture / sensitivity / gram-stain
+results as Observations under the laboratory category — quote the
+organism and any documented sensitivities verbatim. Then give a
+WBC / temperature / lactate trend if those are present, so the
+clinician can see whether the infection signal is improving. Close
+with two explicit prompts the clinician must verify in the chart:
+the duration of therapy so far (count days from ``authored_on``)
+and whether the empiric regimen still fits the now-known
+microbiology (de-escalation candidate, no-growth candidate to stop).
+**Do NOT recommend a specific abx or duration — surface the data;
+the clinician decides.** Cite every claim. The antibiotic codes that
+count include β-lactams (penicillins, cephalosporins, carbapenems,
+monobactams), glycopeptides (vancomycin), oxazolidinones (linezolid),
+fluoroquinolones, aminoglycosides, macrolides, lincosamides
+(clindamycin), tetracyclines, sulfonamides, nitroimidazoles
+(metronidazole), and antifungals when the question scopes that wide;
+ignore other med classes in the active-meds envelope. Prefer
+``run_abx_stewardship`` over chaining the four granular reads — it
+fans them out in parallel against a 72-hour lookback by default.
+If the indication or duration of therapy needs anchoring against
+admission or active problems, call ``get_active_problems`` granularly
+on top of the composite.
+"""
+
+
 _UNIFIED_BRIEF = """\
 You are Clinical Co-Pilot, an AI assistant for hospitalists rounding on
 admitted patients in OpenEMR. The user is logged in and has a CareTeam
@@ -344,8 +379,8 @@ def render_registry_block(
 
 
 # Workflow-id → synthesis framing block. Issue 006 wires W-2 and W-3;
-# issue 007 extends this map to W-1, W-4, W-5, W-9, and W-10 (and the
-# remaining W-8, W-11). W-4 and W-5 share one composite tool
+# issue 007 extends this map to W-1, W-4, W-5, W-9, W-10, and W-11 (W-8
+# remains pending). W-4 and W-5 share one composite tool
 # (``run_cross_cover_onboarding``) but get different framings here:
 # cross-cover orientation vs. family-meeting prep. Every workflow not in
 # the map falls through to ``""`` (default framing — the generic
@@ -358,6 +393,7 @@ _WORKFLOW_SYNTHESIS_FRAMING: dict[str, str] = {
     "W-5": _W5_SYNTHESIS_FRAMING,
     "W-9": _W9_SYNTHESIS_FRAMING,
     "W-10": _W10_SYNTHESIS_FRAMING,
+    "W-11": _W11_SYNTHESIS_FRAMING,
 }
 
 

@@ -15,10 +15,10 @@ This slice covers everything in the PRD's *Tool surface & routing* workflow ↔ 
 - [x] `run_cross_cover_onboarding(patient_id)` is registered. Implementation: wider-history fan-out (problems + meds + recent encounters + active orders + hospital-course notes). Gate enforced per nested call. *(Hours arg defaults to 168 / 7 days so the envelope captures the admission encounter, orders authored across the stay, and the chronological note trail. Single-pid fan-out under one ``asyncio.gather``; merge logic shared with ``run_per_patient_brief`` via the new ``_merge_envelopes`` helper. Defense-in-depth gate at every per-pid call.)*
 - [ ] `run_consult_orientation(patient_id, domain)` is registered. `domain` is a constrained string (e.g., `cardiology`, `nephrology`, `id`); the composite filters its fan-out to resources relevant to the domain. Gate enforced per nested call.
 - [x] `run_recent_changes(patient_id, since)` is registered. `since` is an ISO timestamp; composite returns a diff envelope of resources updated/created since that time. Gate enforced per nested call. *(``since`` is a required ISO 8601 timestamp; malformed and future values return ``error="invalid_since"``. The composite converts ``since`` → hours-ago and fans out the seven time-windowed granular reads (vitals, labs, encounters, orders, imaging, MARs, notes) under one ``asyncio.gather``; merge logic shared with the other single-pid composites via the ``_merge_envelopes`` helper. Active problems / active medications are intentionally excluded — they are current state, not changes; the W-9 framing tells the LLM to fetch them granularly when it needs to anchor a diff against current state.)*
-- [ ] `run_abx_stewardship(patient_id)` is registered. Implementation: active meds (filtered to antibiotics) + medication administrations + relevant cultures (`DiagnosticReport`/`Observation`) + recent orders. Gate enforced per nested call.
-- [~] Synthesis prompts are authored and registered for: W-1 (panel triage / "who do I need to see first?"), W-4 (cross-cover onboarding), W-5 (family-meeting prep — same data shape as W-4 reused via `run_cross_cover_onboarding` plus a different prompt), W-8 (consult orientation), W-9 (re-consult / what changed), W-10 (panel med safety), W-11 (antibiotic stewardship). *(W-1 + W-4 + W-5 + W-9 + W-10 framings landed; W-8, W-11 still pending.)*
-- [~] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 + W-4 + W-5 + W-9 + W-10 added; W-8, W-11 still unmapped — selector default fall-through still applies.)*
-- [~] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(`run_panel_triage`, `run_panel_med_safety`, `run_cross_cover_onboarding`, and `run_recent_changes` descriptions done; remaining two composites pending.)*
+- [x] `run_abx_stewardship(patient_id)` is registered. Implementation: active meds + medication administrations + recent labs (Observation laboratory — where culture sensitivities, gram stains, and WBC trends live) + recent orders (ServiceRequest — where culture orders are authored). Gate enforced per nested call. *(Antibiotic filtering lives at the synthesis layer: the composite returns *all* meds / MARs / labs / orders; the W-11 framing tells the LLM which RxNorm/SNOMED codes are antibiotics. Mirrors W-10's design — pre-filtering at the data layer would couple the composite to a specific abx vocabulary. Default lookback is 72 hours / 3 days so a full course of cultures and dosing fits in the envelope. Active problems and demographics are intentionally NOT in the fan-out; W-11 framing tells the LLM to fetch them granularly when it needs to anchor the indication or compute duration. Single-pid fan-out under one ``asyncio.gather``; merge logic shared with the other single-pid composites via the ``_merge_envelopes`` helper. Defense-in-depth gate at every nested call.)*
+- [~] Synthesis prompts are authored and registered for: W-1 (panel triage / "who do I need to see first?"), W-4 (cross-cover onboarding), W-5 (family-meeting prep — same data shape as W-4 reused via `run_cross_cover_onboarding` plus a different prompt), W-8 (consult orientation), W-9 (re-consult / what changed), W-10 (panel med safety), W-11 (antibiotic stewardship). *(W-1 + W-4 + W-5 + W-9 + W-10 + W-11 framings landed; W-8 still pending.)*
+- [~] The synthesis-prompt selector from `issues/006-per-patient-brief-composite.md` is extended to dispatch on all eleven workflow ids; W-6 and W-7 fall through to the default synthesis prompt. *(W-1 + W-4 + W-5 + W-9 + W-10 + W-11 added; W-8 still unmapped — selector default fall-through still applies.)*
+- [~] Tool descriptions guide the LLM clearly: "use `run_panel_triage` when the user asks about prioritization across the panel," "use `run_abx_stewardship` for antibiotic-specific questions," etc. *(`run_panel_triage`, `run_panel_med_safety`, `run_cross_cover_onboarding`, `run_recent_changes`, and `run_abx_stewardship` descriptions done; only `run_consult_orientation` description remaining.)*
 - [x] Panel-level composites (`run_panel_triage`, `run_panel_med_safety`) only operate over patients returned by `list_panel(user_id)`. Their nested per-pid calls are intrinsically CareTeam-bounded. *(Both composites now use `gate.list_panel(user_id)` for the roster source and re-run the per-call gate as defense in depth.)*
 - [ ] Eval cases added per workflow: at least one golden conversation per W-1, W-4, W-5, W-8, W-9, W-10, W-11. Per the PRD's *Testing Decisions*, the composite tools themselves are not unit-tested for synthesis quality; that is what the eval harness exists for. The gate enforcement and parallel fan-out behavior, however, are unit-tested. *(Eval-harness drift inherited from issue 003 still unaddressed — adding new W-1 cases on top of a drifting harness would compound the problem; deferred to a single recalibration pass alongside the remaining composites.)*
 
@@ -441,6 +441,133 @@ Notes for next iteration:
 - Eval-harness recalibration alongside the remaining two
   composites in one pass keeps from compounding the drift —
   unchanged from the prior slice's note.
+
+### 2026-05-02 — `run_abx_stewardship` + W-11 synthesis framing landed
+
+Fifth composite slice in issue 007 and the third single-pid composite
+this session. Same in-pid fan-out template as cross-cover and
+recent-changes; the branch set is tuned to the W-11 ("should this
+patient still be on broad-spectrum?") workflow: active medications
+(the abx orders themselves), medication administrations (was the abx
+actually given vs held), recent labs (Observation laboratory — where
+culture sensitivities, gram stains, and WBC trends live), and recent
+orders (ServiceRequest — where culture orders are authored).
+
+Key decisions:
+
+- **Antibiotic filtering at the synthesis layer, not the data
+  layer.** The composite returns *all* active meds / MARs / labs /
+  orders in the window; the W-11 framing names the antibiotic
+  classes the LLM should foreground (β-lactams, glycopeptides,
+  oxazolidinones, fluoroquinolones, aminoglycosides, macrolides,
+  lincosamides, tetracyclines, sulfonamides, nitroimidazoles,
+  antifungals when the question scopes that wide). Pre-filtering at
+  the data layer would couple the composite to a specific abx
+  vocabulary and break as new agents are added — the same reasoning
+  that kept renal/hepatic-marker filtering out of W-10's data layer.
+  Exhaustively documented in the framing so the LLM has a clear
+  decision boundary about which classes to surface.
+
+- **DiagnosticReport intentionally NOT in the fan-out.** The AC
+  named "cultures (DiagnosticReport/Observation)" but the existing
+  ``get_imaging_results`` granular tool filters DiagnosticReport to
+  ``category=radiology``; there's no generic-DiagnosticReport tool,
+  and adding one is scope creep. Cultures show up as Observations
+  under the laboratory category (sensitivities, organism IDs, gram
+  stains) — that path is covered by ``get_recent_labs``. The W-11
+  framing tells the LLM that if a *formal* microbiology
+  DiagnosticReport is needed beyond what the Observation path
+  surfaces, fall back to a granular call. Two-line rule, no new tool.
+
+- **Active problems and demographics are intentionally NOT in the
+  fan-out.** They are anchoring state, not stewardship signal.
+  Including them would balloon the envelope without serving the
+  lens. The W-11 framing tells the LLM to fetch them granularly
+  when it needs to anchor an indication or compute a precise
+  duration of therapy. Asserted by the source-label test
+  (``test_run_abx_stewardship_excludes_problems_and_demographics``)
+  so the boundary stays explicit.
+
+- **Wider lookback default (72h / 3 days).** Stewardship spans a
+  course, not just overnight. A 24-hour window would miss the
+  initial culture order and the early dose train; 7 days would over-
+  fetch. 72h captures a typical empiric-to-targeted decision window
+  while keeping the envelope tight. Asserted by the registration /
+  arg-shape test that ``hours`` defaults non-required.
+
+- **Defense-in-depth gate at every per-pid call.** Top-of-call gate
+  short-circuits the empty-pid / out-of-team path before paying
+  four gate-denied roundtrips; per-branch gate consults catch a
+  buggy refactor that removed the gate from a single read. Counted
+  via spy in the test (>= 4 expected).
+
+- **Tool description biases the LLM toward the composite for W-11
+  phrases.** "should this patient still be on broad-spectrum?",
+  "is Hayes still on vanc/zosyn?", "time to de-escalate?", "what's
+  growing on Linda's cultures and is the abx coverage right?", "how
+  many days has she been on cefepime?". Description names the four
+  branches and explicitly notes that active problems / demographics
+  are *not* in the fan-out so the LLM doesn't expect them. Description
+  also contrasts with ``run_panel_med_safety`` for the panel-level
+  case so the LLM picks correctly between W-10 and W-11.
+
+- **W-11 framing.** Lead with the active abx regimen (name, dose,
+  route, start date from ``authored_on``). Then the MAR trail
+  (held / given / stopped lifecycle). Then the microbiology evidence
+  (culture orders + sensitivities, quoted verbatim). Then the
+  WBC / temperature / lactate trend so the clinician can see whether
+  the infection signal is improving. Close with two explicit chart-
+  verification prompts: duration of therapy and whether the empiric
+  regimen still fits the now-known microbiology. Crucially the
+  framing forbids a recommendation: "do NOT recommend a specific
+  abx or duration — surface the data; the clinician decides."
+  Selector regression tests confirm W-11 framing doesn't bleed into
+  W-1 / W-2 / W-3 / W-4 / W-5 / W-9 / W-10 / W-7 / unclear (and
+  vice-versa). The W-10 ↔ W-11 mutual-exclusion test is explicit
+  because the two are easy to confuse — both apply a med-safety
+  lens, but W-10 spans the panel and W-11 is single-patient.
+
+Files changed:
+
+- ``agent/src/copilot/tools.py`` — ``run_abx_stewardship`` closure
+  + ``StructuredTool`` registration with description authored to
+  bias the LLM toward the composite for W-11 queries
+- ``agent/src/copilot/prompts.py`` — ``_W11_SYNTHESIS_FRAMING``
+  block; selector map extended to dispatch W-11
+- ``agent/tests/test_abx_stewardship.py`` (new, 12 cases) — envelope
+  shape, 4-branch ``sources_checked`` coverage, problems/demographics
+  exclusion (data boundary), four-resource fan-out via merged rows,
+  parallel fan-out wall-clock, gate enforcement per nested call,
+  careteam_denied for out-of-team pid, no_active_patient empty pid,
+  admin bypass, no-user-bound denial, registration / arg shape,
+  description signals W-11 intent
+- ``agent/tests/test_synthesis_prompt_selector.py`` — 3 new cases
+  (W-11 framing markers, W-11 ↮ everything-else mutual exclusion,
+  W-10 ↔ W-11 explicit mutual exclusion); existing W-7 / unclear /
+  W-4 / W-5 / W-9 / W-10 / default-framing cases extended to also
+  exclude W-11
+
+Tests: 257 backend unit tests pass (was 242; +12 abx-stewardship +
+3 selector cases) excluding the Postgres-required files which need
+a DB on the sandbox; ruff clean on changed files. The 14 inherited
+eval-harness failures from issue 003 carry over; recalibration
+remains scheduled for the joint pass alongside the remaining
+composite (``run_consult_orientation``).
+
+Notes for next iteration:
+
+- ``run_consult_orientation(patient_id, domain)`` + W-8 framing is
+  the only composite remaining. The fan-out shape varies by domain
+  (cardiology → echo + cath + cardiac labs; nephrology → BMP + UA +
+  dialysis encounters; ID → cultures + abx + WBC + temperature).
+  Likely uses a backed enum for ``domain`` and a per-domain
+  resource map composed at registration time. The
+  ``_merge_envelopes`` helper unblocks it cleanly — same fan-out
+  template as the other single-pid composites.
+- Eval-harness recalibration is best paired with the remaining
+  ``run_consult_orientation`` slice in one pass — adding W-11
+  cases on top of a drifting harness would compound the problem.
+  Unchanged from prior slices' notes.
 
 ## Blocked by
 
