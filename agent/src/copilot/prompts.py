@@ -59,6 +59,24 @@ sentences.
 """
 
 
+_W1_SYNTHESIS_FRAMING = """\
+W-1 SYNTHESIS (panel triage / "who do I need to see first?")
+The user is asking about prioritization across their CareTeam panel.
+Lead with a short ranked list of patients ordered by overnight signal:
+the patient with the highest concentration of new vitals, labs,
+encounters, and document refs goes first; routine / stable patients
+go last. For each ranked patient give one sentence — the active
+problem plus the single most clinically relevant signal (a fresh
+encounter beats a routine vital; an out-of-range lab beats a routine
+encounter). Cite the underlying resource for every claim. Close with
+a one-line summary of who looks stable so the clinician knows nothing
+was hidden by the ranking. Prefer ``run_panel_triage`` — it fans the
+change-signal probe out across the panel in parallel, and is
+materially faster than chaining ``get_my_patient_list`` plus per-pid
+calls.
+"""
+
+
 _W2_SYNTHESIS_FRAMING = """\
 W-2 SYNTHESIS (per-patient 24h brief)
 The user is asking for a brief on a single patient. Lead the response
@@ -238,10 +256,12 @@ def render_registry_block(
 
 
 # Workflow-id → synthesis framing block. Issue 006 wires W-2 and W-3;
-# issue 007 extends this map to W-1, W-4, W-5, W-8, W-9, W-10, W-11. Every
-# workflow not in the map falls through to ``""`` (default framing — the
-# generic WORKFLOW / FORMAT sections below already handle the common path).
+# issue 007 extends this map to W-1 (and the remaining W-4, W-5, W-8, W-9,
+# W-10, W-11). Every workflow not in the map falls through to ``""`` (default
+# framing — the generic WORKFLOW / FORMAT sections below already handle the
+# common path).
 _WORKFLOW_SYNTHESIS_FRAMING: dict[str, str] = {
+    "W-1": _W1_SYNTHESIS_FRAMING,
     "W-2": _W2_SYNTHESIS_FRAMING,
     "W-3": _W3_SYNTHESIS_FRAMING,
 }

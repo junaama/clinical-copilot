@@ -819,6 +819,88 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
             sentinel_fields=("body",),
         ).to_payload()
 
+    async def run_panel_triage(hours: int = 24) -> dict[str, Any]:
+        """Composite tool: rank the user's CareTeam panel by overnight signal.
+
+        Implementation per issue 007: ``gate.list_panel(user_id)`` →
+        per-pid parallel fan-out of ``get_change_signal`` (24h count
+        probe), ``get_patient_demographics``, and ``get_active_problems``.
+        All per-pid sub-fans-out run concurrently under one outer
+        ``asyncio.gather``, so wall-clock time is roughly one slow call
+        regardless of panel size.
+
+        Authorization is intrinsically CareTeam-bounded by virtue of
+        ``list_panel`` returning only the user's own roster — no
+        out-of-team patient can leak through. Each per-pid nested call
+        re-runs the gate as defense in depth: a buggy refactor that
+        widened ``list_panel`` would still be caught at the call site.
+
+        The merge envelope is byte-for-byte the granular tool shape
+        (``rows``, ``sources_checked``, ``latency_ms``, ``error``,
+        ``ok``) so the verifier loop and citation cards downstream
+        don't have to special-case the composite.
+        """
+        user_id = get_active_user_id() or ""
+        roster = await gate.list_panel(user_id)
+
+        if not roster:
+            # Empty panel is not an error — the user just has no patients
+            # assigned yet. Return an empty-but-ok envelope so the LLM
+            # can say so without a refusal narrative.
+            return ToolResult(
+                ok=True,
+                rows=(),
+                sources_checked=("CareTeam (panel)",),
+                latency_ms=0,
+            ).to_payload()
+
+        started = time.monotonic()
+
+        async def _per_pid(pid: str) -> tuple[dict[str, Any], ...]:
+            return await asyncio.gather(
+                get_change_signal(pid, hours),
+                get_patient_demographics(pid),
+                get_active_problems(pid),
+            )
+
+        nested = await asyncio.gather(*[_per_pid(p.patient_id) for p in roster])
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+
+        merged_rows: list[dict[str, Any]] = []
+        merged_sources: list[str] = ["CareTeam (panel)"]
+        first_error: str | None = None
+        any_failed = False
+        auth_denial_values = {
+            d.value for d in AuthDecision if d is not AuthDecision.ALLOWED
+        }
+        for per_pid_results in nested:
+            for payload in per_pid_results:
+                if (
+                    not payload.get("ok")
+                    and payload.get("error") in auth_denial_values
+                ):
+                    # Defense in depth: ``list_panel`` shouldn't return an
+                    # out-of-team patient, but if it ever does the per-call
+                    # gate catches it. Bubble the same denial the LLM
+                    # would see for a granular call.
+                    return payload
+                merged_rows.extend(payload.get("rows") or [])
+                for source in payload.get("sources_checked") or []:
+                    if source not in merged_sources:
+                        merged_sources.append(source)
+                if not payload.get("ok"):
+                    any_failed = True
+                    if first_error is None:
+                        first_error = payload.get("error")
+
+        return {
+            "ok": not any_failed,
+            "rows": merged_rows,
+            "sources_checked": merged_sources,
+            "error": first_error,
+            "latency_ms": elapsed_ms,
+        }
+
     async def run_per_patient_brief(
         patient_id: str, hours: int = 24
     ) -> dict[str, Any]:
@@ -1016,6 +1098,26 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
                 "verification is unchanged. For a single targeted question "
                 "(one specific lab, one specific vital), use the granular "
                 "tool instead."
+            ),
+        ),
+        StructuredTool.from_function(
+            coroutine=run_panel_triage,
+            name="run_panel_triage",
+            description=(
+                "Composite panel triage: rank the user's CareTeam panel by "
+                "overnight signal so the clinician knows who to see first. "
+                "Implementation: list_panel → per-pid parallel fan-out of "
+                "change-signal counts (vitals, labs, encounters, document "
+                "refs in the lookback window, default 24h), demographics, "
+                "and active problems. Use this tool whenever the user asks "
+                "about prioritization across the panel — 'who needs "
+                "attention?', 'who do I need to see first?', 'anyone "
+                "deteriorating?', 'morning rounds order'. Returns the same "
+                "envelope shape (rows, sources_checked, latency_ms, error, "
+                "ok) as a granular tool. The roster is intrinsically "
+                "CareTeam-bounded; no patient outside the user's panel can "
+                "appear. No arguments other than an optional ``hours`` "
+                "lookback window."
             ),
         ),
     ]
