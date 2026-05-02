@@ -26,6 +26,7 @@ from copilot.smart import (
     exchange_code_for_token,
     generate_code_verifier,
     generate_state,
+    refresh_access_token,
     token_bundle_from_response,
 )
 
@@ -219,6 +220,85 @@ async def test_exchange_code_raises_on_non_200() -> None:
                 client=client,
             )
     assert "401" in str(excinfo.value)
+
+
+async def test_refresh_access_token_posts_refresh_grant() -> None:
+    """``refresh_access_token`` POSTs ``grant_type=refresh_token`` with the
+    stored refresh token plus the OAuth client credentials, mirroring the
+    code-exchange shape the EHR's token endpoint already accepts."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        for kv in request.content.decode().split("&"):
+            k, _, v = kv.partition("=")
+            captured[k] = v.replace("%2F", "/").replace("%2B", "+")
+        return httpx.Response(
+            200,
+            json={
+                "access_token": "at-refreshed",
+                "refresh_token": "rt-rotated",
+                "id_token": "id.jwt.refreshed",
+                "scope": "openid fhirUser user/Patient.rs",
+                "expires_in": 3600,
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        payload = await refresh_access_token(
+            token_endpoint="https://openemr.example/oauth2/default/token",
+            refresh_token="rt-old",
+            client_id="copilot-standalone",
+            client_secret="standalone-secret",
+            client=client,
+        )
+
+    assert payload["access_token"] == "at-refreshed"
+    assert captured["grant_type"] == "refresh_token"
+    assert captured["refresh_token"] == "rt-old"
+    assert captured["client_id"] == "copilot-standalone"
+    assert captured["client_secret"] == "standalone-secret"
+
+
+async def test_refresh_access_token_omits_secret_for_public_client() -> None:
+    """Public clients (no secret) must not send an empty ``client_secret`` —
+    OpenEMR's token endpoint rejects an empty credential as ``invalid_client``."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        for kv in request.content.decode().split("&"):
+            k, _, v = kv.partition("=")
+            captured[k] = v
+        return httpx.Response(200, json={"access_token": "at", "expires_in": 3600})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        await refresh_access_token(
+            token_endpoint="https://openemr.example/oauth2/default/token",
+            refresh_token="rt-old",
+            client_id="public-client",
+            client_secret="",
+            client=client,
+        )
+
+    assert "client_secret" not in captured
+
+
+async def test_refresh_access_token_raises_on_non_200() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(RuntimeError) as excinfo:
+            await refresh_access_token(
+                token_endpoint="https://openemr.example/oauth2/default/token",
+                refresh_token="rt-old",
+                client_id="copilot-standalone",
+                client_secret="secret",
+                client=client,
+            )
+    assert "400" in str(excinfo.value)
 
 
 def test_token_bundle_from_response_parses_known_fields() -> None:

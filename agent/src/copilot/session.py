@@ -20,10 +20,15 @@ or instantiate ``InMemorySessionStore`` directly for tests.
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
+
+# Refresh tokens this many seconds before their nominal expiry so an in-flight
+# request whose first leg uses the bundle doesn't race a server that's already
+# rotated the access token internally.  Mirrors smart.py's TOKEN_TTL_SLACK_SECONDS.
+DEFAULT_REFRESH_SKEW_SECONDS = 30
 
 # ---------------------------------------------------------------------------
 # Data rows
@@ -446,3 +451,61 @@ class SessionGateway:
 
     async def get_token_bundle(self, session_id: str) -> TokenBundleRow | None:
         return await self._store.get_token_bundle(session_id)
+
+    async def get_fresh_token_bundle(
+        self,
+        session_id: str,
+        *,
+        refresh_fn: Callable[[str], Awaitable[dict[str, Any]]],
+        skew_seconds: int = DEFAULT_REFRESH_SKEW_SECONDS,
+        now: float | None = None,
+    ) -> TokenBundleRow | None:
+        """Return a non-expired token bundle for ``session_id``, refreshing if needed.
+
+        - Returns ``None`` if no bundle exists (caller forces re-login).
+        - If ``expires_at`` is more than ``skew_seconds`` away, returns the
+          stored bundle as-is (the hot path).
+        - Otherwise calls ``refresh_fn(refresh_token)`` to mint a new access
+          token, persists the rotated bundle, and returns it.
+
+        ``refresh_fn`` is the seam: callers inject the actual httpx call
+        (``smart.refresh_access_token``) so the gateway stays unaware of
+        OAuth client credentials and the token endpoint.
+
+        Refresh failures (``RuntimeError`` from the helper) propagate. The
+        stale bundle is **not** evicted on failure — the caller decides
+        whether to clear it or surface a "please log in again" UX.
+        """
+        bundle = await self._store.get_token_bundle(session_id)
+        if bundle is None:
+            return None
+
+        clock = now if now is not None else time.time()
+        if bundle.expires_at - clock > skew_seconds:
+            return bundle
+
+        payload = await refresh_fn(bundle.refresh_token)
+        access_token = str(payload.get("access_token") or "")
+        if not access_token:
+            raise RuntimeError(
+                "refresh_fn returned no access_token; cannot rotate bundle"
+            )
+
+        # Some token endpoints don't rotate the refresh token. Carry the old
+        # one forward so the next refresh still has a credential to present.
+        new_refresh = str(payload.get("refresh_token") or "") or bundle.refresh_token
+        new_id_token = str(payload.get("id_token") or "") or bundle.id_token
+        new_scope = str(payload.get("scope") or "") or bundle.scope
+        expires_in = int(payload.get("expires_in") or 3600)
+
+        rotated = TokenBundleRow(
+            session_id=session_id,
+            access_token=access_token,
+            refresh_token=new_refresh,
+            id_token=new_id_token,
+            scope=new_scope,
+            issuer=bundle.issuer,
+            expires_at=clock + expires_in,
+        )
+        await self._store.put_token_bundle(rotated)
+        return rotated

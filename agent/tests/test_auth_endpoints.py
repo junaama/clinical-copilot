@@ -414,3 +414,245 @@ async def test_panel_admin_sees_full_set(
     body = resp.json()
     pids = sorted(p["patient_id"] for p in body["patients"])
     assert pids == ["fixture-1", "fixture-2", "fixture-3", "fixture-4", "fixture-5"]
+
+
+# ---------- POST /chat: standalone token refresh ----------
+
+
+class _CapturingChatGraph:
+    """Records the inputs the chat handler passes into the graph so the test
+    can assert which access_token reached the tool layer."""
+
+    def __init__(self) -> None:
+        self.captured_inputs: dict[str, Any] | None = None
+
+    async def ainvoke(
+        self, inputs: dict[str, Any], config: dict[str, Any]
+    ) -> dict[str, Any]:
+        from langchain_core.messages import AIMessage
+
+        self.captured_inputs = inputs
+        return {
+            "messages": [AIMessage(content="ok")],
+            "patient_id": inputs.get("patient_id"),
+            "workflow_id": "default",
+            "classifier_confidence": 0.0,
+            "block": {"kind": "plain", "lead": "ok"},
+        }
+
+
+async def _seed_session_with_bundle(
+    fhir_user: str,
+    *,
+    access_token: str,
+    refresh_token: str,
+    expires_at: float,
+) -> str:
+    """Seed a SessionRow + TokenBundleRow directly via the gateway.  Returns
+    the cookie value so the test can call /chat with it."""
+    import time
+
+    from copilot import server as server_mod
+    from copilot.session import SessionRow, TokenBundleRow
+
+    gateway = server_mod.app.state.session_gateway
+    session_id = "refresh-test-" + fhir_user.replace("/", "-")
+    now = time.time()
+    await gateway.create_session(
+        SessionRow(
+            session_id=session_id,
+            oe_user_id=42,
+            display_name="Dr. Refresh",
+            fhir_user=fhir_user,
+            created_at=now,
+            expires_at=now + 28800,
+        )
+    )
+    await gateway.upsert_token_bundle(
+        TokenBundleRow(
+            session_id=session_id,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            id_token="id.jwt",
+            scope="openid fhirUser user/Patient.rs",
+            issuer="https://openemr.example/apis/default/fhir",
+            expires_at=expires_at,
+        )
+    )
+    return session_id
+
+
+async def test_chat_refreshes_expired_standalone_token(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Standalone /chat call with an expired bundle refreshes transparently
+    before invoking the graph; the rotated access token reaches the tool
+    layer (asserted via captured graph inputs) and the rotated bundle is
+    persisted (asserted via a follow-up gateway read)."""
+    import time
+
+    from copilot import server as server_mod
+
+    capturing_graph = _CapturingChatGraph()
+    server_mod.app.state.graph = capturing_graph
+
+    cookie = await _seed_session_with_bundle(
+        "Practitioner/practitioner-dr-smith",
+        access_token="at-stale",
+        refresh_token="rt-old",
+        expires_at=time.time() - 60,  # already expired
+    )
+
+    refresh_calls: list[dict[str, Any]] = []
+
+    async def _fake_refresh(*, refresh_token: str, **kwargs: Any) -> dict[str, Any]:
+        refresh_calls.append({"refresh_token": refresh_token, **kwargs})
+        return {
+            "access_token": "at-rotated",
+            "refresh_token": "rt-rotated",
+            "scope": "openid fhirUser user/Patient.rs",
+            "expires_in": 3600,
+        }
+
+    with patch(
+        "copilot.server.discover_smart_endpoints",
+        new_callable=AsyncMock,
+        return_value={
+            "authorization_endpoint": "https://openemr.example/oauth2/default/authorize",
+            "token_endpoint": "https://openemr.example/oauth2/default/token",
+        },
+    ), patch(
+        "copilot.server.refresh_access_token",
+        side_effect=_fake_refresh,
+    ):
+        resp = auth_client.post(
+            "/chat",
+            cookies={"copilot_session": cookie},
+            json={
+                "conversation_id": "conv-refresh-1",
+                "message": "what changed overnight on Eduardo?",
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0]["refresh_token"] == "rt-old"
+    assert refresh_calls[0]["client_id"] == "copilot-standalone"
+
+    # Rotated token reached the graph.
+    assert capturing_graph.captured_inputs is not None
+    assert capturing_graph.captured_inputs["smart_access_token"] == "at-rotated"
+
+    # Rotated bundle was persisted to the store.
+    gateway = server_mod.app.state.session_gateway
+    persisted = await gateway.get_token_bundle(cookie)
+    assert persisted is not None
+    assert persisted.access_token == "at-rotated"
+    assert persisted.refresh_token == "rt-rotated"
+
+
+async def test_chat_skips_refresh_when_bundle_unexpired(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hot path: a /chat call with plenty of life on the access token does
+    not pay the token-endpoint round-trip — the stored access token is
+    passed through to the graph as-is."""
+    import time
+
+    from copilot import server as server_mod
+
+    capturing_graph = _CapturingChatGraph()
+    server_mod.app.state.graph = capturing_graph
+
+    cookie = await _seed_session_with_bundle(
+        "Practitioner/practitioner-dr-smith",
+        access_token="at-still-good",
+        refresh_token="rt-unused",
+        expires_at=time.time() + 3600,  # comfortably alive
+    )
+
+    refresh_calls: list[Any] = []
+
+    async def _should_not_refresh(**_kw: Any) -> dict[str, Any]:
+        refresh_calls.append("called")
+        return {}
+
+    with patch(
+        "copilot.server.discover_smart_endpoints",
+        new_callable=AsyncMock,
+        return_value={
+            "authorization_endpoint": "https://openemr.example/oauth2/default/authorize",
+            "token_endpoint": "https://openemr.example/oauth2/default/token",
+        },
+    ), patch(
+        "copilot.server.refresh_access_token",
+        side_effect=_should_not_refresh,
+    ):
+        resp = auth_client.post(
+            "/chat",
+            cookies={"copilot_session": cookie},
+            json={
+                "conversation_id": "conv-hotpath-1",
+                "message": "tell me about Eduardo",
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert refresh_calls == []  # no refresh round-trip
+    assert capturing_graph.captured_inputs is not None
+    assert (
+        capturing_graph.captured_inputs["smart_access_token"] == "at-still-good"
+    )
+
+
+async def test_chat_continues_when_refresh_fails(
+    auth_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the refresh-token grant is refused (e.g. revoked), /chat does NOT
+    500 — it logs the failure and continues with an empty access token.
+    The FHIR layer will then return tool-level auth failures that the UI
+    translates to a re-login prompt."""
+    import time
+
+    from copilot import server as server_mod
+
+    capturing_graph = _CapturingChatGraph()
+    server_mod.app.state.graph = capturing_graph
+
+    cookie = await _seed_session_with_bundle(
+        "Practitioner/practitioner-dr-smith",
+        access_token="at-stale",
+        refresh_token="rt-revoked",
+        expires_at=time.time() - 1,
+    )
+
+    async def _refused(**_kw: Any) -> dict[str, Any]:
+        raise RuntimeError(
+            "token endpoint refused refresh (400): {\"error\":\"invalid_grant\"}"
+        )
+
+    with patch(
+        "copilot.server.discover_smart_endpoints",
+        new_callable=AsyncMock,
+        return_value={
+            "authorization_endpoint": "https://openemr.example/oauth2/default/authorize",
+            "token_endpoint": "https://openemr.example/oauth2/default/token",
+        },
+    ), patch(
+        "copilot.server.refresh_access_token",
+        side_effect=_refused,
+    ):
+        resp = auth_client.post(
+            "/chat",
+            cookies={"copilot_session": cookie},
+            json={
+                "conversation_id": "conv-refresh-fail",
+                "message": "anything",
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert capturing_graph.captured_inputs is not None
+    # No rotated token — the graph receives the empty default since the
+    # refresh failed and the body didn't supply one.
+    assert capturing_graph.captured_inputs["smart_access_token"] == ""

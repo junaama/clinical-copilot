@@ -61,6 +61,7 @@ from .smart import (
     generate_code_verifier,
     generate_state,
     get_default_stores,
+    refresh_access_token,
     token_bundle_from_response,
 )
 from .title_summarizer import (
@@ -194,6 +195,47 @@ def _assert_patient_context_matches(
     return None
 
 
+async def _resolve_fresh_standalone_bundle(
+    session_id: str,
+    gateway: SessionGateway,
+    settings: Any,
+) -> TokenBundleRow | None:
+    """Return a non-expired token bundle for the standalone session.
+
+    If the stored bundle is within the gateway's refresh-skew of expiring
+    (or already expired), POSTs ``grant_type=refresh_token`` to the OpenEMR
+    token endpoint and persists the rotated bundle before returning it.
+    The user does not have to log in again.
+
+    Returns ``None`` when:
+    - the session has no stored bundle (typical in dev/test paths that
+      skip the OAuth dance), or
+    - the standalone OAuth client isn't configured (``SMART_STANDALONE_CLIENT_ID``
+      is empty — no credentials to present at the token endpoint).
+
+    Refresh failures (token endpoint refusal, e.g. revoked refresh token)
+    propagate as ``RuntimeError`` so the caller can decide whether to fail
+    the request or log and continue with an empty access token.
+    """
+    if not settings.smart_standalone_client_id:
+        return await gateway.get_token_bundle(session_id)
+
+    config = await discover_smart_endpoints(settings.openemr_fhir_base)
+    token_endpoint = config.get("token_endpoint")
+    if not token_endpoint:
+        return await gateway.get_token_bundle(session_id)
+
+    async def _refresh(rt: str) -> dict[str, Any]:
+        return await refresh_access_token(
+            token_endpoint=token_endpoint,
+            refresh_token=rt,
+            client_id=settings.smart_standalone_client_id,
+            client_secret=settings.smart_standalone_client_secret.get_secret_value(),
+        )
+
+    return await gateway.get_fresh_token_bundle(session_id, refresh_fn=_refresh)
+
+
 async def _seed_panel_registry(
     bundle: Any | None, user_id: str, settings: Any
 ) -> dict[str, dict[str, Any]]:
@@ -282,6 +324,26 @@ async def chat(
         if session is not None:
             _, practitioner_id = parse_fhir_user(session.fhir_user)
             user_id = practitioner_id
+            # Token refresh on access-token expiry.  When the body didn't
+            # supply a token override, fetch the standalone bundle and
+            # refresh it transparently if it's within skew of expiring —
+            # so a chat call that arrives 7h59m into an 8h session still
+            # gets a live access token without forcing the user back to
+            # /auth/login.  Refresh failures (revoked refresh token, token
+            # endpoint outage) are logged and the request continues with
+            # an empty access token; the FHIR layer will then surface the
+            # auth failure to the user, which the UI translates to a
+            # re-login prompt.
+            if not smart_access_token:
+                try:
+                    fresh_bundle = await _resolve_fresh_standalone_bundle(
+                        copilot_session, gateway, settings
+                    )
+                except RuntimeError as exc:
+                    _log.warning("standalone token refresh failed: %s", exc)
+                    fresh_bundle = None
+                if fresh_bundle is not None:
+                    smart_access_token = fresh_bundle.access_token
 
     # EHR-launch path keeps its single-patient pin: the chart-sidebar embed
     # expects every /chat call to be scoped to the launched patient.
