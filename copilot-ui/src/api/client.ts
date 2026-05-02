@@ -43,6 +43,8 @@ export async function sendChat(opts: SendChatOptions): Promise<ChatResult> {
         Accept: 'application/json',
       },
       body: JSON.stringify(opts.request),
+      // Standalone path is cookie-authenticated; EHR-launch ignores the cookie.
+      credentials: 'include',
       signal: opts.signal,
     });
   } catch (error: unknown) {
