@@ -57,3 +57,19 @@ INSERT IGNORE INTO `oauth_clients` (
     1, 0, 0,
     NOW()
 );
+
+-- Standalone-launch client used by the full-screen Co-Pilot portal. Same stub
+-- pattern as copilot-launcher; the secret/redirect/scope are populated by
+-- Service\CopilotClientRegistration on first module enable.
+INSERT IGNORE INTO `oauth_clients` (
+    `client_id`, `client_role`, `client_name`,
+    `client_secret`, `redirect_uri`, `grant_types`, `scope`,
+    `is_confidential`, `is_enabled`, `skip_ehr_launch_authorization_flow`,
+    `register_date`
+) VALUES (
+    'copilot-standalone', 'user', 'Clinical Co-Pilot (Standalone)',
+    '', 'http://localhost:8000/auth/smart/callback', 'authorization_code',
+    'openid fhirUser launch/user offline_access user/Patient.rs user/Observation.rs user/Condition.rs user/MedicationRequest.rs user/MedicationAdministration.rs user/Encounter.rs user/AllergyIntolerance.rs user/DocumentReference.rs user/DiagnosticReport.rs user/ServiceRequest.rs user/CareTeam.rs user/Practitioner.rs',
+    1, 0, 0,
+    NOW()
+);

@@ -42,6 +42,11 @@ final class Bootstrap
             $copilotAppUrl = 'http://localhost:5173';
         }
 
+        $agentBackendUrl = OEGlobalsBag::getInstance()->getString('copilot_agent_backend_url');
+        if ($agentBackendUrl === '') {
+            $agentBackendUrl = 'http://localhost:8000';
+        }
+
         // Pull session identifiers at subscribe-time. They're stable for the
         // page lifecycle, and reading them here keeps the listener pure.
         $sessionUserId = isset($_SESSION['authUserID']) && is_numeric($_SESSION['authUserID'])
@@ -65,15 +70,20 @@ final class Bootstrap
             $sidebar->onPatientPagePostLoad(...)
         );
 
-        // Best-effort: ensure the SMART client has a generated secret. Skipped
-        // entirely when globals.copilot_oauth_client_secret is already set,
-        // to avoid hitting the DB on every page load. Idempotent regardless.
-        if (OEGlobalsBag::getInstance()->getString('copilot_oauth_client_secret') === '') {
+        // Best-effort: ensure both SMART clients (EHR-launch + standalone) have
+        // generated secrets. Skipped entirely when both secrets are already
+        // present, to avoid hitting the DB on every page load. Idempotent
+        // regardless — the inner method short-circuits per-client.
+        $launcherSecret = OEGlobalsBag::getInstance()->getString('copilot_oauth_client_secret');
+        $standaloneSecret = OEGlobalsBag::getInstance()
+            ->getString('copilot_oauth_standalone_client_secret');
+        if ($launcherSecret === '' || $standaloneSecret === '') {
             try {
                 $registration = new CopilotClientRegistration(
                     db: new QueryUtilsExecutor(),
                     logger: $logger,
                     copilotAppUrl: $copilotAppUrl,
+                    agentBackendUrl: $agentBackendUrl,
                     secretGenerator: static fn (): string => bin2hex(random_bytes(32)),
                 );
                 $registration->ensureRegistered();

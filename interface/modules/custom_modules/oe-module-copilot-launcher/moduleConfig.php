@@ -37,10 +37,22 @@ return [
             'description' => 'Base URL of the Clinical Co-Pilot frontend (origin of the iframe).',
         ],
         [
+            'name' => 'copilot_agent_backend_url',
+            'type' => 'text',
+            'default' => 'http://localhost:8000',
+            'description' => 'Base URL of the Clinical Co-Pilot agent backend (used as the redirect host for the standalone OAuth client).',
+        ],
+        [
             'name' => 'copilot_oauth_client_secret',
             'type' => 'text',
             'default' => '',
-            'description' => 'OAuth2 client secret used by the Co-Pilot backend (auto-generated at install time).',
+            'description' => 'OAuth2 client secret for the EHR-launch client copilot-launcher (auto-generated at install time).',
+        ],
+        [
+            'name' => 'copilot_oauth_standalone_client_secret',
+            'type' => 'text',
+            'default' => '',
+            'description' => 'OAuth2 client secret for the standalone client copilot-standalone (auto-generated at install time).',
         ],
     ],
 
