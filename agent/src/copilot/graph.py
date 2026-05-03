@@ -69,6 +69,36 @@ class WorkflowDecision(BaseModel):
     )
 
 
+def _route_after_classifier(
+    *,
+    workflow_id: str,
+    confidence: float,
+    patient_id: str | None,
+    focus_pid: str | None,
+) -> str:
+    """Decide whether the post-classifier edge goes to ``agent`` or ``clarify``.
+
+    The classifier sees only the latest user message — it does not know
+    whether ``patient_id`` (from session_context, e.g. EHR-launch) or
+    ``focus_pid`` (resolved earlier this conversation) is already bound in
+    state. For single-patient questions like "What happened to this patient
+    overnight?" the classifier reasonably emits ``unclear`` / low confidence,
+    which used to route every such turn into ``clarify_node`` (issue 018).
+
+    Whenever a patient is already bound, short-circuit to ``agent``: the
+    agent's system prompt + tool surface can disambiguate intent itself,
+    and ``clarify_node``'s "tell me which patient" question is useless
+    when the patient is already named in the request context. Empty
+    strings (the panel-spanning UC-1 / UC-10 shape, where the eval runner
+    intentionally passes ``patient_id=""``) are treated as unbound.
+    """
+    if (patient_id or "").strip() or (focus_pid or "").strip():
+        return "agent"
+    if workflow_id == "unclear" or confidence < CLASSIFIER_CONFIDENCE_THRESHOLD:
+        return "clarify"
+    return "agent"
+
+
 _CITE_PATTERN = re.compile(
     r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]\s*/?\s*>',
     flags=re.IGNORECASE,
@@ -251,11 +281,14 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         latest = user_messages[-1].content
         latest = latest if isinstance(latest, str) else str(latest)
 
+        patient_id = state.get("patient_id")
+        focus_pid = state.get("focus_pid")
+
         try:
             decision = await classifier_model.ainvoke(
                 [SystemMessage(content=CLASSIFIER_SYSTEM), HumanMessage(content=latest)]
             )
-        except Exception as exc:  # noqa: BLE001 — classifier failure fails open to clarify
+        except Exception as exc:  # noqa: BLE001 — classifier failure must not crash the turn
             _log.warning(
                 "classifier_failed model=%s err=%s: %s",
                 settings.llm_model,
@@ -263,26 +296,30 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
                 exc,
                 exc_info=True,
             )
+            # Fail open to ``agent`` when we already know which patient the
+            # user is asking about; otherwise fall back to clarify.
+            fallback = _route_after_classifier(
+                workflow_id="unclear",
+                confidence=0.0,
+                patient_id=patient_id,
+                focus_pid=focus_pid,
+            )
             return Command(
-                goto="clarify",
+                goto=fallback,
                 update={"workflow_id": "unclear", "classifier_confidence": 0.0},
             )
 
         workflow_id = decision.workflow_id
         confidence = decision.confidence
 
-        # Below threshold or explicitly unclear → ask a disambiguating
-        # question. The classifier is otherwise advisory and never gates
-        # the tool surface — the only routing decision left is
-        # clarify-vs-agent.
-        if workflow_id == "unclear" or confidence < CLASSIFIER_CONFIDENCE_THRESHOLD:
-            return Command(
-                goto="clarify",
-                update={"workflow_id": workflow_id, "classifier_confidence": confidence},
-            )
-
+        goto = _route_after_classifier(
+            workflow_id=workflow_id,
+            confidence=confidence,
+            patient_id=patient_id,
+            focus_pid=focus_pid,
+        )
         return Command(
-            goto="agent",
+            goto=goto,
             update={"workflow_id": workflow_id, "classifier_confidence": confidence},
         )
 
