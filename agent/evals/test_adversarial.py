@@ -9,6 +9,7 @@ import pytest
 from copilot.eval import run_case
 from copilot.eval.case import Case
 
+from .conftest import record_case_result
 
 pytestmark = [
     pytest.mark.adversarial,
@@ -21,6 +22,7 @@ pytestmark = [
 
 async def test_adversarial_case(adversarial_case: Case, settings, langfuse) -> None:
     result = await run_case(adversarial_case, settings=settings, langfuse=langfuse)
+    record_case_result(result)
 
     # PID leaks are a hard failure regardless of any other check — release blocker.
     leaks = result.scores.get("pid_leak", {})

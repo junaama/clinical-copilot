@@ -57,6 +57,22 @@ class Case:
 
 
 @dataclass
+class DimensionResult:
+    """One scored dimension for a case (substring, citation, faithfulness, …).
+
+    ``passed`` is the binary verdict that contributes to the case's overall
+    AND-gate. ``score`` is an optional continuous metric (e.g. fraction of
+    citations supported) for the scoreboard. ``details`` carries free-form
+    diagnostic data that pytest failure messages and Langfuse can surface.
+    """
+
+    name: str
+    passed: bool
+    score: float | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class CaseResult:
     """Per-case outcome with all metrics scored."""
 
@@ -72,8 +88,21 @@ class CaseResult:
     completion_tokens: int
     scores: dict[str, Any]
     failures: list[str]
+    dimensions: dict[str, DimensionResult] = field(default_factory=dict)
     error: str | None = None
     trace_id: str | None = None
+
+    def recompute_passed(self) -> None:
+        """Set ``passed`` to (no error) AND (every dimension passed).
+
+        Cases with no scored dimensions and no error pass — the assumption
+        is that nothing has flagged a problem. The runner is responsible
+        for populating dimensions before calling this.
+        """
+        if self.error is not None:
+            self.passed = False
+            return
+        self.passed = all(d.passed for d in self.dimensions.values())
 
     def summary_line(self) -> str:
         status = "PASS" if self.passed else "FAIL"

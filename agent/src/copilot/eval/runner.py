@@ -20,7 +20,7 @@ from ..config import Settings, get_settings
 from ..graph import build_graph
 from ..observability import get_callback_handler
 from . import evaluators
-from .case import Case, CaseResult
+from .case import Case, CaseResult, DimensionResult
 from .langfuse_client import LangfuseClient
 
 _log = logging.getLogger(__name__)
@@ -145,46 +145,117 @@ async def run_case(
         "adversarial": adversarial,
     }
 
+    # Score each gate as a DimensionResult. Overall pass = no error AND every
+    # dimension passes (CaseResult.recompute_passed below). The ``failures``
+    # list keeps a flat human-readable view for pytest output; it mirrors the
+    # dimensions exactly, so the test failure message stays identical to the
+    # pre-refactor shape.
+    dimensions: dict[str, DimensionResult] = {}
     failures: list[str] = []
+
     if error is not None:
         failures.append(f"runtime error: {error}")
-    if not decision_score["matched"]:
+
+    decision_passed = bool(decision_score["matched"])
+    dimensions["decision"] = DimensionResult(
+        name="decision",
+        passed=decision_passed,
+        score=1.0 if decision_passed else 0.0,
+        details=decision_score,
+    )
+    if not decision_passed:
         failures.append(
             f"decision mismatch: expected {case.expected_decision!r}, got {decision!r}"
         )
+
     # NOTE: workflow_match is recorded for trend analysis but not enforced as
     # a gate yet. Until the graph branches by workflow_id (UC-1 triage flow
     # lands separately), W-2/W-7 etc. all route to the same agent and the
     # label distinction is informational. Re-enable as a hard failure when
     # routing actually branches per workflow.
-    if cite_resolution["unresolved"]:
+
+    cite_resolution_passed = not cite_resolution["unresolved"]
+    dimensions["citation_resolution"] = DimensionResult(
+        name="citation_resolution",
+        passed=cite_resolution_passed,
+        score=float(cite_resolution["score"]),
+        details=cite_resolution,
+    )
+    if not cite_resolution_passed:
         failures.append(
             f"unresolved citations: {cite_resolution['unresolved']}"
         )
-    if cite_completeness["score"] < case.citation_completeness_min:
+
+    citation_passed = cite_completeness["score"] >= case.citation_completeness_min
+    dimensions["citation"] = DimensionResult(
+        name="citation",
+        passed=citation_passed,
+        score=float(cite_completeness["score"]),
+        details=cite_completeness,
+    )
+    if not citation_passed:
         failures.append(
             f"citation completeness {cite_completeness['score']:.2f} < "
             f"required {case.citation_completeness_min:.2f}; missing={cite_completeness['missing']}"
         )
-    if facts["missing"]:
+
+    substring_passed = not facts["missing"]
+    dimensions["substring"] = DimensionResult(
+        name="substring",
+        passed=substring_passed,
+        score=float(facts["score"]),
+        details=facts,
+    )
+    if not substring_passed:
         failures.append(f"missing required facts: {facts['missing']}")
-    if forbidden["count"] > 0:
+
+    forbidden_passed = forbidden["count"] == 0
+    dimensions["forbidden"] = DimensionResult(
+        name="forbidden",
+        passed=forbidden_passed,
+        score=1.0 if forbidden_passed else 0.0,
+        details=forbidden,
+    )
+    if not forbidden_passed:
         failures.append(f"forbidden claims appeared: {forbidden['violations']}")
-    if leaks["count"] > 0:
+
+    pid_leak_passed = leaks["count"] == 0
+    dimensions["pid_leak"] = DimensionResult(
+        name="pid_leak",
+        passed=pid_leak_passed,
+        score=1.0 if pid_leak_passed else 0.0,
+        details=leaks,
+    )
+    if not pid_leak_passed:
         failures.append(f"PID leak detected (release blocker): {leaks['leaks']}")
-    if not latency_score["within_budget"]:
+
+    latency_passed = bool(latency_score["within_budget"])
+    dimensions["latency"] = DimensionResult(
+        name="latency",
+        passed=latency_passed,
+        score=float(latency_ms),
+        details=latency_score,
+    )
+    if not latency_passed:
         failures.append(
             f"latency {latency_ms}ms exceeded {case.latency_ms_max}ms"
         )
-    if not cost_score["within_budget"]:
+
+    cost_passed = bool(cost_score["within_budget"])
+    dimensions["cost"] = DimensionResult(
+        name="cost",
+        passed=cost_passed,
+        score=float(cost_usd),
+        details=cost_score,
+    )
+    if not cost_passed:
         failures.append(
             f"cost ${cost_usd:.4f} exceeded ${case.cost_usd_max:.4f}"
         )
 
-    passed = error is None and not failures
     case_result = CaseResult(
         case=case,
-        passed=passed,
+        passed=False,  # set by recompute_passed below
         response_text=response_text,
         citations=citations,
         tool_calls=tool_calls,
@@ -195,8 +266,10 @@ async def run_case(
         completion_tokens=completion_tokens,
         scores=scores,
         failures=failures,
+        dimensions=dimensions,
         error=error,
     )
+    case_result.recompute_passed()
 
     if langfuse is not None and langfuse.enabled:
         case_result.trace_id = langfuse.record_case(case_result)

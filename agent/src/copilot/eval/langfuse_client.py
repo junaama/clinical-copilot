@@ -189,4 +189,16 @@ def _flatten_scores(result: "CaseResult") -> list[tuple[str, float, str | None]]
         )
     )
 
+    # Per-dimension binary verdicts under a stable namespace so dataset-level
+    # rollups can read the same names regardless of which scoring dimensions
+    # are wired in (substring, citation, faithfulness, trajectory, …).
+    for name, dim in result.dimensions.items():
+        out.append(
+            (
+                f"dimension.{name}",
+                1.0 if dim.passed else 0.0,
+                f"score={dim.score}",
+            )
+        )
+
     return out

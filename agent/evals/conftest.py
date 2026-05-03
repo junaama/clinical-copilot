@@ -20,10 +20,29 @@ _AGENT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_AGENT_ROOT / ".env", override=False)
 
 from copilot.config import get_settings  # noqa: E402
-from copilot.eval.case import Case, load_cases_in_dir  # noqa: E402
+from copilot.eval.case import Case, CaseResult, load_cases_in_dir  # noqa: E402
 from copilot.eval.langfuse_client import LangfuseClient  # noqa: E402
+from copilot.eval.scoreboard import render_scoreboard  # noqa: E402
 
 EVALS_ROOT = Path(__file__).resolve().parent
+
+# Per-session collector so the terminal summary can render the per-tier
+# per-dimension scoreboard after every eval run. Populated by individual
+# tier tests via ``record_case_result``.
+_SESSION_RESULTS: list[CaseResult] = []
+
+
+def record_case_result(result: CaseResult) -> None:
+    """Stash a result so the session-end hook can render the scoreboard."""
+    _SESSION_RESULTS.append(result)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Render the per-tier per-dimension pass-rate table after the run."""
+    if not _SESSION_RESULTS:
+        return
+    terminalreporter.write_sep("=", "eval scoreboard")
+    terminalreporter.write_line(render_scoreboard(_SESSION_RESULTS))
 
 
 @pytest.fixture(scope="session")
