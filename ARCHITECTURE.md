@@ -97,6 +97,13 @@ OpenEMR itself is part of the system, but it's the project we're building inside
 
 ## 6. How the agent is embedded in OpenEMR
 
+> **As of week-1 final deploy:** the agent supports two launch paths in parallel —
+> the EHR-launch flow described below (kept as a fallback / chart-sidebar embed)
+> and a **standalone shell** that the clinician opens directly. The standalone
+> shell is the primary surface; the EHR-launch path is preserved for
+> compatibility. See §19 for the standalone deployment shape and the auth
+> chain that goes with it.
+
 The agent is launched, not embedded. SMART EHR launch is a standard flow:
 
 1. The hospitalist opens a patient chart in OpenEMR.
@@ -109,6 +116,15 @@ The agent is launched, not embedded. SMART EHR launch is a standard flow:
 This is the same launch pattern Epic, Cerner, and the major EHRs use for SMART apps. It buys us standards compliance, future portability to other FHIR-compliant EHRs, no parallel auth surface, and survival across OpenEMR upgrades because we are not modifying the upstream codebase in any architecturally significant way.
 
 ## 7. Session lifecycle and conversation boundaries
+
+> **The rules in this section describe the EHR-launch flow.** The standalone
+> shell intentionally relaxes "one conversation = one patient" — a hospitalist
+> rounding on a panel asks about Hayes, then Cooper, then back to Hayes in one
+> conversation. The standalone enforcement is moved from the SMART-launch pin
+> to the **CareTeam gate** at the tool layer (see §14 and §19). The
+> conversation tracks a `resolved_patients` registry plus a `focus_pid` so
+> back-references resolve without paying another lookup; every tool call still
+> carries an explicit `patient_id` and the gate validates membership per call.
 
 A conversation is bound to exactly one patient. Switching patients is not a UX detail — it's a patient-safety boundary. Stale context leaking from Patient A into a question about Patient B is the kind of failure that can harm a patient. The agent enforces this with explicit rules.
 
@@ -462,6 +478,40 @@ OpenEMR's stock authorization is role-based — once a clinician is logged in, t
 
 The Co-Pilot adds a patient-scope check as middleware in the agent service. Before any FHIR call, the service verifies that the requesting user is a member of the patient's care team — derived from the relationships OpenEMR already records — or has a facility-scoped grant when facility scoping is enabled, or has explicit break-glass active.
 
+### CareTeam gate (standalone shell) — actual implementation
+
+The week-1 implementation lives in `agent/src/copilot/care_team.py`. Two
+public methods: `assert_authorized(user_id, patient_id) -> AuthDecision`
+called before any patient-data tool runs, and `list_panel(user_id) ->
+list[ResolvedPatient]` powering the empty-state panel UI.
+
+**FHIR query shape (the part that's not obvious from the spec).** The
+PRD originally proposed `GET /CareTeam?participant=Practitioner/{uuid}`
+to find a clinician's care teams. The deployed OpenEMR FHIR module
+(`src/Services/FHIR/FhirCareTeamService.php::loadSearchParameters`) only
+exposes four search parameters: `patient`, `status`, `_id`,
+`_lastUpdated`. **There is no `participant` search.** Sending it makes
+the EMR silently return all readable care teams unfiltered, which the
+gate then misreads as "not on this user's team" and fail-closes every
+non-admin clinician.
+
+The implementation pivots the queries to parameters the EMR supports:
+
+- `assert_authorized` issues
+  `GET /CareTeam?patient={patient_id}&status=active`, then walks
+  `participant[].member.reference` client-side looking for
+  `Practitioner/{user_id}`. The query is already scoped to one patient,
+  so the linear scan is cheap.
+- `list_panel` issues `GET /CareTeam?status=active` and filters
+  participants client-side. Linear in total active teams; fine at
+  week-1 scale.
+
+This is locked in by regression tests (`agent/tests/test_care_team_gate.py`
+`test_assert_authorized_queries_by_patient_not_participant` and
+`test_panel_pids_for_does_not_send_participant_param`) using a recording
+FhirClient stub that asserts `participant` never appears in the search
+parameters.
+
 **Break-glass.** Hospitalists genuinely do need to read charts outside their care team in emergencies. When break-glass is active, the agent prompts the user for a clinical justification, stores it in the audit row, and tags every subsequent tool call in the session as break-glass with a distinct event type. Compliance review can pull break-glass sessions in isolation.
 
 **Sensitive encounters.** Encounters tagged sensitive (psychiatry, SUD, HIV) are filtered out of FHIR responses for users who lack the corresponding grant — done in the agent before responses enter the LLM context, not after, so sensitive content never appears in a trace or in tokens.
@@ -528,6 +578,125 @@ FHIR resources are large. A full `Patient` bundle includes addresses, identifier
 - **`Consent` resource enforcement timing.** Tied to OpenEMR upstream maturity; see §14.
 - **Langfuse v2 → v3 migration.** Self-hosted Langfuse v2 is the MVP choice (single Postgres, simpler ops). v3 adds Clickhouse + Redis + S3 for analytics scale; the migration trigger is when v2 hits the trace-volume ceiling (millions of traces).
 
+## 19. Standalone shell — week-1 deviations from §6
+
+The clinician-facing surface is a full-screen React app the user opens
+directly, not an iframe inside the OpenEMR chart. Login uses
+SMART-on-FHIR **standalone launch** (authcode + PKCE) rather than
+**EHR launch**. The PRD at `issues/prd.md` is the source of truth for
+the design; this section documents only the deviations and operational
+realities discovered during week-1 deploy.
+
+### 19.1 Same-origin deployment
+
+The original deploy ran two Railway services: `copilot-ui` (Vite static
+build served by `serve`) and `copilot-agent` (FastAPI). Cookies set by
+the agent on `copilot-agent-production-...up.railway.app` weren't sent
+on cross-origin XHRs from `copilot-ui-production-...up.railway.app`.
+Chrome's third-party-cookie blocking drops them even with `SameSite=None;
+Secure` because Railway's `*.up.railway.app` is on the Public Suffix List
+— each subdomain is its own registrable site.
+
+Fix: bundle the Vite build into the agent's Docker image and serve it via
+FastAPI `StaticFiles` mount at `/`. One origin, one cookie scope, no CORS
+credentials dance. The `copilot-ui` Railway service is now redundant.
+This collapses the PRD's `SameSite=None; Secure` cookie attribute (PRD
+§158) to **`SameSite=Lax; Secure`** in production — Lax suffices because
+all XHRs are same-origin, Secure is required because the deploy is
+HTTPS.
+
+Operational notes:
+
+- Build context for the agent image is the **repo root** (not `agent/`),
+  because the Dockerfile needs to `COPY copilot-ui/` for the Node build
+  stage. `agent/railway.toml` points at `agent/Dockerfile`; a top-level
+  `railway.toml` mirrors the build config so Railway doesn't autodetect
+  the OpenEMR `composer.json` and try to build a PHP image. A repo-root
+  `.dockerignore` keeps the upload lean.
+- `COPILOT_UI_URL=/` in the agent's Railway env makes the OAuth
+  callback redirect resolve relatively to the agent's own origin.
+- Local dev still runs Vite separately on `:5173`; the cookie attributes
+  in `server.py` derive from `COPILOT_UI_URL` (localhost ⇒ Lax + insecure).
+
+### 19.2 Standalone OAuth client registration
+
+OpenEMR exposes a dynamic registration endpoint at
+`/oauth2/default/registration`. The seeder client (private_key_jwt for
+SMART Backend Services) is registered by
+`agent/scripts/seed/bootstrap_oauth.py`; the standalone authcode + PKCE
+client is registered by a new sibling script
+`agent/scripts/seed/bootstrap_standalone_oauth.py`. Differences:
+
+- `token_endpoint_auth_method`: `client_secret_post` (confidential
+  authcode) instead of `private_key_jwt`.
+- `redirect_uris`: the agent's actual `/auth/smart/callback`.
+- `scope`: drops `launch/user` (not in
+  `ScopeRepository::getCurrentSmartScopes` — only `launch` and
+  `launch/patient` are valid) and `MedicationAdministration` (not
+  advertised on this build's FHIR module). The user's identity comes
+  from `fhirUser` + the OAuth login itself.
+- An admin still has to enable the registered client and grant scopes
+  from Admin → System → API Clients before tokens issue.
+
+### 19.3 Login chain for non-admin users (`dr_smith`)
+
+The PRD describes seeding `dr_smith` as a non-admin clinician with
+CareTeam membership. In practice, OpenEMR's login funnel checks **five
+gates**, in order, before issuing an OAuth token:
+
+1. `users.active = 1` — set by the seed INSERT.
+2. `groups.user = 'dr_smith'` (auth-group membership) — added in
+   `seed_careteam.py::build_ensure_auth_group_sql`.
+3. `aclGetGroupTitles($username) > 0` (phpGACL ACL membership) — **must
+   be set via `AclExtended::addUserAros` over the PHP runtime**, not
+   raw `gacl_*` INSERTs. phpGACL caches and bookkeeping make direct SQL
+   unworkable. The seed prints a copy-pasteable PHP one-liner via
+   `--print-acl-php`.
+4. `users_secure.password` — bcrypt hash, populated by the seed.
+   **Prefix matters:** Python's `bcrypt` defaults to `$2b$`, but this
+   PHP build's `password_get_info()` returns `algoName='unknown'` for
+   `$2b$` and `AuthHash::hashValid` rejects the hash. The seed rewrites
+   the prefix to `$2y$` (byte-compatible bcrypt; PHP's preferred
+   prefix). This is the only kind of fix where a regression test would
+   not have caught the bug — the test would have run Python verifying
+   Python.
+5. `AuthHash::passwordVerify(plaintext, hash)` — vanilla
+   `password_verify` once gates 1–4 pass.
+
+All five are exercised by `agent/tests/test_seed_careteam.py` (49 cases
+including the bcrypt $2b → $2y rewrite, idempotent `users_secure`
+upsert, and the phpGACL helper-snippet shape). The deploy validation
+checks `acl_group_membership = 1` in the seed's report SELECT.
+
+### 19.4 New backend surface (already shipped)
+
+Endpoints are documented in PRD §"API contracts (agent backend)". Two
+that warrant calling out for §6/§9 readers:
+
+- `GET /auth/login` and `GET /auth/smart/callback` are the standalone
+  variants of `/smart/launch` and `/smart/callback`. The standalone
+  callback writes a session cookie and redirects to `/` (relative); the
+  EHR-launch callback redirects to `copilot-ui` with
+  `?conversation_id=...`. Both code paths persist the access/refresh/id
+  bundle to `copilot_token_bundle` (encrypted; see PRD §"Schema changes").
+- `GET /panel` returns the user's CareTeam roster (the empty-state UI),
+  computed via the FHIR query shape documented in §14.
+
+### 19.5 What still differs from PRD intent
+
+- PRD §93: `SameSite=None`. **Reality:** `SameSite=Lax` (same-origin
+  deployment).
+- PRD §102: gate "queries the `care_team` and `care_team_provider`
+  tables (or the FHIR `CareTeam.participant` resource)". **Reality:**
+  FHIR-only via `?patient=` + client-side participant filter. The DB
+  table path was rejected because the agent runs in a different process
+  with no DB access; `?participant=` was rejected because OpenEMR's
+  FHIR module doesn't implement it.
+- PRD §94: id_token's `fhirUser` claim resolves to `Practitioner/<uuid>`
+  and is mapped via `users.uuid → users.id`. **Reality:** for `admin`
+  the claim resolves to `Person/<uuid>` (not Practitioner); the agent
+  accepts both. Verified live with the deployed user.
+
 ---
 
 ## Appendix A — Eval strategy in one paragraph
@@ -564,7 +733,7 @@ Four tiers run independently. Smoke (5–10 cases, every push) verifies the agen
 
 # Architecture Diagrams
 
-Three diagrams, each with one focus. They visualize the system described in `ARCHITECTURE.md`.
+Four diagrams, each with one focus. They visualize the system described in `ARCHITECTURE.md`.
 
 ---
 
@@ -574,33 +743,40 @@ Components, data stores, external services, and the calls between them.
 
 ```mermaid
 flowchart TB
-    subgraph Browser["Hospitalist's browser"]
-        Chart["OpenEMR chart UI"]
-        Iframe["Co-Pilot chat iframe"]
+    subgraph Browser["Clinician's browser"]
+        SPA["Standalone SPA<br/>(primary surface — week 1)"]
+        Chart["OpenEMR chart UI<br/>(EHR-launch fallback)"]
+        Iframe["Co-Pilot chat iframe<br/>(EHR-launch fallback)"]
     end
 
-    subgraph CoPilot["Co-Pilot service — Python"]
+    subgraph CoPilot["Co-Pilot service — Python (FastAPI + LangGraph)"]
         direction TB
+        Static["StaticFiles mount<br/>(serves bundled UI at /)"]
         LG["LangGraph agent loop<br/>classifier · planner ·<br/>tools · verifier · synthesis"]
-        Tools["Typed Python tools<br/>~12 functions"]
+        Gate["CareTeamGate<br/>(see §14, §19)"]
+        Tools["Typed Python tools<br/>13 granular + resolve_patient<br/>+ 7 composite (see PRD)"]
         Verifier["Verifier<br/>cite-or-refuse"]
         Audit["Audit writer"]
     end
 
     subgraph OpenEMR["OpenEMR + MariaDB"]
-        FHIR["FHIR R4 endpoints<br/>SMART OAuth2"]
+        FHIR["FHIR R4 endpoints<br/>+ SMART OAuth2<br/>(EHR + standalone clients)"]
         DB[("MariaDB<br/>+ agent_audit<br/>+ agent_message")]
         Module["Thin launch module<br/>button + audit table only"]
     end
 
     subgraph External["External services"]
         Anthropic{{"Anthropic API<br/>Sonnet · Opus · Haiku"}}
-        LangSmith{{"LangSmith<br/>traces"}}
-        PG[("Postgres<br/>LangGraph checkpointer")]
+        Langfuse{{"Langfuse self-hosted<br/>traces · datasets"}}
+        PG[("Postgres<br/>LangGraph checkpointer<br/>+ session/token bundle")]
     end
 
+    SPA -->|"GET /<br/>(same origin)"| Static
+    SPA -->|"POST /chat<br/>POST /auth/login<br/>GET /me · /panel"| LG
     Chart -->|"SMART EHR launch<br/>(user, patient, scopes)"| Iframe
-    Iframe -->|"POST /api/chat"| LG
+    Iframe -->|"POST /chat"| LG
+    LG --> Gate
+    Gate -->|"GET /CareTeam?patient=…&status=active<br/>(participant filter client-side)"| FHIR
     LG --> Tools
     Tools -->|"FHIR R4 GETs<br/>SMART bearer token"| FHIR
     FHIR --> DB
@@ -610,14 +786,16 @@ flowchart TB
     Verifier --> Audit
     Audit -->|"agent_audit row"| DB
     Audit -->|"agent_message<br/>encrypted"| DB
-    LG -->|"checkpoint state"| PG
-    LG -.->|"trace turn"| LangSmith
-    Module -->|"injects launch button"| Chart
+    LG -->|"checkpoint state +<br/>session, token_bundle"| PG
+    LG -.->|"trace turn"| Langfuse
+    Module -->|"injects launch button<br/>(EHR-launch path only)"| Chart
 
     classDef store fill:#eef,stroke:#557
     classDef external fill:#fef6e4,stroke:#a07
+    classDef primary fill:#dfd,stroke:#272
     class DB,PG store
-    class Anthropic,LangSmith external
+    class Anthropic,Langfuse external
+    class SPA,Static,Gate primary
 ```
 
 ---
@@ -733,6 +911,58 @@ stateDiagram-v2
         omission, or causal-chain errors —
         eval suite covers those.
     end note
+```
+
+---
+
+## 4. Standalone shell auth flow
+
+The week-1 deploy uses SMART standalone launch, same-origin UI, and a
+five-gate login chain (see §19). This sequence is what actually runs
+when the clinician clicks "Log in with OpenEMR" on the standalone
+landing page.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as Clinician (dr_smith)
+    participant SPA as React SPA<br/>(served from agent /)
+    participant Agent as Agent backend<br/>(/auth/login, /auth/smart/callback)
+    participant OE as OpenEMR<br/>(/oauth2/default/*)
+    participant DB as Agent Postgres<br/>(launch_state, session,<br/>token_bundle)
+
+    User->>SPA: GET / (no cookie)
+    SPA->>Agent: GET /me
+    Agent-->>SPA: 401
+    SPA-->>User: render "Log in with OpenEMR"
+
+    User->>Agent: GET /auth/login
+    Agent->>DB: persist (state, code_verifier)
+    Agent-->>User: 302 → OE /authorize?...&code_challenge
+
+    User->>OE: GET /authorize
+    OE->>OE: gates 1–5: users.active,<br/>groups, aclGetGroupTitles,<br/>users_secure, passwordVerify
+    OE-->>User: scope-authorize-confirm
+    User->>OE: click Authorize
+    OE-->>User: 302 → agent /auth/smart/callback?code
+
+    User->>Agent: GET /auth/smart/callback?code
+    Agent->>DB: lookup launch_state by state
+    Agent->>OE: POST /token (code, code_verifier, basic auth)
+    OE-->>Agent: { access_token, refresh_token, id_token }
+    Agent->>Agent: parse fhirUser from id_token
+    Agent->>DB: insert session, encrypted token_bundle
+    Agent-->>User: Set-Cookie: copilot_session=…; SameSite=Lax; Secure<br/>302 → /
+
+    User->>SPA: GET / (cookie now sent — same origin)
+    SPA->>Agent: GET /me (cookie included)
+    Agent->>DB: lookup session
+    Agent-->>SPA: 200 { user_id, fhir_user, display_name }
+    SPA->>Agent: GET /panel
+    Agent->>OE: GET /CareTeam?status=active (filter participants client-side)
+    OE-->>Agent: bundle of teams<br/>(no `participant` param — see §14)
+    Agent-->>SPA: ResolvedPatient[] for dr_smith
+    SPA-->>User: empty-state panel rendered
 ```
 
 ---

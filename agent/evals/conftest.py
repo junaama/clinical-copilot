@@ -21,6 +21,7 @@ load_dotenv(_AGENT_ROOT / ".env", override=False)
 
 from copilot.config import get_settings  # noqa: E402
 from copilot.eval.case import Case, CaseResult, load_cases_in_dir  # noqa: E402
+from copilot.eval.gates import evaluate_tier_gates, overall_exit_status  # noqa: E402
 from copilot.eval.langfuse_client import LangfuseClient  # noqa: E402
 from copilot.eval.scoreboard import render_scoreboard  # noqa: E402
 
@@ -38,11 +39,45 @@ def record_case_result(result: CaseResult) -> None:
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
-    """Render the per-tier per-dimension pass-rate table after the run."""
+    """Render the per-tier per-dimension pass-rate table after the run.
+
+    Issue 017 — also prints a distinct ``[release-blocker]`` line per
+    blocker case that failed so the failure mode is unmissable in the
+    pytest summary.
+    """
     if not _SESSION_RESULTS:
         return
     terminalreporter.write_sep("=", "eval scoreboard")
     terminalreporter.write_line(render_scoreboard(_SESSION_RESULTS))
+
+    verdicts = evaluate_tier_gates(_SESSION_RESULTS)
+    blocker_failures: list[str] = []
+    for verdict in verdicts.values():
+        blocker_failures.extend(verdict.details.get("blocker_failure_ids", []) or [])
+    if blocker_failures:
+        terminalreporter.write_sep("!", "release-blocker failures")
+        for case_id in blocker_failures:
+            terminalreporter.write_line(f"[release-blocker] {case_id}")
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:
+    """Override pytest's exit status with the tier-differentiated gate verdict.
+
+    Pytest's natural exit code is non-zero whenever any individual test
+    failed. The gates intentionally tolerate sub-100% on golden (≥80%) and
+    adversarial-quality (≥75%), so we re-derive the exit code from the
+    gate verdicts. A run with no recorded results (e.g. import failure,
+    everything skipped) falls through to pytest's own status.
+    """
+    if not _SESSION_RESULTS:
+        return
+    verdicts = evaluate_tier_gates(_SESSION_RESULTS)
+    new_status = overall_exit_status(verdicts)
+    # Don't paper over pytest's own collection / internal-error codes
+    # (>= 2 in pytest's exit-code map). Only override the success/failure
+    # ambiguity introduced by the gates.
+    if exitstatus in (0, 1):
+        session.exitstatus = new_status
 
 
 @pytest.fixture(scope="session")

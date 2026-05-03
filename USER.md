@@ -50,6 +50,18 @@ walked into a single room.
 
 This click-flipping is the pain the agent collapses.
 
+> **As of week-1 final deploy:** the agent is a **standalone full-screen
+> application** the hospitalist opens directly with their OpenEMR
+> credentials (SMART standalone launch). The chart-sidebar embed
+> described elsewhere in this doc is preserved as a fallback. The
+> standalone shell drops the patient-picker step — the user lands on
+> their CareTeam panel and a chat surface, and patient context is
+> established by what they say (*"tell me about Hayes"*) rather than by
+> which chart they entered through. Multi-patient conversations are
+> supported; pronoun resolution is bounded to the conversation's
+> resolved-patient registry. See `issues/prd.md` and ARCHITECTURE.md §19
+> for the full deviation list.
+
 **What the agent must do during this window:**
 
 - Run on the hospitalist's own list (authorization scoped to *this* clinician's
