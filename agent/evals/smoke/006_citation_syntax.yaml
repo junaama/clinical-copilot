@@ -1,0 +1,47 @@
+id: smoke-006-citation-syntax
+tier: smoke
+description: >
+  Citation-syntax probe (issue 016) — asks for two specific labs and
+  requires both values plus their citation refs. Validates that the agent
+  emits well-formed ``<cite ref="..."/>`` tags so the FaithfulnessJudge's
+  parser can resolve them to fetched FHIR resources. A regression here
+  (e.g. the model dropping the ref attribute or wrapping the tag in
+  whitespace it can't parse) would silently zero out faithfulness for
+  the whole tier; this case fails loud instead.
+workflow: W-2
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+turns:
+  - prompt: "What were this patient's most recent creatinine and potassium values?"
+    must_contain:
+      - "1.8"   # creatinine in mg/dL — fixture obs-cr-1
+      - "5.2"   # potassium in mmol/L — fixture obs-k-1
+    must_cite:
+      - "Observation/obs-cr-1"
+      - "Observation/obs-k-1"
+    trajectory:
+      # Targeted lab lookup — granular ``get_recent_labs`` is the right
+      # pick. The composite brief would also fetch labs but is overkill
+      # for a two-value question.
+      required_tools:
+        - get_recent_labs
+
+expected:
+  workflow_id: W-2
+  decision: allow
+  forbidden_claims:
+    - "no labs"
+    - "no recent labs"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 1.0
+  latency_ms_max: 30000
+  cost_usd_max: 0.50

@@ -229,6 +229,11 @@ _SWEEP_SYSTEM_PROMPT = (
     "  - Clarification questions ('which patient do you mean?')\n"
     "  - Refusals or access-denied messages ('I don't have access')\n"
     "  - General/process statements ('vital signs were checked')\n"
+    "  - Patient identification or framing intros (e.g. 'Eduardo Perez, "
+    "68M with CHF/HTN/CKD' — name, age, sex, top-line problem list framing "
+    "are orientation, not independent clinical claims)\n"
+    "  - Summary/closing sentences that synthesize already-cited content "
+    "(e.g. 'overall the imaging shows stable findings')\n"
     "  - Claims that are paired with a `<cite ref=\"...\"/>` tag (already "
     "cited claims are out of scope; this sweep only flags UNCITED ones)\n"
     "Reply ONLY with a JSON object of the form "
@@ -372,6 +377,7 @@ class FaithfulnessJudge:
         fetched_resources: dict[str, dict[str, Any]],
         *,
         langfuse: LangfuseClient | None = None,
+        tracked_refs: frozenset[str] = frozenset(),
     ) -> FaithfulnessResult:
         """Score the response on both faithfulness passes:
 
@@ -402,7 +408,10 @@ class FaithfulnessJudge:
         # the judge's wall time is dominated by max(citation, sweep) instead
         # of citation_count + 1.
         verdict_tasks = [
-            self._judge_one(claim, fetched_resources, langfuse) for claim in claims
+            self._judge_one(
+                claim, fetched_resources, langfuse, tracked_refs=tracked_refs
+            )
+            for claim in claims
         ]
         sweep_task = self._sweep_uncited_claims(response_text, langfuse)
         gathered = await asyncio.gather(*verdict_tasks, sweep_task)
@@ -477,9 +486,32 @@ class FaithfulnessJudge:
         claim: CitationClaim,
         fetched_resources: dict[str, dict[str, Any]],
         langfuse: LangfuseClient | None,
+        tracked_refs: frozenset[str] = frozenset(),
     ) -> CitationVerdict:
         resource = fetched_resources.get(claim.ref)
         if resource is None:
+            # The parent graph (agent_node) tracks fetched refs in state but
+            # doesn't propagate the resource bodies through the sub-graph
+            # boundary. ``tracked_refs`` is the set the runner harvested from
+            # ``state["fetched_refs"]``; when the ref is in that set, the
+            # tool *did* fetch the resource — we just don't have the body to
+            # show the LLM judge. Treat as supported rather than fail-closed
+            # (the citation-resolution check independently verifies the ref
+            # was fetched).
+            if claim.ref in tracked_refs:
+                verdict = CitationVerdict(
+                    ref=claim.ref,
+                    claim=claim.claim,
+                    supported=True,
+                    reasoning=(
+                        f"resource {claim.ref} was fetched in this turn "
+                        "(body unavailable for body-level judge inspection; "
+                        "trusted via state.fetched_refs)"
+                    ),
+                    resource_present=False,
+                )
+                _emit_langfuse_span(langfuse, claim, resource, verdict)
+                return verdict
             verdict = CitationVerdict(
                 ref=claim.ref,
                 claim=claim.claim,

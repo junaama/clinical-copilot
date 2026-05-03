@@ -11,6 +11,7 @@ from collections import defaultdict
 from typing import Any
 
 from .case import CaseResult
+from .gates import evaluate_tier_gates
 
 
 def tier_dimension_table(results: list[CaseResult]) -> dict[str, dict[str, Any]]:
@@ -51,6 +52,8 @@ def render_scoreboard(results: list[CaseResult]) -> str:
     """Render a tier-by-dimension-by-overall pass-rate table as plain text.
 
     Always returns at least a header line so callers can print unconditionally.
+    A trailing ``gates`` block (issue 017) shows each tier's gate verdict so
+    the scoreboard reads as ``merge OK`` / ``release blocked (<80%)`` / etc.
     """
     table = tier_dimension_table(results)
     if not table:
@@ -80,4 +83,11 @@ def render_scoreboard(results: list[CaseResult]) -> str:
         lines.append(padded)
         if ridx == 0:
             lines.append("  ".join("-" * w for w in widths))
+
+    verdicts = evaluate_tier_gates(results)
+    if verdicts:
+        lines.append("")
+        lines.append("gates:")
+        for tier in sorted(verdicts):
+            lines.append(f"  {verdicts[tier].summary}")
     return "\n".join(lines)
