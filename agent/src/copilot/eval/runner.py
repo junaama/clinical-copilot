@@ -26,6 +26,7 @@ from . import evaluators
 from .case import Case, CaseResult, DimensionResult
 from .faithfulness import FaithfulnessJudge, build_default_haiku_factory
 from .langfuse_client import LangfuseClient
+from .trajectory import evaluate_trajectory
 
 _log = logging.getLogger(__name__)
 
@@ -245,6 +246,18 @@ async def run_case(
     )
     if not substring_passed:
         failures.append(f"missing required facts: {facts['missing']}")
+
+    # Trajectory (issue 013) — set-membership over the agent's tool calls.
+    # Cases with empty ``required_tools`` always pass this dimension so it
+    # attaches to every CaseResult and the scoreboard sees a column whose
+    # rate is over only cases that opted in.
+    trajectory_result = evaluate_trajectory(tool_calls, case.required_tools)
+    dimensions["trajectory"] = trajectory_result.to_dimension_result()
+    scores["trajectory"] = dimensions["trajectory"].details
+    if not trajectory_result.passed:
+        failures.append(
+            f"trajectory missing required tool(s): {trajectory_result.missing}"
+        )
 
     forbidden_passed = forbidden["count"] == 0
     dimensions["forbidden"] = DimensionResult(

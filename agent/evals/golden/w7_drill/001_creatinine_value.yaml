@@ -27,6 +27,10 @@ expected:
     - "mg/dL"
   required_citation_refs:
     - "Observation/obs-cr-1"
+  required_tools:
+    # W-7 single-fact drill — agent must pick the granular
+    # ``get_recent_labs`` read, not buried inside a brief composite.
+    - get_recent_labs
   forbidden_claims:
     - "no labs"
     - "creatinine is not on file"

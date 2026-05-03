@@ -33,6 +33,11 @@ expected:
     # require the MAR ref because it carries the canonical lifecycle_status
     # and reason. The narrative ref is acceptable but not required.
     - "MedicationAdministration/mar-lisinopril-held"
+  required_tools:
+    # "What happened overnight" is UC-2 brief territory — agent should
+    # pick ``run_per_patient_brief`` which fans
+    # get_medication_administrations internally.
+    - run_per_patient_brief
   forbidden_claims:
     - "no medications were held"
     - "metoprolol was held"

@@ -30,6 +30,11 @@ expected:
     - "MedicationRequest/med-furosemide"
     - "MedicationRequest/med-lisinopril"
     - "MedicationRequest/med-metoprolol"
+  required_tools:
+    # Targeted question on the active medication list — the right tool
+    # is the granular ``get_active_medications`` read, not a brief
+    # composite.
+    - get_active_medications
   forbidden_claims:
     - "no active medications"
     - "no medications on file"

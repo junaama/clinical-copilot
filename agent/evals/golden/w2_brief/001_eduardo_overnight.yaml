@@ -34,6 +34,11 @@ expected:
     - "Observation/obs-bp-3"
     - "DocumentReference/doc-overnight-note"
     - "DocumentReference/doc-cross-cover"
+  required_tools:
+    # Canonical W-2 24-hour brief — agent must pick
+    # ``run_per_patient_brief`` (composite); chaining granular reads
+    # is a regression on the prompt's "prefer the composite" rule.
+    - run_per_patient_brief
   forbidden_claims:
     - "no overnight events"
     - "patient is stable"

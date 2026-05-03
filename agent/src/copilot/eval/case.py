@@ -47,6 +47,13 @@ class Case:
     latency_ms_max: int | None
     cost_usd_max: float | None
 
+    # Trajectory dimension (issue 013). Set-membership over LangGraph tool
+    # calls — every name listed here must appear at least once in the
+    # ``tool_calls`` the agent produced. Empty list ⇒ trajectory dimension
+    # always passes for this case (no false negatives on cases that don't
+    # care about which tools the planner picked).
+    required_tools: list[str]
+
     # Adversarial extension (optional)
     attack: dict[str, Any] | None
     defense_required: list[str]
@@ -149,6 +156,7 @@ def load_case(path: Path) -> Case:
         citation_completeness_min=float(expected.get("citation_completeness_min", 1.0)),
         latency_ms_max=expected.get("latency_ms_max"),
         cost_usd_max=expected.get("cost_usd_max"),
+        required_tools=_required_tools_from_expected(expected),
         attack=raw.get("attack"),
         defense_required=list(raw.get("defense_required", []) or []),
         raw=raw,
@@ -163,6 +171,25 @@ def load_cases_in_dir(directory: Path) -> list[Case]:
             continue  # _shared/ etc.
         cases.append(load_case(path))
     return cases
+
+
+def _required_tools_from_expected(expected: dict[str, Any]) -> list[str]:
+    """Read ``required_tools`` from the case's ``expected`` block.
+
+    Two locations supported:
+    - ``expected.required_tools`` (current single-turn shape)
+    - ``expected.trajectory.required_tools`` (forward-looking, lines up
+      with the per-turn ``trajectory.required_tools`` shape that issue
+      014 will introduce when cases migrate to ``turns: [...]``).
+    """
+    direct = expected.get("required_tools")
+    if direct is not None:
+        return [str(t) for t in direct]
+    nested = expected.get("trajectory") or {}
+    if isinstance(nested, dict):
+        nested_required = nested.get("required_tools") or []
+        return [str(t) for t in nested_required]
+    return []
 
 
 def _infer_tier_from_path(path: Path) -> str:

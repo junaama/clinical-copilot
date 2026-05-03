@@ -281,6 +281,21 @@ def _flatten_scores(result: "CaseResult") -> list[tuple[str, float, str | None]]
             )
         )
 
+    # Standardized trajectory score (issue 013). Binary 1.0/0.0 — every
+    # required tool was called this turn, or at least one wasn't. Comment
+    # carries the missing list so the dataset row makes the failure
+    # debuggable without opening the trace.
+    traj_dim = result.dimensions.get("trajectory")
+    if traj_dim is not None:
+        details = traj_dim.details or {}
+        out.append(
+            (
+                "trajectory.required_present",
+                1.0 if traj_dim.passed else 0.0,
+                f"missing={details.get('missing')} required={details.get('required')}",
+            )
+        )
+
     # Standardized faithfulness scores (issues 011 + 012). Citations supported
     # is a continuous fraction; uncited_claims is a count (lower is better).
     # Both feed the v2 PRD's scoreboard at the dataset level.
