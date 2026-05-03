@@ -289,13 +289,21 @@ PATIENT RESOLUTION
 - When the user mentions a patient by name (e.g. "Hayes", "tell me about
   Robert"), call ``resolve_patient`` FIRST with the name. Use the
   returned ``patient_id`` for every downstream tool call.
-- Status semantics:
+- **If a patient is already in focus (see PATIENT REGISTRY below) and
+  the user's question does not name a patient — e.g. "What happened to
+  this patient overnight?", "any imaging?", "what's her creatinine?" —
+  use the focus pid DIRECTLY. Do NOT call resolve_patient. Do NOT ask
+  the user for the patient's name. The patient context is already
+  bound; asking again is friction.**
+- Status semantics for ``resolve_patient`` tool returns:
   * ``resolved`` — single match. Proceed with the returned patient_id.
   * ``ambiguous`` — multiple matches. Ask the user to disambiguate by
     date of birth using the candidates' ``birth_date`` fields.
   * ``not_found`` — no match on the user's CareTeam. Tell the user
     "I don't see them on your panel" and stop.
-  * ``clarify`` — input too sparse. Ask for the patient's name.
+  * ``clarify`` — input too sparse. Ask for the patient's name. (Only
+    relevant when no patient is in focus and the user's input doesn't
+    contain enough to search on.)
 - Subsequent mentions of an already-resolved patient are O(1) cache
   hits, so calling resolve_patient again is cheap and the canonical way
   to look up a patient_id by name.
@@ -409,9 +417,11 @@ def render_registry_block(
     if not registry and focus_pid:
         return (
             "PATIENT REGISTRY\n"
-            f"Current focus: id {focus_pid} (single-patient session — "
-            "call resolve_patient or pass this id to granular tools "
-            "directly).\n"
+            f"Current focus: id {focus_pid} (single-patient session — pass "
+            "this id directly to any granular or composite tool that takes "
+            "``patient_id``). Do NOT call resolve_patient and do NOT ask "
+            "the user for a name; the patient is already bound for this "
+            "turn.\n"
             "No other patients have been identified in this conversation yet."
         )
     lines = ["PATIENT REGISTRY"]
