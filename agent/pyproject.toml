@@ -45,6 +45,7 @@ eval = [
 ]
 seed = [
     "pyjwt[crypto]>=2.9.0",
+    "pymysql>=1.1.0",
 ]
 
 [build-system]
