@@ -68,6 +68,7 @@ from .smart import (
     refresh_access_token,
     token_bundle_from_response,
 )
+from .tools import set_active_smart_token
 from .title_summarizer import (
     HaikuTitleSummarizer,
     build_default_haiku_factory,
@@ -846,12 +847,35 @@ async def panel(
         raise HTTPException(status_code=401, detail="session expired or invalid")
 
     settings = app.state.settings
+
+    # Bind the user's SMART access token to the FhirClient call. Without
+    # this the client falls back to ``OPENEMR_FHIR_TOKEN`` (env-static) or
+    # an empty token, and the FHIR ``CareTeam?status=active`` query 401s
+    # — so the gate sees an empty bundle and the panel comes back empty
+    # for every standalone-session user.
+    bundle: TokenBundleRow | None = None
+    try:
+        bundle = await _resolve_fresh_standalone_bundle(
+            copilot_session, gateway, settings
+        )
+    except RuntimeError:
+        # Refresh failure (revoked refresh token, etc.). Surface as 401 so
+        # the UI prompts re-login rather than silently returning an empty
+        # panel that looks like "you're on no care team."
+        raise HTTPException(status_code=401, detail="session token refresh failed")
+
     _, practitioner_id = parse_fhir_user(session.fhir_user)
     gate = CareTeamGate(
         FhirClient(settings),
         admin_user_ids=frozenset(settings.admin_user_ids),
     )
-    panel = await gate.list_panel(practitioner_id)
+    token = bundle.access_token if bundle else ""
+    set_active_smart_token(token or None)
+
+    try:
+        panel = await gate.list_panel(practitioner_id)
+    finally:
+        set_active_smart_token(None)
     return {
         "user_id": session.oe_user_id,
         "patients": [
