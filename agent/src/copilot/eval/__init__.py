@@ -12,13 +12,25 @@ the YAML files under ``agent/evals/<tier>/``.
 from __future__ import annotations
 
 from .case import Case, CaseResult, DimensionResult, load_case, load_cases_in_dir
+from .faithfulness import (
+    CitationClaim,
+    CitationVerdict,
+    FaithfulnessJudge,
+    FaithfulnessResult,
+    extract_citation_claims,
+)
 from .runner import run_case
 from .scoreboard import render_scoreboard, tier_dimension_table
 
 __all__ = [
     "Case",
     "CaseResult",
+    "CitationClaim",
+    "CitationVerdict",
     "DimensionResult",
+    "FaithfulnessJudge",
+    "FaithfulnessResult",
+    "extract_citation_claims",
     "load_case",
     "load_cases_in_dir",
     "render_scoreboard",

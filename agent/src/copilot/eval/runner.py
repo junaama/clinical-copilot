@@ -10,8 +10,11 @@ The runner is a thin orchestrator:
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
+from collections.abc import Callable
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -21,17 +24,44 @@ from ..graph import build_graph
 from ..observability import get_callback_handler
 from . import evaluators
 from .case import Case, CaseResult, DimensionResult
+from .faithfulness import FaithfulnessJudge, build_default_haiku_factory
 from .langfuse_client import LangfuseClient
 
 _log = logging.getLogger(__name__)
+
+
+def _maybe_default_judge(settings: Settings) -> FaithfulnessJudge | None:
+    """Build the default Haiku judge if the env supports it, else ``None``.
+
+    Skips silently when ``EVAL_JUDGE_MODEL`` is unset or ``ANTHROPIC_API_KEY``
+    is missing — runs in CI / fixture environments without an Anthropic
+    account simply don't get the faithfulness dimension. Tests inject their
+    own ``faithfulness_judge`` to bypass this path.
+    """
+    model_name = (settings.eval_judge_model or "").strip()
+    if not model_name:
+        return None
+    api_key = settings.anthropic_api_key.get_secret_value()
+    if not api_key:
+        return None
+    factory: Callable[[], Any] = build_default_haiku_factory(api_key, model_name=model_name)
+    return FaithfulnessJudge(llm_factory=factory, model_name=model_name)
 
 
 async def run_case(
     case: Case,
     settings: Settings | None = None,
     langfuse: LangfuseClient | None = None,
+    *,
+    faithfulness_judge: FaithfulnessJudge | None = None,
 ) -> CaseResult:
-    """Execute a single case and return its scored result."""
+    """Execute a single case and return its scored result.
+
+    ``faithfulness_judge`` is optional: when ``None``, the runner builds the
+    default Haiku-backed judge if ``ANTHROPIC_API_KEY`` is available, and
+    skips faithfulness scoring otherwise. Tests pass an injected judge with
+    a stub LLM so they don't spend tokens.
+    """
     settings = settings or get_settings()
 
     # Build the full graph (agent → verifier) so eval runs exercise the
@@ -61,6 +91,7 @@ async def run_case(
     citations: list[str] = []
     tool_calls: list[dict[str, Any]] = []
     fetched_refs: set[str] = set()
+    fetched_resources: dict[str, dict[str, Any]] = {}
     prompt_tokens = 0
     completion_tokens = 0
 
@@ -94,9 +125,15 @@ async def run_case(
     latency_ms = int((time.monotonic() - start) * 1000)
 
     if error is None:
-        response_text, citations, tool_calls, fetched_refs, prompt_tokens, completion_tokens = (
-            _extract_observed(result)
-        )
+        (
+            response_text,
+            citations,
+            tool_calls,
+            fetched_refs,
+            fetched_resources,
+            prompt_tokens,
+            completion_tokens,
+        ) = _extract_observed(result)
         # The parent graph stores fetched_refs and tool_results as state because
         # the agent's sub-graph hides ToolMessages from the parent. Merge them
         # in so eval scoring sees a complete picture.
@@ -253,6 +290,40 @@ async def run_case(
             f"cost ${cost_usd:.4f} exceeded ${case.cost_usd_max:.4f}"
         )
 
+    # Faithfulness (issue 011, citation-anchored only). Skip when the agent
+    # erred — there's no response text to judge — and when the judge can't
+    # be constructed (no ANTHROPIC_API_KEY in env). Skipped cases simply
+    # don't get a faithfulness DimensionResult, so the scoreboard column
+    # reports the rate over only cases that scored it.
+    judge = faithfulness_judge or _maybe_default_judge(settings)
+    if error is None and judge is not None:
+        try:
+            faith_result = await judge.judge(
+                response_text,
+                fetched_resources,
+                langfuse=langfuse,
+            )
+            faith_dim = faith_result.to_dimension_result()
+            dimensions["faithfulness"] = faith_dim
+            scores["faithfulness"] = faith_dim.details
+            if not faith_dim.passed:
+                # Surface up to 3 unsupported reasonings inline so the
+                # pytest failure block carries enough context to debug
+                # without opening Langfuse.
+                first_three = faith_dim.details.get("unsupported", [])[:3]
+                rendered = "; ".join(
+                    f"{u['ref']}: {u['reasoning']}" for u in first_three
+                )
+                failures.append(
+                    f"faithfulness failed "
+                    f"({faith_dim.details.get('supported_count')}/"
+                    f"{faith_dim.details.get('total_citations')} citations supported); "
+                    f"first unsupported: {rendered}"
+                )
+        except Exception as exc:
+            # Judge failure is informational — don't bring down the eval run.
+            _log.warning("faithfulness judge failed for case %s: %s", case.id, exc)
+
     case_result = CaseResult(
         case=case,
         passed=False,  # set by recompute_passed below
@@ -279,12 +350,26 @@ async def run_case(
 
 def _extract_observed(
     result: dict[str, Any],
-) -> tuple[str, list[str], list[dict[str, Any]], set[str], int, int]:
-    """Pull response text, citations, tool calls, and fetched refs from the
-    react-agent result. Token counts are best-effort from message metadata."""
+) -> tuple[
+    str,
+    list[str],
+    list[dict[str, Any]],
+    set[str],
+    dict[str, dict[str, Any]],
+    int,
+    int,
+]:
+    """Pull response text, citations, tool calls, fetched refs, and per-ref
+    resource bodies from the react-agent result.
+
+    The per-ref bodies feed the FaithfulnessJudge: each ``<cite ref="X"/>``
+    in the response is judged against the body keyed by ``X``. Token counts
+    are best-effort from message metadata.
+    """
     response_text = ""
     tool_calls: list[dict[str, Any]] = []
     fetched_refs: set[str] = set()
+    fetched_resources: dict[str, dict[str, Any]] = {}
     prompt_tokens = 0
     completion_tokens = 0
 
@@ -307,25 +392,68 @@ def _extract_observed(
             prompt_tokens += int(usage.get("input_tokens") or 0)
             completion_tokens += int(usage.get("output_tokens") or 0)
         elif isinstance(msg, ToolMessage):
-            # Harvest fhir_refs from the tool result (so citation_resolution
-            # has a real "fetched in this turn" set).
-            fetched_refs.update(_extract_refs_from_tool_message(msg))
+            # Harvest fhir_refs and the row body keyed by ref so the
+            # FaithfulnessJudge can fetch the cited resource without
+            # re-running the tool.
+            for ref, body in _extract_resources_from_tool_message(msg).items():
+                fetched_refs.add(ref)
+                # Last-write-wins on duplicate refs across tool calls; the
+                # repeat is almost always the same row anyway.
+                fetched_resources[ref] = body
 
     citations = evaluators.extract_citations(response_text)
-    return response_text, citations, tool_calls, fetched_refs, prompt_tokens, completion_tokens
+    return (
+        response_text,
+        citations,
+        tool_calls,
+        fetched_refs,
+        fetched_resources,
+        prompt_tokens,
+        completion_tokens,
+    )
 
 
-def _extract_refs_from_tool_message(msg: ToolMessage) -> set[str]:
-    """Best-effort: scan the tool message content for ``fhir_ref`` values."""
+_FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
+
+
+def _extract_resources_from_tool_message(msg: ToolMessage) -> dict[str, dict[str, Any]]:
+    """Best-effort: parse the tool message JSON and key each row by fhir_ref.
+
+    Falls back to a regex-only ref scan (with empty bodies) when the
+    content isn't parseable JSON, so older / non-standard tool outputs
+    still contribute to the ``fetched_refs`` set.
+    """
     content = msg.content
-    if not isinstance(content, str):
-        return set()
-    # The tool wrappers serialize rows as JSON; ``fhir_ref`` appears as a string field.
-    # A regex avoids paying for a JSON parse on every tool message.
-    import re as _re
+    if not isinstance(content, str) or not content:
+        return {}
 
-    pattern = _re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
-    return set(pattern.findall(content))
+    try:
+        payload = json.loads(content)
+    except (TypeError, ValueError):
+        return {ref: {} for ref in _FHIR_REF_PATTERN.findall(content)}
+
+    return {ref: body for ref, body in _walk_for_rows(payload)}
+
+
+def _walk_for_rows(node: Any):
+    """Yield ``(fhir_ref, row_body)`` pairs from any nested dict / list.
+
+    Tool results are usually ``{"ok": True, "rows": [{...}]}`` but composite
+    tools may nest their results deeper; walk recursively so nothing is
+    missed.
+    """
+    if isinstance(node, dict):
+        ref = node.get("fhir_ref")
+        if isinstance(ref, str) and ref:
+            # Pass a shallow projection (drop the ref itself so it doesn't
+            # echo back into the judge prompt as noise).
+            body = {k: v for k, v in node.items() if k != "fhir_ref"}
+            yield ref, body
+        for v in node.values():
+            yield from _walk_for_rows(v)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_for_rows(item)
 
 
 def _derive_decision(

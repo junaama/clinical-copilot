@@ -185,6 +185,13 @@ class Settings(BaseSettings):
     eval_experiment_name: str = Field(default="", alias="EVAL_EXPERIMENT_NAME")
     eval_fail_fast: bool = Field(default=False, alias="EVAL_FAIL_FAST")
 
+    # Faithfulness judge (issue 011). Defaults to Anthropic Haiku 4.5 so the
+    # judge is independent from the synthesizer (which the agent runs on
+    # gpt-4o-mini / Sonnet). Setting this to ``""`` disables the judge — the
+    # runner skips the dimension and the scoreboard column simply doesn't
+    # appear, useful when running in environments without ANTHROPIC_API_KEY.
+    eval_judge_model: str = Field(default="claude-haiku-4-5", alias="EVAL_JUDGE_MODEL")
+
     @property
     def langfuse_enabled(self) -> bool:
         return bool(
