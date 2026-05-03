@@ -296,6 +296,21 @@ def _flatten_scores(result: "CaseResult") -> list[tuple[str, float, str | None]]
             )
         )
 
+    # Standardized multi-turn rollup (issue 015). Fraction of turns where
+    # every applicable dimension passed. 1.0 on single-turn cases that
+    # didn't go through the multi-turn runner — the dim simply isn't
+    # present, so this score is skipped for them.
+    mt_dim = result.dimensions.get("multi_turn")
+    if mt_dim is not None:
+        details = mt_dim.details or {}
+        out.append(
+            (
+                "multi_turn.turn_pass_rate",
+                float(details.get("turn_pass_rate", mt_dim.score or 0.0)),
+                f"{details.get('turns_passed')}/{details.get('turns_total')}",
+            )
+        )
+
     # Standardized faithfulness scores (issues 011 + 012). Citations supported
     # is a continuous fraction; uncited_claims is a count (lower is better).
     # Both feed the v2 PRD's scoreboard at the dataset level.

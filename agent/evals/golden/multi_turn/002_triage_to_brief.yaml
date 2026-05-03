@@ -1,0 +1,67 @@
+id: golden-mt-002-triage-to-brief
+tier: golden
+description: >
+  Multi-turn UC-1 → UC-2 drilldown (issue 015). Hospitalist starts with
+  panel triage on dr_smith's roster, then drills into Hayes (fixture-3,
+  surfaced as a high-signal CHF decompensation), then asks for that
+  patient's medications. The agent must propagate the focus from the
+  triage list to a per-patient brief without re-resolution friction —
+  saying "Hayes" in turn 2 should land on fixture-3 because turn 1
+  surfaced him.
+workflow: W-1
+
+authenticated_as:
+  user_id: practitioner-dr-smith
+  role: hospitalist
+  care_team_includes: [fixture-1, fixture-3, fixture-5]
+
+session_context:
+  patient_id: ""    # panel-spanning workflow on the first turn
+  conversation_id: null
+  prior_turns: []
+
+turns:
+  - prompt: "Who do I need to see first this morning?"
+    must_contain:
+      - "Hayes"          # Robert flagged on the panel
+    must_cite: []
+    trajectory:
+      # Canonical W-1 triage — composite fans the change-signal across
+      # list_panel(user_id) under the CareTeam gate.
+      required_tools:
+        - run_panel_triage
+
+  - prompt: "Tell me about Hayes."
+    must_contain:
+      - "Hayes"
+    must_cite: []
+    trajectory:
+      # Per-patient brief on the patient surfaced by the prior turn.
+      required_tools:
+        - run_per_patient_brief
+
+  - prompt: "Their meds?"
+    must_contain:
+      - "Hayes"          # the agent must keep Hayes in scope, not pivot
+    must_cite: []
+    # Turn 3 is a follow-up pronoun that only resolves correctly if the
+    # multi-turn runner is threading state — saying "their meds" with no
+    # name relies on the conversation focus_pid being Hayes.
+
+expected:
+  workflow_id: W-1
+  decision: allow
+  forbidden_claims:
+    # Out-of-panel patients must never appear (CareTeam gate).
+    - "Maya"
+    - "Singh"
+    - "Linda"
+    - "Park"
+    - "no patients need attention"
+    - "all patients are stable"
+  forbidden_pids_in_response:
+    - fixture-2
+    - fixture-4
+  citation_completeness_min: 0.0
+  latency_ms_max: 120000
+  cost_usd_max: 1.00
