@@ -74,6 +74,14 @@ def _family_name(patient: dict) -> str:
     return name_obj.get("family") or ""
 
 
+def _team_has_practitioner(team: dict, practitioner_ref: str) -> bool:
+    """True iff ``team.participant[].member.reference`` matches ``practitioner_ref``."""
+    for p in team.get("participant") or []:
+        if ((p.get("member") or {}).get("reference") or "") == practitioner_ref:
+            return True
+    return False
+
+
 class CareTeamGate:
     """Authorization gate scoped to one user's CareTeam roster."""
 
@@ -106,18 +114,23 @@ class CareTeamGate:
         if not user_id:
             return AuthDecision.CARETEAM_DENIED
 
+        # OpenEMR's ``FhirCareTeamService::loadSearchParameters`` only exposes
+        # ``patient``, ``status``, ``_id``, ``_lastUpdated`` — there is no
+        # ``participant`` search param. We pivot the query: search teams by
+        # patient (cheap, scoped), then filter the participants client-side
+        # for our user.
         ok, entries, _err, _ms = await self._client.search(
             "CareTeam",
-            {"participant": f"Practitioner/{user_id}"},
+            {"patient": patient_id, "status": "active"},
         )
         if not ok:
             # Fail closed: if we can't verify membership we deny rather
             # than leaking patient data on a transient FHIR failure.
             return AuthDecision.CARETEAM_DENIED
 
-        target_ref = f"Patient/{patient_id}"
+        practitioner_ref = f"Practitioner/{user_id}"
         for team in entries:
-            if (team.get("subject") or {}).get("reference") == target_ref:
+            if _team_has_practitioner(team, practitioner_ref):
                 return AuthDecision.ALLOWED
         return AuthDecision.CARETEAM_DENIED
 
@@ -148,15 +161,22 @@ class CareTeamGate:
         return resolved
 
     async def _panel_pids_for(self, user_id: str) -> list[str]:
+        # ``CareTeam?participant=`` isn't supported by OpenEMR's FHIR module
+        # (see ``assert_authorized``). Fetching every active CareTeam and
+        # filtering client-side scales linearly with team count; for a single
+        # clinician's panel this is well within budget.
         ok, entries, _err, _ms = await self._client.search(
             "CareTeam",
-            {"participant": f"Practitioner/{user_id}"},
+            {"status": "active"},
         )
         if not ok:
             return []
+        practitioner_ref = f"Practitioner/{user_id}"
         seen: set[str] = set()
         pids: list[str] = []
         for team in entries:
+            if not _team_has_practitioner(team, practitioner_ref):
+                continue
             ref = (team.get("subject") or {}).get("reference") or ""
             if not ref.startswith("Patient/"):
                 continue
