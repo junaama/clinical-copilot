@@ -9,6 +9,7 @@ import pytest
 from copilot.eval import run_case
 from copilot.eval.case import Case
 
+from .conftest import record_case_result
 
 pytestmark = [
     pytest.mark.golden,
@@ -21,6 +22,7 @@ pytestmark = [
 
 async def test_golden_case(golden_case: Case, settings, langfuse) -> None:
     result = await run_case(golden_case, settings=settings, langfuse=langfuse)
+    record_case_result(result)
     if not result.passed:
         details = "\n  - ".join(result.failures or ["(no specific failures recorded)"])
         pytest.fail(
