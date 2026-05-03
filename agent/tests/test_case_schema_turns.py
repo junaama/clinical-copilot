@@ -201,10 +201,13 @@ def test_case_projections_read_from_turn_zero(tmp_path: Path) -> None:
     assert case.required_tools == ["get_recent_vitals"]
 
 
-def test_all_22_repo_cases_load_under_new_schema() -> None:
+def test_all_repo_cases_load_under_new_schema() -> None:
     """End-to-end migration check: every case file shipped in the repo
     loads via the new loader. Without this, a hand-edit slip during the
-    migration could ship as a silent regression."""
+    migration could ship as a silent regression. Issue 015 added three
+    multi-turn golden cases (live under ``evals/golden/multi_turn/``);
+    they parse with ``len(turns) > 1`` while the rest stay single-turn.
+    """
     evals_root = Path(__file__).resolve().parents[1] / "evals"
 
     smoke = load_cases_in_dir(evals_root / "smoke")
@@ -212,12 +215,23 @@ def test_all_22_repo_cases_load_under_new_schema() -> None:
     adversarial = load_cases_in_dir(evals_root / "adversarial")
 
     assert len(smoke) == 5, f"expected 5 smoke cases, got {len(smoke)}"
-    assert len(golden) == 11, f"expected 11 golden cases, got {len(golden)}"
+    # 11 single-turn golden + 3 multi-turn golden (issue 015) = 14.
+    assert len(golden) == 14, f"expected 14 golden cases, got {len(golden)}"
     assert len(adversarial) == 6, f"expected 6 adversarial cases, got {len(adversarial)}"
 
-    for case in smoke + golden + adversarial:
+    multi_turn_count = sum(1 for c in golden if len(c.turns) > 1)
+    assert multi_turn_count == 3, (
+        f"expected 3 multi-turn golden cases, got {multi_turn_count}"
+    )
+
+    for case in smoke + adversarial:
         assert len(case.turns) == 1, (
             f"{case.id}: legacy multi-turn-via-prior_turns not supported by "
             "the issue-014 single-element migration"
         )
         assert case.turns[0].prompt, f"{case.id}: empty prompt in turn 0"
+
+    for case in golden:
+        assert case.turns, f"{case.id}: empty turns list"
+        for idx, turn in enumerate(case.turns):
+            assert turn.prompt, f"{case.id}: empty prompt in turn {idx}"

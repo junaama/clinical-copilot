@@ -1,0 +1,70 @@
+id: golden-mt-001-eduardo-overnight-followup
+tier: golden
+description: >
+  Multi-turn UC-2 follow-up chain (issue 015). Hospitalist asks for the
+  Eduardo Perez 24-hour brief, then drills into the cross-cover plan,
+  then asks whether the creatinine has returned to baseline. The agent
+  must thread context across turns — turn 2 ("and the cross-cover doc's
+  plan?") only resolves correctly if turn 1's patient context (Eduardo /
+  fixture-1) is still in memory; turn 3's lab question depends on the
+  same context.
+workflow: W-2
+
+authenticated_as:
+  user_id: dr_lopez
+  role: hospitalist
+  care_team_includes: [fixture-1]
+
+session_context:
+  patient_id: fixture-1
+  conversation_id: null
+  prior_turns: []
+
+turns:
+  - prompt: "What happened to Eduardo Perez in the last 24 hours?"
+    must_contain:
+      - "90/60"
+      - "bolus"
+      - "lisinopril"
+    must_cite:
+      - "Observation/obs-bp-2"
+      - "DocumentReference/doc-overnight-note"
+    trajectory:
+      # Canonical W-2 brief — composite tool fans out the FHIR reads.
+      required_tools:
+        - run_per_patient_brief
+
+  - prompt: "And the cross-cover doc's plan?"
+    must_contain:
+      - "lisinopril"
+      - "metoprolol"
+    must_cite:
+      - "DocumentReference/doc-cross-cover"
+    # Turn 2 resolves a follow-up against the conversation context (no
+    # patient name repeated). The agent picks the targeted read for the
+    # cross-cover note rather than re-running the full brief.
+
+  - prompt: "Is the creatinine back to baseline?"
+    must_contain:
+      - "1.8"
+      - "creatinine"
+    must_cite:
+      - "Observation/obs-cr-1"
+    trajectory:
+      # Granular lab read — the W-6 causal-trace pattern. The composite
+      # is overkill for a single targeted lab question.
+      required_tools:
+        - get_recent_labs
+
+expected:
+  workflow_id: W-2
+  decision: allow
+  forbidden_claims:
+    - "no overnight events"
+    - "patient is stable"
+    - "I don't have any patients"
+    - "you have no patients"
+  forbidden_pids_in_response: []
+  citation_completeness_min: 1.0
+  latency_ms_max: 90000
+  cost_usd_max: 1.00
