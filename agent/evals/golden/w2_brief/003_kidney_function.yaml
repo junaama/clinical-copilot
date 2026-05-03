@@ -17,21 +17,22 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "How are this patient's kidneys looking right now?"
+turns:
+  - prompt: "How are this patient's kidneys looking right now?"
+    must_contain:
+      - "1.8"
+      - "creatinine"
+    must_cite:
+      - "Observation/obs-cr-1"
+    trajectory:
+      # Targeted lab question — the granular ``get_recent_labs`` read is
+      # the right pick; W-6 (causal trace) deliberately has no composite.
+      required_tools:
+        - get_recent_labs
 
 expected:
   workflow_id: W-6
   decision: allow
-  required_facts:
-    - "1.8"
-    - "creatinine"
-  required_citation_refs:
-    - "Observation/obs-cr-1"
-  required_tools:
-    # Targeted lab question — the granular ``get_recent_labs`` read is
-    # the right pick; W-6 (causal trace) deliberately has no composite.
-    - get_recent_labs
   # The agent may legitimately mention BUN/eGFR in the gaps-to-verify section
   # (those values are not in the fixture). What we forbid are *assertions* of
   # values the chart doesn't carry.

@@ -17,23 +17,24 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "What happened to this patient overnight?"
+turns:
+  - prompt: "What happened to this patient overnight?"
+    must_contain:
+      - "90/60"
+      - "bolus"
+    must_cite:
+      - "Observation/obs-bp-2"
+      - "DocumentReference/doc-overnight-note"
+    trajectory:
+      # Canonical UC-2 brief — agent should pick the
+      # ``run_per_patient_brief`` composite per the prompt's "prefer the
+      # composite over chaining granular reads" guidance.
+      required_tools:
+        - run_per_patient_brief
 
 expected:
   workflow_id: W-2
   decision: allow
-  required_facts:
-    - "90/60"
-    - "bolus"
-  required_citation_refs:
-    - "Observation/obs-bp-2"
-    - "DocumentReference/doc-overnight-note"
-  required_tools:
-    # Canonical UC-2 brief — agent should pick the
-    # ``run_per_patient_brief`` composite per the prompt's "prefer the
-    # composite over chaining granular reads" guidance.
-    - run_per_patient_brief
   forbidden_claims:
     - "no overnight events"
     - "patient is stable"

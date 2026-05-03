@@ -11,7 +11,7 @@ the YAML files under ``agent/evals/<tier>/``.
 
 from __future__ import annotations
 
-from .case import Case, CaseResult, DimensionResult, load_case, load_cases_in_dir
+from .case import Case, CaseResult, DimensionResult, Turn, load_case, load_cases_in_dir
 from .faithfulness import (
     CitationClaim,
     CitationVerdict,
@@ -32,6 +32,7 @@ __all__ = [
     "FaithfulnessJudge",
     "FaithfulnessResult",
     "TrajectoryResult",
+    "Turn",
     "evaluate_trajectory",
     "extract_citation_claims",
     "load_case",

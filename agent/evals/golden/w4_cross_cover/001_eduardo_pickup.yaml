@@ -22,29 +22,30 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "I'm cross-covering Eduardo Perez tonight — never seen him before. Walk me through what I need to know."
+turns:
+  - prompt: "I'm cross-covering Eduardo Perez tonight — never seen him before. Walk me through what I need to know."
+    must_contain:
+      # Leading active problems anchor the case story.
+      - "heart failure"
+      - "kidney"
+      # Active plan / overnight handoff items.
+      - "lisinopril"
+      - "Okafor"
+    must_cite:
+      # The cross-cover note is the canonical hospital-course handoff for
+      # this patient — without it the agent isn't telling the cross-cover
+      # story.
+      - "DocumentReference/doc-cross-cover"
+    trajectory:
+      # Canonical W-4 cross-cover onboarding — agent must pick the
+      # ``run_cross_cover_onboarding`` composite (W-4 and W-5 share it),
+      # not run_per_patient_brief which is the narrower 24-hour view.
+      required_tools:
+        - run_cross_cover_onboarding
 
 expected:
   workflow_id: W-4
   decision: allow
-  required_facts:
-    # Leading active problems anchor the case story.
-    - "heart failure"
-    - "kidney"
-    # Active plan / overnight handoff items.
-    - "lisinopril"
-    - "Okafor"
-  required_citation_refs:
-    # The cross-cover note is the canonical hospital-course handoff for
-    # this patient — without it the agent isn't telling the cross-cover
-    # story.
-    - "DocumentReference/doc-cross-cover"
-  required_tools:
-    # Canonical W-4 cross-cover onboarding — agent must pick the
-    # ``run_cross_cover_onboarding`` composite (W-4 and W-5 share it),
-    # not run_per_patient_brief which is the narrower 24-hour view.
-    - run_cross_cover_onboarding
   forbidden_claims:
     # Cross-cover orientation is narrative; bare-vital dumps belong in
     # W-2 / W-3. Forbidding the W-2 closer is the cleanest signal that

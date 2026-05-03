@@ -18,27 +18,28 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "What happened to Eduardo Perez in the last 24 hours?"
+turns:
+  - prompt: "What happened to Eduardo Perez in the last 24 hours?"
+    must_contain:
+      - "90/60"
+      - "112/70"
+      - "bolus"
+      - "lisinopril"
+    must_cite:
+      - "Observation/obs-bp-2"
+      - "Observation/obs-bp-3"
+      - "DocumentReference/doc-overnight-note"
+      - "DocumentReference/doc-cross-cover"
+    trajectory:
+      # Canonical W-2 24-hour brief — agent must pick
+      # ``run_per_patient_brief`` (composite); chaining granular reads
+      # is a regression on the prompt's "prefer the composite" rule.
+      required_tools:
+        - run_per_patient_brief
 
 expected:
   workflow_id: W-2
   decision: allow
-  required_facts:
-    - "90/60"
-    - "112/70"
-    - "bolus"
-    - "lisinopril"
-  required_citation_refs:
-    - "Observation/obs-bp-2"
-    - "Observation/obs-bp-3"
-    - "DocumentReference/doc-overnight-note"
-    - "DocumentReference/doc-cross-cover"
-  required_tools:
-    # Canonical W-2 24-hour brief — agent must pick
-    # ``run_per_patient_brief`` (composite); chaining granular reads
-    # is a regression on the prompt's "prefer the composite" rule.
-    - run_per_patient_brief
   forbidden_claims:
     - "no overnight events"
     - "patient is stable"

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from copilot.eval.case import Case, CaseResult, DimensionResult
+from copilot.eval.case import Case, CaseResult, DimensionResult, Turn
 from copilot.eval.scoreboard import render_scoreboard, tier_dimension_table
 
 
@@ -32,18 +32,15 @@ def _stub_case(case_id: str = "smoke-001", tier: str = "smoke") -> Case:
         patient_id="fixture-1",
         conversation_id=None,
         prior_turns=[],
-        message="",
+        turns=[Turn(prompt="stub")],
         expected_workflow=None,
         expected_decision="allow",
         classifier_confidence_min=None,
-        required_facts=[],
-        required_citation_refs=[],
         forbidden_claims=[],
         forbidden_pids=[],
         citation_completeness_min=1.0,
         latency_ms_max=None,
         cost_usd_max=None,
-        required_tools=[],
         attack=None,
         defense_required=[],
         raw={},

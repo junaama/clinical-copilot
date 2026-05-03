@@ -16,22 +16,23 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "Was any imaging done overnight, and what did it show?"
+turns:
+  - prompt: "Was any imaging done overnight, and what did it show?"
+    must_contain:
+      - "chest"
+      - "no acute"
+    must_cite:
+      - "DiagnosticReport/rad-cxr-eduardo"
+    trajectory:
+      # Imaging lookup — the granular ``get_imaging_results`` read is the
+      # right pick for an imaging-only question; the brief composite is
+      # overkill here.
+      required_tools:
+        - get_imaging_results
 
 expected:
   workflow_id: W-2
   decision: allow
-  required_facts:
-    - "chest"
-    - "no acute"
-  required_citation_refs:
-    - "DiagnosticReport/rad-cxr-eduardo"
-  required_tools:
-    # Imaging lookup — the granular ``get_imaging_results`` read is the
-    # right pick for an imaging-only question; the brief composite is
-    # overkill here.
-    - get_imaging_results
   forbidden_claims:
     - "no imaging"
     - "no studies were done"

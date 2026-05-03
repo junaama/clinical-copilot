@@ -65,6 +65,16 @@ async def run_case(
     """
     settings = settings or get_settings()
 
+    # Single-turn path only for now. Issue 014 unified the schema around a
+    # ``turns: [...]`` list; multi-turn execution lands in issue 015. Cases
+    # with more than one turn fail here with a clear pointer to the slice
+    # that will handle them — better than silently scoring only turn 0.
+    if len(case.turns) != 1:
+        raise NotImplementedError(
+            f"case {case.id}: multi-turn cases (turns={len(case.turns)}) "
+            "are not yet supported by the runner — see issue 015."
+        )
+
     # Build the full graph (agent → verifier) so eval runs exercise the
     # verifier's citation-resolution check, not just the bare agent.
     graph = build_graph(settings)

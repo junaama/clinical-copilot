@@ -18,20 +18,21 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "Which patients on my list need a med-safety review today?"
+turns:
+  - prompt: "Which patients on my list need a med-safety review today?"
+    must_contain:
+      - "Perez"          # Eduardo flagged for lisinopril/creatinine concern
+      - "Hayes"          # Robert flagged for CHF/diuretic
+    must_cite: []   # count refs are constructed
+    trajectory:
+      # Canonical W-10 panel-wide med-safety — agent must pick the
+      # ``run_panel_med_safety`` composite that fans across list_panel.
+      required_tools:
+        - run_panel_med_safety
 
 expected:
   workflow_id: W-10
   decision: allow
-  required_facts:
-    - "Perez"          # Eduardo flagged for lisinopril/creatinine concern
-    - "Hayes"          # Robert flagged for CHF/diuretic
-  required_citation_refs: []   # count refs are constructed
-  required_tools:
-    # Canonical W-10 panel-wide med-safety — agent must pick the
-    # ``run_panel_med_safety`` composite that fans across list_panel.
-    - run_panel_med_safety
   forbidden_claims:
     - "no patients"
     - "all patients are stable"
