@@ -9,6 +9,7 @@ OpenEMR instance via the production-grade SMART Backend Services flow.
 |---|---|
 | `bootstrap_oauth.py` | One-time: generates RSA keypair, registers a backend-services client at `/oauth2/default/registration`. |
 | `get_token.py` | Reusable: signs a JWT with the private key, exchanges it for a short-lived bearer token. |
+| `seed_careteam.py` | Idempotent: creates `dr_smith` user and assigns them to ~half of existing patients via `care_teams` + `care_team_member` DB inserts. |
 | `seed_load.py` | (Coming next) Loads Synthea bundles + hand-authored "today" layer + adversarial layer into the FHIR store. |
 | `secrets/` | Gitignored. Holds the private key, the `client_id` from registration, and any other credentials. Never commit. |
 
