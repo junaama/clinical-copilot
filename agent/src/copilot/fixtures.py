@@ -29,6 +29,24 @@ PRACTITIONER_DR_SMITH = "practitioner-dr-smith"
 PRACTITIONER_ADMIN = "practitioner-admin"
 DR_SMITH_PANEL = ["fixture-1", "fixture-3", "fixture-5"]
 
+# Eval-suite personas (issue 019). The eval cases under
+# ``agent/evals/{smoke,golden,adversarial}`` use these user_ids; the fixture
+# CareTeam roster must back them up so the gate does not fail-closed on
+# every non-admin clinician in fixture mode.
+#
+# - ``dr_lopez`` is the default UC-2 brief persona AND the smoke-004 panel
+#   triage persona, so they cover the full panel.
+# - ``dr_okafor`` is documented as Eduardo's cross-cover hospitalist (per
+#   the overnight note's author), so they get fixture-1 only.
+# - ``pharmacist_kim`` is the panel-wide med-safety persona (golden-w10),
+#   so they cover the full panel.
+PRACTITIONER_DR_LOPEZ = "dr_lopez"
+PRACTITIONER_DR_OKAFOR = "dr_okafor"
+PRACTITIONER_PHARMACIST_KIM = "pharmacist_kim"
+DR_LOPEZ_PANEL = ["fixture-1", "fixture-2", "fixture-3", "fixture-4", "fixture-5"]
+DR_OKAFOR_PANEL = ["fixture-1"]
+PHARMACIST_KIM_PANEL = ["fixture-1", "fixture-2", "fixture-3", "fixture-4", "fixture-5"]
+
 
 def _ts(hours_ago: int, minutes: int = 0) -> str:
     """Build an ISO timestamp relative to a fixed reference point."""
@@ -420,6 +438,12 @@ FIXTURE_BUNDLE: dict[str, list[dict[str, Any]]] = {
         # fixture-4) is what makes the gate's careteam_denied path visible
         # in the demo: dr_smith asking about Maya Singh sees a refusal,
         # admin asking about her sees the data.
+        #
+        # The eval personas (dr_lopez, dr_okafor, pharmacist_kim) ride
+        # alongside dr_smith on each team. dr_lopez and pharmacist_kim are
+        # on the full panel so smoke-004 triage and golden-w10 med-safety
+        # work in fixture mode. dr_okafor is on Eduardo only (their
+        # cross-cover note is in the fixture).
         {
             "resourceType": "CareTeam",
             "id": "ct-eduardo",
@@ -427,6 +451,21 @@ FIXTURE_BUNDLE: dict[str, list[dict[str, Any]]] = {
             "status": "active",
             "participant": [
                 {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_SMITH}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_LOPEZ}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_OKAFOR}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_PHARMACIST_KIM}"}},
+            ],
+        },
+        {
+            "resourceType": "CareTeam",
+            "id": "ct-maya",
+            "subject": {"reference": "Patient/fixture-2"},
+            "status": "active",
+            "participant": [
+                # dr_smith deliberately absent — preserves the demo's
+                # careteam_denied path on Maya.
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_LOPEZ}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_PHARMACIST_KIM}"}},
             ],
         },
         {
@@ -436,6 +475,20 @@ FIXTURE_BUNDLE: dict[str, list[dict[str, Any]]] = {
             "status": "active",
             "participant": [
                 {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_SMITH}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_LOPEZ}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_PHARMACIST_KIM}"}},
+            ],
+        },
+        {
+            "resourceType": "CareTeam",
+            "id": "ct-linda",
+            "subject": {"reference": "Patient/fixture-4"},
+            "status": "active",
+            "participant": [
+                # dr_smith deliberately absent — preserves the demo's
+                # careteam_denied path on Linda.
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_LOPEZ}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_PHARMACIST_KIM}"}},
             ],
         },
         {
@@ -445,11 +498,10 @@ FIXTURE_BUNDLE: dict[str, list[dict[str, Any]]] = {
             "status": "active",
             "participant": [
                 {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_SMITH}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_DR_LOPEZ}"}},
+                {"member": {"reference": f"Practitioner/{PRACTITIONER_PHARMACIST_KIM}"}},
             ],
         },
-        # Maya (fixture-2) and Linda (fixture-4) intentionally have no
-        # CareTeam row scoped to dr_smith. Admin reaches them via the
-        # admin allow-list.
     ],
     "DocumentReference": [
         {

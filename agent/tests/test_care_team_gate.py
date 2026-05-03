@@ -25,9 +25,14 @@ from copilot.care_team import AuthDecision, CareTeamGate, ResolvedPatient
 from copilot.config import Settings
 from copilot.fhir import FhirClient
 from copilot.fixtures import (
+    DR_LOPEZ_PANEL,
     DR_SMITH_PANEL,
+    PHARMACIST_KIM_PANEL,
     PRACTITIONER_ADMIN,
+    PRACTITIONER_DR_LOPEZ,
+    PRACTITIONER_DR_OKAFOR,
     PRACTITIONER_DR_SMITH,
+    PRACTITIONER_PHARMACIST_KIM,
 )
 
 
@@ -139,6 +144,67 @@ async def test_list_panel_unknown_user_returns_empty() -> None:
     gate = _gate()
     panel = await gate.list_panel("practitioner-unknown")
     assert panel == []
+
+
+# ---------------------------------------------------------------------------
+# Eval-persona coverage (issue 019). The eval suite uses several personas
+# beyond ``practitioner-dr-smith`` (``dr_lopez``, ``dr_okafor``,
+# ``pharmacist_kim``). In fixture mode the fixture CareTeam roster must
+# back them up so panel-scope cases (smoke-004, golden-w10) and
+# single-patient cases (UC-2 briefs under dr_lopez) don't fail-closed at
+# the gate.
+# ---------------------------------------------------------------------------
+
+
+async def test_assert_authorized_dr_lopez_allows_eduardo() -> None:
+    """``dr_lopez`` must be on Eduardo's CareTeam — most UC-2 smoke cases use this persona."""
+    gate = _gate()
+    decision = await gate.assert_authorized(PRACTITIONER_DR_LOPEZ, "fixture-1")
+    assert decision is AuthDecision.ALLOWED
+
+
+async def test_list_panel_dr_lopez_returns_full_roster() -> None:
+    """``dr_lopez`` is the panel-spanning persona for smoke-004 triage."""
+    gate = _gate()
+    panel = await gate.list_panel(PRACTITIONER_DR_LOPEZ)
+    pids = sorted(p.patient_id for p in panel)
+    assert pids == sorted(DR_LOPEZ_PANEL)
+
+
+async def test_assert_authorized_dr_okafor_allows_eduardo() -> None:
+    """Cross-cover hospitalist on Eduardo (per the overnight note's author)."""
+    gate = _gate()
+    decision = await gate.assert_authorized(PRACTITIONER_DR_OKAFOR, "fixture-1")
+    assert decision is AuthDecision.ALLOWED
+
+
+async def test_assert_authorized_pharmacist_kim_allows_all() -> None:
+    """Pharmacist persona for golden-w10 panel-wide med-safety scan."""
+    gate = _gate()
+    for pid in PHARMACIST_KIM_PANEL:
+        decision = await gate.assert_authorized(PRACTITIONER_PHARMACIST_KIM, pid)
+        assert decision is AuthDecision.ALLOWED, f"pharmacist_kim denied for {pid}"
+
+
+async def test_list_panel_pharmacist_kim_returns_full_roster() -> None:
+    gate = _gate()
+    panel = await gate.list_panel(PRACTITIONER_PHARMACIST_KIM)
+    pids = sorted(p.patient_id for p in panel)
+    assert pids == sorted(PHARMACIST_KIM_PANEL)
+
+
+async def test_dr_smith_panel_unchanged() -> None:
+    """Regression: adding new personas must not widen dr_smith's roster.
+
+    The demo's careteam_denied path depends on dr_smith NOT being on Maya
+    (fixture-2) or Linda (fixture-4)'s CareTeam.
+    """
+    gate = _gate()
+    panel = await gate.list_panel(PRACTITIONER_DR_SMITH)
+    pids = sorted(p.patient_id for p in panel)
+    assert pids == sorted(DR_SMITH_PANEL)
+    assert "fixture-2" not in pids
+    assert "fixture-4" not in pids
 
 
 # ---------------------------------------------------------------------------
