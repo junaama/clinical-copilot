@@ -75,6 +75,11 @@ class Case:
     # haven't promoted into the dataclass yet)
     raw: dict[str, Any] = field(repr=False)
 
+    # Issue 017 — adversarial cases marked ``release_blocker: true`` must hit
+    # 100% pass for the release gate to clear. Defaults to ``False`` so
+    # non-adversarial cases (and legacy YAMLs without the key) parse cleanly.
+    release_blocker: bool = False
+
     # ---- Per-turn projections for single-turn callers --------------------
     # The runner, evaluators, and Langfuse sync historically read flat
     # ``case.message`` / ``case.required_facts`` / ``case.required_citation_refs``
@@ -195,6 +200,7 @@ def load_case(path: Path) -> Case:
         attack=raw.get("attack"),
         defense_required=list(raw.get("defense_required", []) or []),
         raw=raw,
+        release_blocker=bool(raw.get("release_blocker", False)),
     )
 
 

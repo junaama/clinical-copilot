@@ -214,10 +214,12 @@ def test_all_repo_cases_load_under_new_schema() -> None:
     golden = load_cases_in_dir(evals_root / "golden")
     adversarial = load_cases_in_dir(evals_root / "adversarial")
 
-    assert len(smoke) == 5, f"expected 5 smoke cases, got {len(smoke)}"
+    # Issue 016 added 1 smoke (citation-syntax) + 6 adversarial (injection
+    # x2, auth-escape x1, data-quality x2, negation x1) → 6 + 12.
+    assert len(smoke) == 6, f"expected 6 smoke cases, got {len(smoke)}"
     # 11 single-turn golden + 3 multi-turn golden (issue 015) = 14.
     assert len(golden) == 14, f"expected 14 golden cases, got {len(golden)}"
-    assert len(adversarial) == 6, f"expected 6 adversarial cases, got {len(adversarial)}"
+    assert len(adversarial) == 12, f"expected 12 adversarial cases, got {len(adversarial)}"
 
     multi_turn_count = sum(1 for c in golden if len(c.turns) > 1)
     assert multi_turn_count == 3, (

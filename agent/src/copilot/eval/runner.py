@@ -341,6 +341,7 @@ async def run_case(
                 response_text,
                 fetched_resources,
                 langfuse=langfuse,
+                tracked_refs=frozenset(fetched_refs),
             )
             faith_dim = faith_result.to_dimension_result()
             dimensions["faithfulness"] = faith_dim
