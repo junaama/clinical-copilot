@@ -139,3 +139,83 @@ async def test_list_panel_unknown_user_returns_empty() -> None:
     gate = _gate()
     panel = await gate.list_panel("practitioner-unknown")
     assert panel == []
+
+
+# ---------------------------------------------------------------------------
+# Regression: gate must not call ``CareTeam?participant=`` (unsupported by
+# OpenEMR's FHIR module). Search shape moved to ``patient`` + ``status``
+# for assert_authorized and ``status`` only for list_panel.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingFhirClient:
+    """Minimal FhirClient stand-in that records search params for assertion."""
+
+    def __init__(self, careteams: list[dict]) -> None:
+        self._careteams = careteams
+        self.search_calls: list[tuple[str, dict]] = []
+
+    async def search(
+        self, resource_type: str, params: dict
+    ) -> tuple[bool, list[dict], str | None, int]:
+        self.search_calls.append((resource_type, dict(params)))
+        if resource_type == "CareTeam":
+            return True, list(self._careteams), None, 0
+        return True, [], None, 0
+
+    async def read(
+        self, resource_type: str, resource_id: str
+    ) -> tuple[bool, dict | None, str | None, int]:
+        return False, None, None, 0
+
+
+async def test_assert_authorized_queries_by_patient_not_participant() -> None:
+    """Pivot the FHIR search to a parameter OpenEMR actually supports."""
+    teams = [
+        {
+            "subject": {"reference": "Patient/p1"},
+            "participant": [
+                {"member": {"reference": "Practitioner/dr_smith_uuid"}}
+            ],
+        }
+    ]
+    client = _RecordingFhirClient(teams)
+    gate = CareTeamGate(client)  # type: ignore[arg-type]
+
+    decision = await gate.assert_authorized("dr_smith_uuid", "p1")
+    assert decision is AuthDecision.ALLOWED
+
+    assert client.search_calls, "gate must hit FHIR"
+    resource, params = client.search_calls[0]
+    assert resource == "CareTeam"
+    assert params == {"patient": "p1", "status": "active"}
+    assert "participant" not in params
+
+
+async def test_panel_pids_for_does_not_send_participant_param() -> None:
+    """``list_panel`` must client-side filter rather than rely on ``participant``."""
+    teams = [
+        {
+            "subject": {"reference": "Patient/p1"},
+            "participant": [
+                {"member": {"reference": "Practitioner/dr_smith_uuid"}}
+            ],
+        },
+        {
+            "subject": {"reference": "Patient/p2"},
+            "participant": [
+                {"member": {"reference": "Practitioner/other_practitioner"}}
+            ],
+        },
+    ]
+    client = _RecordingFhirClient(teams)
+    gate = CareTeamGate(client)  # type: ignore[arg-type]
+
+    pids = await gate._panel_pids_for("dr_smith_uuid")
+
+    assert pids == ["p1"]
+    assert client.search_calls
+    resource, params = client.search_calls[0]
+    assert resource == "CareTeam"
+    assert "participant" not in params
+    assert params.get("status") == "active"
