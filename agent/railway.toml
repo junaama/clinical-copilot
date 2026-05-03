@@ -3,7 +3,10 @@
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+# Path is relative to the deploy root (repo root — see scripts/deploy-agent.sh).
+# The agent image bakes the copilot-ui static build, so the build context has
+# to include both ``agent/`` and ``copilot-ui/`` at the repo top.
+dockerfilePath = "agent/Dockerfile"
 
 [deploy]
 # Railway injects $PORT; the Dockerfile CMD picks it up. We set the

@@ -18,9 +18,13 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlencode
 
+import os
+from pathlib import Path
+
 from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
@@ -772,13 +776,25 @@ async def auth_standalone_callback(
     await gateway.upsert_token_bundle(token_bundle)
 
     # Build the redirect response with the session cookie.
-    ui_url = settings.copilot_ui_url or "http://localhost:5173"
+    #
+    # Production now serves the UI from this same origin (StaticFiles mount
+    # at "/"), so the redirect target defaults to "/" — relative, resolves to
+    # the agent's own URL. ``COPILOT_UI_URL`` overrides for local dev where
+    # the Vite dev server runs separately on :5173.
+    #
+    # Cookie attributes:
+    # - same-origin prod (HTTPS) → ``SameSite=Lax; Secure``
+    # - localhost dev (Vite proxy) → ``SameSite=Lax`` + insecure
+    # We no longer need ``SameSite=None``; cross-site cookies are blocked by
+    # third-party-cookie protections in modern browsers regardless.
+    ui_url = settings.copilot_ui_url or "/"
+    is_https = ui_url.startswith("https://") or ui_url == "/"
     response = RedirectResponse(url=ui_url, status_code=302)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=session_id,
         httponly=True,
-        secure=False,  # False for localhost dev; True in production via reverse proxy
+        secure=is_https,
         samesite="lax",
         path="/",
         max_age=settings.session_ttl_seconds,
@@ -982,3 +998,13 @@ async def get_conversation_messages(
         "last_focus_pid": row.last_focus_pid,
         "messages": messages,
     }
+
+
+# Static UI mount — must be last so the API routes above take precedence.
+# ``html=True`` makes StaticFiles fall back to ``index.html`` for paths that
+# don't match a real file (SPA client-side routes). The directory is set in
+# the Dockerfile via ``COPILOT_STATIC_DIR``; absent in test/dev runs, we
+# skip the mount so unit tests don't need a built UI on disk.
+_static_dir = os.environ.get("COPILOT_STATIC_DIR", "")
+if _static_dir and Path(_static_dir).is_dir():
+    app.mount("/", StaticFiles(directory=_static_dir, html=True), name="static")
