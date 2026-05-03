@@ -1,0 +1,15 @@
+# Repo-root Railway config. Used when deploys upload the entire repo as the
+# build context — currently only ``scripts/deploy-agent.sh`` does this so the
+# agent image can bundle the copilot-ui static build alongside the Python
+# service. Without this file Railway autodetects the OpenEMR ``composer.json``
+# at the root and tries to build a PHP image, which is wrong for this service.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "agent/Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

@@ -72,10 +72,10 @@ class Settings(BaseSettings):
     )
     smart_standalone_scopes: str = Field(
         default=(
-            "openid fhirUser launch/user offline_access "
+            "openid fhirUser offline_access "
             "user/Patient.rs user/Observation.rs "
             "user/Condition.rs user/MedicationRequest.rs "
-            "user/MedicationAdministration.rs user/Encounter.rs "
+            "user/Encounter.rs "
             "user/AllergyIntolerance.rs user/DocumentReference.rs "
             "user/DiagnosticReport.rs user/ServiceRequest.rs "
             "user/CareTeam.rs user/Practitioner.rs"

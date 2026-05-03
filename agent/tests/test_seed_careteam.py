@@ -11,12 +11,21 @@ from __future__ import annotations
 
 from scripts.seed.seed_careteam import (
     DR_SMITH_CONFIG,
+    build_acl_php_helper,
+    build_ensure_auth_group_sql,
     build_ensure_user_sql,
+    build_ensure_users_secure_sql,
     build_seed_care_team_members_sql,
     build_seed_care_teams_sql,
     generate_full_seed_sql,
+    hash_password,
     select_patient_pids,
 )
+
+
+# Deterministic placeholder hash for tests — bcrypt-shaped but doesn't have
+# to verify against any password since we only assert SQL shape.
+_TEST_HASH = "$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"
 
 
 class TestSelectPatientPids:
@@ -155,38 +164,131 @@ class TestGenerateFullSeedSql:
     """generate_full_seed_sql produces a complete, executable SQL script."""
 
     def test_contains_all_three_steps(self) -> None:
-        sql = generate_full_seed_sql([2, 4])
+        sql = generate_full_seed_sql([2, 4], _TEST_HASH)
         assert "Step 1" in sql
         assert "Step 2" in sql
         assert "Step 3" in sql
 
     def test_contains_user_insert(self) -> None:
-        sql = generate_full_seed_sql([2])
+        sql = generate_full_seed_sql([2], _TEST_HASH)
         assert "INSERT INTO `users`" in sql
 
     def test_contains_care_teams_insert(self) -> None:
-        sql = generate_full_seed_sql([2])
+        sql = generate_full_seed_sql([2], _TEST_HASH)
         assert "INSERT INTO `care_teams`" in sql
 
     def test_contains_care_team_member_insert(self) -> None:
-        sql = generate_full_seed_sql([2])
+        sql = generate_full_seed_sql([2], _TEST_HASH)
         assert "INSERT INTO `care_team_member`" in sql
 
     def test_contains_reporting_select(self) -> None:
-        sql = generate_full_seed_sql([2])
+        sql = generate_full_seed_sql([2], _TEST_HASH)
         assert "Report results" in sql
         assert "SELECT" in sql
 
     def test_empty_pids_still_creates_user(self) -> None:
-        sql = generate_full_seed_sql([])
+        sql = generate_full_seed_sql([], _TEST_HASH)
         assert "INSERT INTO `users`" in sql
         assert "INSERT INTO `care_teams`" not in sql
 
     def test_multiple_pids_produce_matching_inserts(self) -> None:
-        sql = generate_full_seed_sql([2, 4, 6])
+        sql = generate_full_seed_sql([2, 4, 6], _TEST_HASH)
         # Should have 3 care_teams INSERTs and 3 care_team_member INSERTs
         assert sql.count("INSERT INTO `care_teams`") == 3
         assert sql.count("INSERT INTO `care_team_member`") == 3
+
+    def test_contains_users_secure_insert(self) -> None:
+        sql = generate_full_seed_sql([2], _TEST_HASH)
+        assert "INSERT INTO `users_secure`" in sql
+        assert _TEST_HASH in sql
+
+    def test_users_secure_step_runs_after_user_creation(self) -> None:
+        """``users_secure`` row depends on ``users.id`` — must come after."""
+        sql = generate_full_seed_sql([2], _TEST_HASH)
+        assert sql.index("INSERT INTO `users`") < sql.index("INSERT INTO `users_secure`")
+
+
+class TestBuildEnsureUsersSecureSql:
+    """build_ensure_users_secure_sql writes an idempotent password row."""
+
+    def test_uses_username_subquery_for_id(self) -> None:
+        """``users.id`` is resolved at INSERT time, not hardcoded."""
+        sql = build_ensure_users_secure_sql("dr_smith", _TEST_HASH)
+        assert "FROM `users` u" in sql
+        assert "WHERE u.username = 'dr_smith'" in sql
+
+    def test_on_duplicate_key_update_rotates_password(self) -> None:
+        """Re-running with a new hash must update, not silently no-op."""
+        sql = build_ensure_users_secure_sql("dr_smith", _TEST_HASH)
+        assert "ON DUPLICATE KEY UPDATE" in sql
+        assert "`password` = '" in sql
+
+    def test_escapes_single_quotes_in_hash(self) -> None:
+        """Defensive — bcrypt output is ASCII-only, but quote-escape regardless."""
+        sql = build_ensure_users_secure_sql("dr_smith", "ab'cd")
+        assert "'ab''cd'" in sql
+
+
+class TestHashPassword:
+    """hash_password wraps bcrypt with project defaults."""
+
+    def test_returns_bcrypt_shaped_string(self) -> None:
+        h = hash_password("hunter2")
+        assert h.startswith("$2y$")
+        assert len(h) == 60
+
+    def test_round_trip_verifies(self) -> None:
+        """``$2y$`` rewrite must remain bcrypt-byte-compatible."""
+        import bcrypt
+
+        h = hash_password("hunter2")
+        # bcrypt.checkpw accepts both $2b$ and $2y$ prefixes — same algorithm.
+        assert bcrypt.checkpw(b"hunter2", h.encode("ascii"))
+        assert not bcrypt.checkpw(b"wrong", h.encode("ascii"))
+
+
+class TestBuildEnsureAuthGroupSql:
+    """build_ensure_auth_group_sql gates the OpenEMR auth-group check."""
+
+    def test_inserts_into_groups_table(self) -> None:
+        sql = build_ensure_auth_group_sql("dr_smith")
+        assert "INSERT INTO `groups`" in sql
+        assert "'Default'" in sql
+        assert "'dr_smith'" in sql
+
+    def test_idempotent_guard(self) -> None:
+        sql = build_ensure_auth_group_sql("dr_smith")
+        assert "WHERE NOT EXISTS" in sql
+
+
+class TestBuildAclPhpHelper:
+    """build_acl_php_helper emits a runnable phpGACL snippet."""
+
+    def test_calls_add_user_aros(self) -> None:
+        snippet = build_acl_php_helper("dr_smith")
+        assert "AclExtended::addUserAros" in snippet
+        assert '"dr_smith"' in snippet
+        assert '"Physicians"' in snippet
+
+    def test_includes_globals_shim(self) -> None:
+        """phpGACL needs HTTP env shims to load OpenEMR globals from CLI."""
+        snippet = build_acl_php_helper("dr_smith")
+        assert "HTTP_HOST" in snippet
+        assert 'require "interface/globals.php"' in snippet
+
+
+class TestGenerateFullSeedSqlGatesOnly:
+    """generate_full_seed_sql no longer emits raw gacl_* SQL."""
+
+    def test_does_not_touch_gacl_tables(self) -> None:
+        """phpGACL caches break — direct INSERTs are the wrong path."""
+        sql = generate_full_seed_sql([2], _TEST_HASH)
+        assert "INSERT INTO `gacl_aro`" not in sql
+        assert "INSERT INTO `gacl_groups_aro_map`" not in sql
+
+    def test_emits_groups_insert(self) -> None:
+        sql = generate_full_seed_sql([2], _TEST_HASH)
+        assert "INSERT INTO `groups`" in sql
 
 
 class TestDrSmithConfig:

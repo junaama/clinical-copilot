@@ -1,0 +1,53 @@
+# Repo-root .dockerignore — applies when build context is the repo root
+# (see scripts/deploy-agent.sh + agent/railway.toml). Keep the context lean:
+# only agent/ and copilot-ui/ source need to be uploaded.
+
+# Python virtualenvs / build artifacts
+**/.venv
+**/.venv-*
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/*.egg-info
+**/build/
+**/dist/
+
+# Node
+**/node_modules
+
+# Local secrets — never bake into images
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local-only data
+**/logs/
+
+# Tooling / VCS
+.git
+.gitignore
+.editorconfig
+**/.python-version
+
+# Docs and tests not needed at runtime
+**/README.md
+**/tests/
+**/evals/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Other top-level dirs not needed for the agent image
+agentforge-docs/
+issues/
+docker/
+docker-compose.yml
+docker-compose-easy-dev-tests.yml
+phpunit.xml*
+.github/
