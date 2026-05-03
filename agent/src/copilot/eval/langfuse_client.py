@@ -23,6 +23,7 @@ from ..config import Settings, get_settings
 
 if TYPE_CHECKING:
     from .case import CaseResult
+    from .faithfulness import CitationClaim, CitationVerdict
 
 _log = logging.getLogger(__name__)
 
@@ -117,6 +118,46 @@ class LangfuseClient:
             _log.warning("langfuse push failed for case %s: %s", result.case.id, exc)
             return None
 
+    def record_faithfulness_citation(
+        self,
+        *,
+        claim: CitationClaim,
+        resource: dict[str, Any] | None,
+        verdict: CitationVerdict,
+    ) -> None:
+        """Emit one ``judge:faithfulness:citation:{ref}`` child span.
+
+        Called from inside a parent ``start_as_current_observation`` context
+        (the case trace) so the span attaches to the right trace. When no
+        active context is open (``record_case`` not yet called), the SDK
+        falls back to a top-level span which still surfaces in the dataset.
+        """
+        if not self.enabled or self._sdk is None:
+            return
+        try:
+            with self._sdk.start_as_current_observation(
+                name=f"judge:faithfulness:citation:{claim.ref}",
+                as_type="span",
+            ):
+                self._sdk.set_current_trace_io(
+                    input={"ref": claim.ref, "claim": claim.claim, "resource": resource},
+                    output={
+                        "supported": verdict.supported,
+                        "reasoning": verdict.reasoning,
+                        "error": verdict.error,
+                    },
+                )
+                self._sdk.update_current_span(
+                    metadata={
+                        "ref": claim.ref,
+                        "supported": verdict.supported,
+                        "resource_present": verdict.resource_present,
+                        "judge": "faithfulness",
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("langfuse faithfulness citation span failed: %s", exc)
+
     def flush(self) -> None:
         if self._sdk is not None:
             try:
@@ -198,6 +239,20 @@ def _flatten_scores(result: "CaseResult") -> list[tuple[str, float, str | None]]
                 f"dimension.{name}",
                 1.0 if dim.passed else 0.0,
                 f"score={dim.score}",
+            )
+        )
+
+    # Standardized faithfulness score (issue 011). The continuous fraction
+    # is what the v2 PRD's scoreboard rolls up at the dataset level.
+    faith_dim = result.dimensions.get("faithfulness")
+    if faith_dim is not None:
+        details = faith_dim.details or {}
+        out.append(
+            (
+                "faithfulness.citations_supported",
+                float(details.get("citations_supported", faith_dim.score or 0.0)),
+                f"supported={details.get('supported_count')}/"
+                f"{details.get('total_citations')}",
             )
         )
 

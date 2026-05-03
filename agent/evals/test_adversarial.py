@@ -9,7 +9,7 @@ import pytest
 from copilot.eval import run_case
 from copilot.eval.case import Case
 
-from .conftest import record_case_result
+from conftest import record_case_result  # type: ignore[import-not-found]
 
 pytestmark = [
     pytest.mark.adversarial,
