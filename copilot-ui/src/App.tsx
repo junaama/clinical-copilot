@@ -180,7 +180,7 @@ function StandaloneApp(): JSX.Element {
           role: 'agent',
           agent: {
             role: 'agent',
-            block: { kind: 'plain', lead: m.content },
+            block: { kind: 'plain', lead: m.content, citations: [], followups: [] },
             streaming: false,
           },
         } satisfies ChatMessage;
