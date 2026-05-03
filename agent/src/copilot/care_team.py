@@ -135,7 +135,17 @@ class CareTeamGate:
         return AuthDecision.CARETEAM_DENIED
 
     async def list_panel(self, user_id: str) -> list[ResolvedPatient]:
-        """Return the user's CareTeam roster, fully resolved."""
+        """Return the user's CareTeam roster, fully resolved.
+
+        Resolution does two FHIR calls per patient (Patient read + Encounter
+        search for last admission). For a 30-patient panel that is 60 calls;
+        running them sequentially over Railway's internal network takes
+        ~30s and trips Chrome's 45s CDP timeout when the panel boots in the
+        browser. Running them concurrently with ``asyncio.gather`` drops
+        wall-clock to ~1–2s.
+        """
+        import asyncio
+
         if self.is_admin(user_id):
             pids = await self._all_patient_ids()
         elif not user_id:
@@ -143,22 +153,24 @@ class CareTeamGate:
         else:
             pids = await self._panel_pids_for(user_id)
 
-        resolved: list[ResolvedPatient] = []
-        for pid in pids:
-            patient = await self._read_patient(pid)
-            if patient is None:
-                continue
-            resolved.append(
-                ResolvedPatient(
-                    patient_id=pid,
-                    given_name=_first_given_name(patient),
-                    family_name=_family_name(patient),
-                    birth_date=patient.get("birthDate") or "",
-                    last_admission=await self._latest_admission(pid),
-                    room=None,
-                )
+        async def _resolve_one(pid: str) -> ResolvedPatient | None:
+            patient, last_admission = await asyncio.gather(
+                self._read_patient(pid),
+                self._latest_admission(pid),
             )
-        return resolved
+            if patient is None:
+                return None
+            return ResolvedPatient(
+                patient_id=pid,
+                given_name=_first_given_name(patient),
+                family_name=_family_name(patient),
+                birth_date=patient.get("birthDate") or "",
+                last_admission=last_admission,
+                room=None,
+            )
+
+        results = await asyncio.gather(*(_resolve_one(pid) for pid in pids))
+        return [r for r in results if r is not None]
 
     async def _panel_pids_for(self, user_id: str) -> list[str]:
         # ``CareTeam?participant=`` isn't supported by OpenEMR's FHIR module
