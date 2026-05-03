@@ -43,6 +43,7 @@ def _stub_case(case_id: str = "smoke-001", tier: str = "smoke") -> Case:
         citation_completeness_min=1.0,
         latency_ms_max=None,
         cost_usd_max=None,
+        required_tools=[],
         attack=None,
         defense_required=[],
         raw={},

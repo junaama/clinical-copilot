@@ -41,6 +41,11 @@ expected:
     # appear; without them the diff is incomplete.
     - "DocumentReference/doc-cross-cover"
     - "MedicationAdministration/mar-lisinopril-held"
+  required_tools:
+    # Canonical W-9 within-window diff — agent must pick the
+    # ``run_recent_changes`` composite that anchors the diff to time-
+    # windowed events (not run_per_patient_brief which is the 24h view).
+    - run_recent_changes
   forbidden_claims:
     # Eduardo's overnight is event-rich — claiming nothing happened is a
     # regression on the W-9 selector itself.

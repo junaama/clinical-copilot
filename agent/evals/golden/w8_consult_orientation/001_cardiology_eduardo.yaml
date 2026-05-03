@@ -34,6 +34,11 @@ expected:
   required_citation_refs:
     - "Condition/cond-chf"
     - "DiagnosticReport/rad-cxr-eduardo"
+  required_tools:
+    # Canonical W-8 consult orientation — agent must pick the
+    # ``run_consult_orientation`` composite (it carries the
+    # domain-specific lens; cardiac vs renal etc. is a synthesis flag).
+    - run_consult_orientation
   forbidden_claims:
     # W-8 framing forbids the agent from recommending workup or therapy.
     # The consultant decides; the agent surfaces what the chart says.

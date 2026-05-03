@@ -28,6 +28,10 @@ expected:
     - "Perez"          # Eduardo flagged for lisinopril/creatinine concern
     - "Hayes"          # Robert flagged for CHF/diuretic
   required_citation_refs: []   # count refs are constructed
+  required_tools:
+    # Canonical W-10 panel-wide med-safety — agent must pick the
+    # ``run_panel_med_safety`` composite that fans across list_panel.
+    - run_panel_med_safety
   forbidden_claims:
     - "no patients"
     - "all patients are stable"

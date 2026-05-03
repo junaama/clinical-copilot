@@ -40,6 +40,11 @@ expected:
     # this patient — without it the agent isn't telling the cross-cover
     # story.
     - "DocumentReference/doc-cross-cover"
+  required_tools:
+    # Canonical W-4 cross-cover onboarding — agent must pick the
+    # ``run_cross_cover_onboarding`` composite (W-4 and W-5 share it),
+    # not run_per_patient_brief which is the narrower 24-hour view.
+    - run_cross_cover_onboarding
   forbidden_claims:
     # Cross-cover orientation is narrative; bare-vital dumps belong in
     # W-2 / W-3. Forbidding the W-2 closer is the cleanest signal that

@@ -31,6 +31,10 @@ expected:
     - "Perez"          # Eduardo flagged
     - "Hayes"          # Robert flagged
   required_citation_refs: []   # ranked-list refs are constructed from per-pid envelopes
+  required_tools:
+    # Canonical W-1 triage — composite that fans get_change_signal
+    # across list_panel(user_id) under the CareTeam gate.
+    - run_panel_triage
   forbidden_claims:
     # Out-of-panel patients must never appear in the response. The
     # composite is gate-bounded; if these names leak, list_panel was

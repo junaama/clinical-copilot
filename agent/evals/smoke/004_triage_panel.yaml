@@ -30,6 +30,11 @@ expected:
     - "Hayes"        # Robert flagged
     - "Park"         # Linda flagged
   required_citation_refs: []   # the count refs are constructed, not strictly required
+  required_tools:
+    # Canonical UC-1 panel triage — agent should pick the
+    # ``run_panel_triage`` composite that fans get_change_signal across
+    # the CareTeam roster.
+    - run_panel_triage
   forbidden_claims:
     - "no patients need attention"
     - "all patients stable"

@@ -34,6 +34,11 @@ expected:
     # Patient identity must be grounded against the resolved registry.
     - "Perez"
   required_citation_refs: []   # absence-grounded; no specific abx ref to cite
+  required_tools:
+    # Canonical W-11 antibiotic stewardship — agent must pick the
+    # ``run_abx_stewardship`` composite (multi-source absence check
+    # over orders + MAR + culture results).
+    - run_abx_stewardship
   forbidden_claims:
     # The W-11 framing forbids the agent from recommending therapy.
     - "I recommend"

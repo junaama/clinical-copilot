@@ -21,6 +21,7 @@ from .faithfulness import (
 )
 from .runner import run_case
 from .scoreboard import render_scoreboard, tier_dimension_table
+from .trajectory import TrajectoryResult, evaluate_trajectory
 
 __all__ = [
     "Case",
@@ -30,6 +31,8 @@ __all__ = [
     "DimensionResult",
     "FaithfulnessJudge",
     "FaithfulnessResult",
+    "TrajectoryResult",
+    "evaluate_trajectory",
     "extract_citation_claims",
     "load_case",
     "load_cases_in_dir",

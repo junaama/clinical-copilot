@@ -27,6 +27,11 @@ expected:
     - "no acute"
   required_citation_refs:
     - "DiagnosticReport/rad-cxr-eduardo"
+  required_tools:
+    # Imaging lookup — the granular ``get_imaging_results`` read is the
+    # right pick for an imaging-only question; the brief composite is
+    # overkill here.
+    - get_imaging_results
   forbidden_claims:
     - "no imaging"
     - "no studies were done"
