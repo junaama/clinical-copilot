@@ -158,6 +158,45 @@ class LangfuseClient:
         except Exception as exc:  # noqa: BLE001
             _log.warning("langfuse faithfulness citation span failed: %s", exc)
 
+    def record_faithfulness_uncited_sweep(
+        self,
+        *,
+        sweep_prompt: str,
+        sweep_response: str | None,
+        uncited_claims: list[str],
+        sweep_error: str | None,
+    ) -> None:
+        """Emit the single ``judge:faithfulness:uncited_sweep`` child span.
+
+        Carries the sweep prompt as input and the flagged claims + raw
+        response as output so the audit trail makes the sweep verdict
+        traceable. No-ops cleanly when langfuse is unavailable.
+        """
+        if not self.enabled or self._sdk is None:
+            return
+        try:
+            with self._sdk.start_as_current_observation(
+                name="judge:faithfulness:uncited_sweep",
+                as_type="span",
+            ):
+                self._sdk.set_current_trace_io(
+                    input={"prompt": sweep_prompt},
+                    output={
+                        "uncited_claims": uncited_claims,
+                        "raw_response": sweep_response,
+                        "sweep_error": sweep_error,
+                    },
+                )
+                self._sdk.update_current_span(
+                    metadata={
+                        "uncited_count": len(uncited_claims),
+                        "sweep_error_present": sweep_error is not None,
+                        "judge": "faithfulness",
+                    }
+                )
+        except Exception as exc:
+            _log.warning("langfuse uncited-sweep span failed: %s", exc)
+
     def flush(self) -> None:
         if self._sdk is not None:
             try:
@@ -242,8 +281,9 @@ def _flatten_scores(result: "CaseResult") -> list[tuple[str, float, str | None]]
             )
         )
 
-    # Standardized faithfulness score (issue 011). The continuous fraction
-    # is what the v2 PRD's scoreboard rolls up at the dataset level.
+    # Standardized faithfulness scores (issues 011 + 012). Citations supported
+    # is a continuous fraction; uncited_claims is a count (lower is better).
+    # Both feed the v2 PRD's scoreboard at the dataset level.
     faith_dim = result.dimensions.get("faithfulness")
     if faith_dim is not None:
         details = faith_dim.details or {}
@@ -253,6 +293,18 @@ def _flatten_scores(result: "CaseResult") -> list[tuple[str, float, str | None]]
                 float(details.get("citations_supported", faith_dim.score or 0.0)),
                 f"supported={details.get('supported_count')}/"
                 f"{details.get('total_citations')}",
+            )
+        )
+        uncited_claims = details.get("uncited_claims", []) or []
+        sweep_error = details.get("sweep_error")
+        comment = (
+            f"sweep_error={sweep_error}" if sweep_error else f"flagged={uncited_claims}"
+        )
+        out.append(
+            (
+                "faithfulness.uncited_claims",
+                float(details.get("uncited_count", len(uncited_claims))),
+                comment,
             )
         )
 

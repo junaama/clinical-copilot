@@ -26,6 +26,8 @@ from copilot.eval.faithfulness import (
     extract_citation_claims,
 )
 
+_SWEEP_MARKER = "UNCITED-CLAIM-SWEEP"
+
 
 class _StubJudgeLLM:
     """Returns a canned verdict per (ref, claim) pair via a routing dict.
@@ -34,6 +36,11 @@ class _StubJudgeLLM:
     matching verdict JSON the judge would expect from a real Haiku call.
     Unmatched calls return supported=True so tests only have to declare
     the cases that should fail.
+
+    Sweep calls are detected by the ``UNCITED-CLAIM-SWEEP`` marker the
+    judge emits in its sweep system prompt. When detected, the stub returns
+    ``sweep_response`` (defaulting to no flagged claims). ``raise_on_sweep``
+    forces the sweep call to raise so the runner's error path is exercised.
     """
 
     def __init__(
@@ -41,16 +48,39 @@ class _StubJudgeLLM:
         verdicts_by_ref: dict[str, dict[str, Any]] | None = None,
         *,
         raise_on: set[str] | None = None,
+        sweep_response: dict[str, Any] | None = None,
+        raise_on_sweep: bool = False,
     ) -> None:
         self._verdicts = verdicts_by_ref or {}
         self._raise_on = raise_on or set()
+        self._sweep_response = sweep_response
+        self._raise_on_sweep = raise_on_sweep
         self.calls: list[dict[str, Any]] = []
+        self.sweep_calls: list[dict[str, Any]] = []
 
     async def ainvoke(self, messages: Any, **_kwargs: Any) -> Any:
         # The judge sends a system + user message pair; the user message
-        # carries the ref + claim. Stash for assertion.
+        # carries the ref + claim (or the response text for a sweep call).
+        system = messages[0]
         last = messages[-1]
         text = getattr(last, "content", "") if not isinstance(last, str) else last
+        system_text = (
+            getattr(system, "content", "") if not isinstance(system, str) else system
+        )
+
+        # Sweep calls carry a distinguishing marker in the system prompt.
+        if _SWEEP_MARKER in system_text:
+            self.sweep_calls.append({"prompt": text})
+            if self._raise_on_sweep:
+                raise RuntimeError("stub judge sweep boom")
+            payload = self._sweep_response or {"uncited_claims": []}
+
+            class _SweepReply:
+                def __init__(self, content: str) -> None:
+                    self.content = content
+
+            return _SweepReply(json.dumps(payload))
+
         self.calls.append({"prompt": text})
 
         # Find which ref this call is about by simple substring scan.
@@ -299,3 +329,203 @@ async def test_judge_result_to_dimension_result_round_trip() -> None:
     # the first few unsupported reasonings inline.
     assert "verdicts" in dim.details
     assert dim.details["citations_supported"] == pytest.approx(1.0)
+    # Uncited-sweep field exists even when nothing flagged (empty list).
+    assert dim.details["uncited_claims"] == []
+    assert dim.details["uncited_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Uncited-claim sweep (issue 012)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_zero_claims_passes() -> None:
+    """Sweep returns no flagged claims and all citations are supported -> pass.
+
+    The sweep call is fired exactly once per case regardless of citation count;
+    here we assert that it ran and produced an empty list.
+    """
+    text = (
+        "BP this morning was 90/60 <cite ref=\"Observation/obs-bp-1\"/>. "
+        "Patient is on lisinopril 10 mg <cite ref=\"MedicationRequest/med-lisinopril\"/>."
+    )
+    stub = _StubJudgeLLM(
+        {
+            "Observation/obs-bp-1": {"supported": True, "reasoning": "ok"},
+            "MedicationRequest/med-lisinopril": {"supported": True, "reasoning": "ok"},
+        },
+        sweep_response={"uncited_claims": []},
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, _resources())
+
+    assert result.passed is True
+    assert result.uncited_claims == []
+    assert result.sweep_error is None
+    assert len(stub.sweep_calls) == 1, "sweep call must fire exactly once"
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_one_clinical_claim_flagged_fails() -> None:
+    """An uncited clinical claim flagged by the sweep fails the case overall,
+    even when every citation is supported. The flagged text is preserved on
+    the result so pytest output can surface it inline."""
+    text = (
+        "BP was 90/60 <cite ref=\"Observation/obs-bp-1\"/>. "
+        "The patient's potassium was 5.8 mEq/L this morning."
+    )
+    stub = _StubJudgeLLM(
+        {"Observation/obs-bp-1": {"supported": True, "reasoning": "ok"}},
+        sweep_response={
+            "uncited_claims": ["potassium was 5.8 mEq/L this morning"]
+        },
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, _resources())
+
+    assert result.passed is False
+    # Citation-anchored score stays at 1.0; the failure mode is uncited claims.
+    assert result.score == pytest.approx(1.0)
+    assert result.supported_count == result.total_citations == 1
+    assert result.uncited_claims == ["potassium was 5.8 mEq/L this morning"]
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_hedging_and_questions_not_flagged() -> None:
+    """Hedging/clarification text (no clinical claim) keeps the case passing.
+
+    The sweep prompt enumerates what counts as a clinical claim; non-claim
+    sentences ("appears stable", "which patient?") should not be flagged.
+    Asserting on the stub's behavior confirms the contract: empty
+    ``uncited_claims`` -> pass.
+    """
+    text = (
+        "I don't have access to overnight notes for this patient. "
+        "Could you tell me which patient you mean? "
+        "The chart appears stable based on what I can see."
+    )
+    stub = _StubJudgeLLM(sweep_response={"uncited_claims": []})
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, _resources())
+
+    assert result.passed is True
+    assert result.uncited_claims == []
+    assert result.total_citations == 0
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_combines_with_citation_failure() -> None:
+    """Both failure modes can fire on the same case; both must surface.
+
+    Pass only when citations 100% supported AND uncited list is empty.
+    """
+    text = (
+        "BP was 90/60 <cite ref=\"Observation/obs-bp-1\"/>. "
+        "Patient also on metoprolol 25 mg BID."
+    )
+    stub = _StubJudgeLLM(
+        {
+            "Observation/obs-bp-1": {
+                "supported": False,
+                "reasoning": "obs reads 100/65 not 90/60",
+            }
+        },
+        sweep_response={"uncited_claims": ["metoprolol 25 mg BID"]},
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, _resources())
+
+    assert result.passed is False
+    assert result.supported_count == 0
+    assert result.uncited_claims == ["metoprolol 25 mg BID"]
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_skipped_when_response_empty() -> None:
+    """Empty/whitespace response -> trivially pass, no sweep call needed."""
+    stub = _StubJudgeLLM(sweep_response={"uncited_claims": ["should not see"]})
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge("", _resources())
+
+    assert result.passed is True
+    assert result.uncited_claims == []
+    assert stub.sweep_calls == []  # never fired
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_llm_error_records_sweep_error_and_does_not_flag() -> None:
+    """Sweep call raising -> fail-open (no flagged claims) but stash the
+    error so the runner can surface the situation without breaking the case.
+
+    Rationale: the per-citation path fails closed because we have a specific
+    claim we cannot verify; the sweep path fails open because flagging
+    invented claims would generate false negatives the runner can't debug.
+    """
+    text = (
+        "BP was 90/60 <cite ref=\"Observation/obs-bp-1\"/>. "
+        "Patient on lisinopril."
+    )
+    stub = _StubJudgeLLM(
+        {"Observation/obs-bp-1": {"supported": True, "reasoning": "ok"}},
+        raise_on_sweep=True,
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, _resources())
+
+    # The per-citation path stays clean; the sweep error is captured on
+    # the result so the runner can log it.
+    assert result.uncited_claims == []
+    assert result.sweep_error is not None
+    assert "boom" in result.sweep_error
+    # Sweep failure does not flip the case to a fail (fail-open).
+    assert result.passed is True
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_dimension_result_surfaces_flagged_claims() -> None:
+    """``to_dimension_result`` includes uncited claims so the runner can
+    render them in the pytest failure message."""
+    text = "Glucose was 240 mg/dL this morning."
+    stub = _StubJudgeLLM(
+        sweep_response={"uncited_claims": ["glucose was 240 mg/dL this morning"]}
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+    result = await judge.judge(text, _resources())
+
+    dim = result.to_dimension_result()
+    assert dim.passed is False
+    # Score is the citation-anchored fraction (no citations in this response,
+    # so it's 1.0 — the failure mode is uncited claims, not the score).
+    assert dim.score == pytest.approx(1.0)
+    assert dim.details["uncited_claims"] == ["glucose was 240 mg/dL this morning"]
+    assert dim.details["uncited_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_malformed_json_treated_as_no_claims() -> None:
+    """Sweep call returning non-JSON or wrong-shape JSON should not crash;
+    treat as no claims flagged but record the parse failure on
+    ``sweep_error`` so the runner can surface it."""
+
+    class _BadReply:
+        async def ainvoke(self, _messages: Any, **_kwargs: Any) -> Any:
+            class _R:
+                content = "not even close to json"
+
+            return _R()
+
+    judge = FaithfulnessJudge(llm_factory=lambda: _BadReply())
+
+    result = await judge.judge("Some text", _resources())
+
+    assert result.uncited_claims == []
+    assert result.sweep_error is not None
+    assert "parse" in result.sweep_error.lower() or "decode" in result.sweep_error.lower()
+    assert result.passed is True

@@ -290,11 +290,11 @@ async def run_case(
             f"cost ${cost_usd:.4f} exceeded ${case.cost_usd_max:.4f}"
         )
 
-    # Faithfulness (issue 011, citation-anchored only). Skip when the agent
-    # erred — there's no response text to judge — and when the judge can't
-    # be constructed (no ANTHROPIC_API_KEY in env). Skipped cases simply
-    # don't get a faithfulness DimensionResult, so the scoreboard column
-    # reports the rate over only cases that scored it.
+    # Faithfulness (issues 011 + 012). Skip when the agent erred — there's
+    # no response text to judge — and when the judge can't be constructed
+    # (no ANTHROPIC_API_KEY in env). Skipped cases simply don't get a
+    # faithfulness DimensionResult, so the scoreboard column reports the
+    # rate over only cases that scored it.
     judge = faithfulness_judge or _maybe_default_judge(settings)
     if error is None and judge is not None:
         try:
@@ -307,19 +307,35 @@ async def run_case(
             dimensions["faithfulness"] = faith_dim
             scores["faithfulness"] = faith_dim.details
             if not faith_dim.passed:
-                # Surface up to 3 unsupported reasonings inline so the
-                # pytest failure block carries enough context to debug
-                # without opening Langfuse.
-                first_three = faith_dim.details.get("unsupported", [])[:3]
-                rendered = "; ".join(
-                    f"{u['ref']}: {u['reasoning']}" for u in first_three
-                )
-                failures.append(
-                    f"faithfulness failed "
-                    f"({faith_dim.details.get('supported_count')}/"
-                    f"{faith_dim.details.get('total_citations')} citations supported); "
-                    f"first unsupported: {rendered}"
-                )
+                # Surface citation-grounding failures and uncited-claim
+                # failures separately so pytest output makes the failure
+                # mode obvious without opening Langfuse.
+                failure_parts: list[str] = []
+                unsupported = faith_dim.details.get("unsupported", []) or []
+                if unsupported:
+                    rendered = "; ".join(
+                        f"{u['ref']}: {u['reasoning']}" for u in unsupported[:3]
+                    )
+                    failure_parts.append(
+                        f"{faith_dim.details.get('supported_count')}/"
+                        f"{faith_dim.details.get('total_citations')} citations supported; "
+                        f"first unsupported: {rendered}"
+                    )
+                uncited = faith_dim.details.get("uncited_claims", []) or []
+                if uncited:
+                    rendered_uncited = "; ".join(
+                        f"'{c}'" for c in uncited[:3]
+                    )
+                    failure_parts.append(
+                        f"{len(uncited)} uncited clinical claim(s) flagged: "
+                        f"{rendered_uncited}"
+                    )
+                if not failure_parts:
+                    # Defensive: pass=False with neither failure mode means a
+                    # bookkeeping bug in the judge; surface it rather than
+                    # swallowing.
+                    failure_parts.append("faithfulness verdict failed with no detail")
+                failures.append("faithfulness failed: " + " | ".join(failure_parts))
         except Exception as exc:
             # Judge failure is informational — don't bring down the eval run.
             _log.warning("faithfulness judge failed for case %s: %s", case.id, exc)

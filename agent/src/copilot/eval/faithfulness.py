@@ -1,16 +1,17 @@
-"""Citation-anchored faithfulness judge (issue 011).
+"""Faithfulness judge (issues 011 + 012).
 
-Public surface (single-pass, citation-anchored only — uncited-claim sweep
-ships in issue 012):
+Public surface:
 
 - ``extract_citation_claims(text)``: parse ``<cite ref="..."/>`` tags out of
   the agent's response and return ``CitationClaim`` records carrying the ref
   plus the surrounding sentence (the "claim" the citation is attached to).
 - ``FaithfulnessJudge``: wraps an injected LLM client. ``judge(response_text,
-  fetched_resources)`` returns a ``FaithfulnessResult``: per-citation verdicts
-  plus an aggregate ``passed`` (100% supported) and ``score`` (fraction
-  supported). Cases with zero citations pass trivially. A citation pointing
-  at a resource the agent never fetched fails without an LLM call.
+  fetched_resources)`` runs two passes — per-citation grounding (issue 011)
+  and a single uncited-claim sweep (issue 012) — and returns a combined
+  ``FaithfulnessResult``. ``passed`` requires 100% of citations supported AND
+  zero uncited clinical claims flagged. ``score`` is the citation-supported
+  fraction (continuous scoreboard metric); ``uncited_claims`` is the list of
+  flagged claim strings.
 
 Tests live in ``agent/tests/test_faithfulness_judge.py`` and use a stub LLM
 so the module is exercised without spending Anthropic tokens. The runner
@@ -79,10 +80,19 @@ class CitationVerdict:
 class FaithfulnessResult:
     """Aggregate faithfulness result for one response.
 
-    ``passed`` requires 100% of citations to be supported (citation-anchored
-    pass only — uncited-claim sweep lands in issue 012). ``score`` is the
-    fraction supported, useful for the scoreboard's continuous metric. A
-    response with zero citations passes with score 1.0 and empty verdicts.
+    Combined verdict (issues 011 + 012):
+
+    - ``passed`` is True iff every citation is supported AND the uncited-
+      claim sweep flagged nothing.
+    - ``score`` is the citation-supported fraction (continuous scoreboard
+      metric, independent of the sweep — the sweep failure mode is reported
+      via ``uncited_claims``).
+    - ``uncited_claims`` is the list of flagged claim strings from the
+      sweep call. Empty when the sweep returned cleanly with nothing to
+      flag, when the response is empty, or when the sweep call failed
+      (in which case ``sweep_error`` is populated and the case is not
+      flagged — fail-open on sweep errors so we don't invent false
+      positives the runner cannot debug).
     """
 
     passed: bool
@@ -90,6 +100,8 @@ class FaithfulnessResult:
     total_citations: int
     supported_count: int
     verdicts: list[CitationVerdict] = field(default_factory=list)
+    uncited_claims: list[str] = field(default_factory=list)
+    sweep_error: str | None = None
 
     def to_dimension_result(self) -> DimensionResult:
         details: dict[str, Any] = {
@@ -112,6 +124,9 @@ class FaithfulnessResult:
                 for v in self.verdicts
                 if not v.supported
             ],
+            "uncited_claims": list(self.uncited_claims),
+            "uncited_count": len(self.uncited_claims),
+            "sweep_error": self.sweep_error,
         }
         return DimensionResult(
             name="faithfulness",
@@ -194,6 +209,36 @@ _SYSTEM_PROMPT = (
 )
 
 
+# UNCITED-CLAIM-SWEEP marker is intentional — the test stub greps for it to
+# distinguish sweep calls from per-citation calls without inspecting the user
+# message body. Keep the literal in-prompt so the marker survives any prompt
+# wording changes.
+_SWEEP_SYSTEM_PROMPT = (
+    "You are a clinical-evaluation judge running an UNCITED-CLAIM-SWEEP. "
+    "Given an assistant response, list any FACTUAL CLINICAL CLAIMS the "
+    "assistant made that DO NOT carry a `<cite ref=\"...\"/>` tag. Be strict "
+    "but not credulous — only flag claims that fall into these categories:\n"
+    "  - Vitals values (BP, HR, RR, temperature, SpO2, weight, etc.) with "
+    "specific numbers or units\n"
+    "  - Medication dose / frequency / route (e.g. 'lisinopril 10 mg daily')\n"
+    "  - Medication status (active, held, discontinued, started)\n"
+    "  - Lab results (named lab + specific value or trend)\n"
+    "  - Encounter facts (admit/discharge dates, diagnoses, room, attending)\n"
+    "DO NOT flag any of the following:\n"
+    "  - Hedging or qualitative language ('appears stable', 'may benefit')\n"
+    "  - Clarification questions ('which patient do you mean?')\n"
+    "  - Refusals or access-denied messages ('I don't have access')\n"
+    "  - General/process statements ('vital signs were checked')\n"
+    "  - Claims that are paired with a `<cite ref=\"...\"/>` tag (already "
+    "cited claims are out of scope; this sweep only flags UNCITED ones)\n"
+    "Reply ONLY with a JSON object of the form "
+    '{"uncited_claims": ["<claim text 1>", "<claim text 2>"]} '
+    'or {"uncited_claims": []} if everything is either cited or non-clinical. '
+    "Use the assistant's exact wording for each flagged claim, trimmed to "
+    "the relevant sentence. Keep each entry under 200 characters."
+)
+
+
 def _build_user_prompt(ref: str, claim: str, resource: dict[str, Any]) -> str:
     """Assemble the per-citation user message the judge sees."""
     try:
@@ -207,6 +252,61 @@ def _build_user_prompt(ref: str, claim: str, resource: dict[str, Any]) -> str:
         "Does the cited resource support the claim? "
         'Reply ONLY with JSON: {"supported": true|false, "reasoning": "..."}.'
     )
+
+
+def _build_sweep_user_prompt(response_text: str) -> str:
+    """Assemble the user message the sweep judge sees.
+
+    Cap the response text at a generous size so a runaway response can't
+    blow the prompt budget. Realistic clinical responses are well under
+    this cap.
+    """
+    capped = response_text if len(response_text) <= 6000 else response_text[:6000]
+    return (
+        "ASSISTANT RESPONSE:\n"
+        f"{capped}\n\n"
+        "List any UNCITED clinical claims this response made, per the rules "
+        "above. Reply ONLY with JSON: "
+        '{"uncited_claims": ["<claim>", ...]} or {"uncited_claims": []}.'
+    )
+
+
+def _parse_sweep_json(raw: str) -> tuple[list[str], str | None]:
+    """Parse the sweep judge's JSON reply.
+
+    Returns ``(uncited_claims, error)``. On unparseable output the function
+    returns an empty claim list with the parse error stashed in ``error`` —
+    the caller can use this to record ``sweep_error`` on the result. We
+    deliberately do NOT fail the case on a parse error: inventing flagged
+    claims would create false positives the runner cannot debug.
+    """
+    if not raw:
+        return [], "sweep returned empty content"
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].lstrip()
+    first_brace = cleaned.find("{")
+    last_brace = cleaned.rfind("}")
+    if first_brace == -1 or last_brace == -1 or last_brace <= first_brace:
+        return [], f"sweep output not parseable: {cleaned[:120]!r}"
+    candidate = cleaned[first_brace : last_brace + 1]
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        return [], f"sweep JSON decode error: {exc}; raw={candidate[:120]!r}"
+    if not isinstance(payload, dict):
+        return [], "sweep output was not a JSON object"
+    raw_claims = payload.get("uncited_claims")
+    if not isinstance(raw_claims, list):
+        return [], f"sweep payload missing 'uncited_claims' list: {payload!r}"
+    claims: list[str] = []
+    for item in raw_claims:
+        text = str(item).strip()
+        if text:
+            claims.append(text)
+    return claims, None
 
 
 def _parse_verdict_json(raw: str) -> tuple[bool, str]:
@@ -273,34 +373,104 @@ class FaithfulnessJudge:
         *,
         langfuse: LangfuseClient | None = None,
     ) -> FaithfulnessResult:
-        """Score every ``<cite>`` in ``response_text`` against the resource
-        it points at in ``fetched_resources``. Returns a structured result.
+        """Score the response on both faithfulness passes:
+
+        1. Per-citation grounding: every ``<cite>`` in ``response_text`` is
+           judged against the resource keyed by its ref in
+           ``fetched_resources``.
+        2. Uncited-claim sweep: one extra call asks the judge to enumerate
+           any factual clinical claim that lacks a ``<cite>`` tag.
+
+        Both passes run concurrently. Combined ``passed`` requires 100%
+        of citations supported AND zero flagged uncited claims. An empty
+        response text short-circuits to a trivial pass with no LLM calls.
         """
-        claims = extract_citation_claims(response_text)
-        if not claims:
+        if not (response_text or "").strip():
             return FaithfulnessResult(
                 passed=True,
                 score=1.0,
                 total_citations=0,
                 supported_count=0,
                 verdicts=[],
+                uncited_claims=[],
+                sweep_error=None,
             )
 
-        verdicts = await asyncio.gather(
-            *(self._judge_one(claim, fetched_resources, langfuse) for claim in claims),
-            return_exceptions=False,
-        )
+        claims = extract_citation_claims(response_text)
+
+        # Fan citation verdicts + the single sweep call out in parallel so
+        # the judge's wall time is dominated by max(citation, sweep) instead
+        # of citation_count + 1.
+        verdict_tasks = [
+            self._judge_one(claim, fetched_resources, langfuse) for claim in claims
+        ]
+        sweep_task = self._sweep_uncited_claims(response_text, langfuse)
+        gathered = await asyncio.gather(*verdict_tasks, sweep_task)
+        # `verdicts` is the prefix; the last element is `(uncited, sweep_error)`.
+        verdicts = list(gathered[:-1])
+        uncited_claims, sweep_error = gathered[-1]
 
         supported = sum(1 for v in verdicts if v.supported)
         total = len(verdicts)
         score = supported / total if total else 1.0
+        passed = (supported == total) and not uncited_claims
+
         return FaithfulnessResult(
-            passed=supported == total,
+            passed=passed,
             score=score,
             total_citations=total,
             supported_count=supported,
-            verdicts=list(verdicts),
+            verdicts=verdicts,
+            uncited_claims=uncited_claims,
+            sweep_error=sweep_error,
         )
+
+    async def _sweep_uncited_claims(
+        self,
+        response_text: str,
+        langfuse: LangfuseClient | None,
+    ) -> tuple[list[str], str | None]:
+        """Single Haiku call enumerating uncited clinical claims.
+
+        Fail-open on any LLM/parse error (no flagged claims) — the runner
+        sees ``sweep_error`` populated and can log it, but the case verdict
+        does not flip from a sweep failure. Rationale in
+        ``FaithfulnessResult`` docstring.
+        """
+        sweep_prompt = _build_sweep_user_prompt(response_text)
+        sweep_response_text: str | None = None
+        try:
+            model = self._llm_factory()
+            messages = [
+                SystemMessage(content=_SWEEP_SYSTEM_PROMPT),
+                HumanMessage(content=sweep_prompt),
+            ]
+            reply = await model.ainvoke(messages)
+        except Exception as exc:
+            _log.warning("faithfulness sweep call failed: %s", exc)
+            sweep_error = f"{type(exc).__name__}: {exc}"
+            _emit_sweep_langfuse_span(
+                langfuse,
+                sweep_prompt=sweep_prompt,
+                sweep_response=None,
+                uncited_claims=[],
+                sweep_error=sweep_error,
+            )
+            return [], sweep_error
+
+        raw_content = getattr(reply, "content", "")
+        if not isinstance(raw_content, str):
+            raw_content = str(raw_content or "")
+        sweep_response_text = raw_content
+        claims, parse_error = _parse_sweep_json(raw_content)
+        _emit_sweep_langfuse_span(
+            langfuse,
+            sweep_prompt=sweep_prompt,
+            sweep_response=sweep_response_text,
+            uncited_claims=claims,
+            sweep_error=parse_error,
+        )
+        return claims, parse_error
 
     async def _judge_one(
         self,
@@ -376,6 +546,33 @@ def _emit_langfuse_span(
         langfuse.record_faithfulness_citation(claim=claim, resource=resource, verdict=verdict)
     except Exception:
         _log.warning("langfuse faithfulness span emission failed", exc_info=True)
+
+
+def _emit_sweep_langfuse_span(
+    langfuse: LangfuseClient | None,
+    *,
+    sweep_prompt: str,
+    sweep_response: str | None,
+    uncited_claims: list[str],
+    sweep_error: str | None,
+) -> None:
+    """Best-effort Langfuse child span for the uncited-claim sweep.
+
+    Span name is ``judge:faithfulness:uncited_sweep`` (one per case). Carries
+    the sweep prompt as input and the flagged claims + raw response as
+    output. No-ops cleanly when langfuse is unavailable.
+    """
+    if langfuse is None:
+        return
+    try:
+        langfuse.record_faithfulness_uncited_sweep(
+            sweep_prompt=sweep_prompt,
+            sweep_response=sweep_response,
+            uncited_claims=uncited_claims,
+            sweep_error=sweep_error,
+        )
+    except Exception:
+        _log.warning("langfuse uncited-sweep span emission failed", exc_info=True)
 
 
 def build_default_haiku_factory(
