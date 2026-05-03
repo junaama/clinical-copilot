@@ -16,18 +16,19 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "Give me a quick brief on this patient."
+turns:
+  - prompt: "Give me a quick brief on this patient."
+    must_contain: []
+    must_cite: []
+    trajectory:
+      # Canonical UC-2 brief — the prompt tells the LLM to prefer the
+      # ``run_per_patient_brief`` composite over chaining granular reads.
+      required_tools:
+        - run_per_patient_brief
 
 expected:
   workflow_id: W-2
   decision: allow
-  required_facts: []
-  required_citation_refs: []
-  required_tools:
-    # Canonical UC-2 brief — the prompt tells the LLM to prefer the
-    # ``run_per_patient_brief`` composite over chaining granular reads.
-    - run_per_patient_brief
   forbidden_claims:
     - "no patient on file"
   forbidden_pids_in_response: []

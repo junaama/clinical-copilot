@@ -18,26 +18,27 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "Was anything held overnight, and why?"
+turns:
+  - prompt: "Was anything held overnight, and why?"
+    must_contain:
+      - "lisinopril"
+      - "held"
+    must_cite:
+      # The MedicationAdministration row is the structured source of truth for
+      # "med was held"; the cross-cover note is a corroborating narrative. We
+      # require the MAR ref because it carries the canonical lifecycle_status
+      # and reason. The narrative ref is acceptable but not required.
+      - "MedicationAdministration/mar-lisinopril-held"
+    trajectory:
+      # "What happened overnight" is UC-2 brief territory — agent should
+      # pick ``run_per_patient_brief`` which fans
+      # get_medication_administrations internally.
+      required_tools:
+        - run_per_patient_brief
 
 expected:
   workflow_id: W-2
   decision: allow
-  required_facts:
-    - "lisinopril"
-    - "held"
-  required_citation_refs:
-    # The MedicationAdministration row is the structured source of truth for
-    # "med was held"; the cross-cover note is a corroborating narrative. We
-    # require the MAR ref because it carries the canonical lifecycle_status
-    # and reason. The narrative ref is acceptable but not required.
-    - "MedicationAdministration/mar-lisinopril-held"
-  required_tools:
-    # "What happened overnight" is UC-2 brief territory — agent should
-    # pick ``run_per_patient_brief`` which fans
-    # get_medication_administrations internally.
-    - run_per_patient_brief
   forbidden_claims:
     - "no medications were held"
     - "metoprolol was held"

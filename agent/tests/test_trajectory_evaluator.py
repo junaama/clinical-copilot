@@ -125,14 +125,13 @@ def test_to_dimension_result_empty_required_score_one() -> None:
     assert dim.details["required"] == []
 
 
-def test_case_loader_reads_required_tools_from_expected() -> None:
-    """The case loader should pick up ``expected.required_tools`` and expose
-    it as ``Case.required_tools`` so the runner can pass it to the
-    evaluator without YAML poking at call sites."""
+def test_case_loader_reads_required_tools_from_turn_trajectory() -> None:
+    """The case loader picks up ``turns[i].trajectory.required_tools`` and
+    exposes it via ``Case.required_tools`` (single-turn projection) so the
+    runner can pass it to the evaluator without poking at the turns list
+    at call sites."""
     from pathlib import Path
     from textwrap import dedent
-
-    import yaml
 
     from copilot.eval.case import load_case
 
@@ -148,13 +147,14 @@ def test_case_loader_reads_required_tools_from_expected() -> None:
           care_team_includes: [fixture-1]
         session_context:
           patient_id: fixture-1
-        input:
-          message: hi
+        turns:
+          - prompt: hi
+            trajectory:
+              required_tools:
+                - get_recent_vitals
+                - get_active_medications
         expected:
           decision: allow
-          required_tools:
-            - get_recent_vitals
-            - get_active_medications
         """
     ).strip()
 
@@ -162,9 +162,10 @@ def test_case_loader_reads_required_tools_from_expected() -> None:
     tmp.write_text(payload)
     case = load_case(tmp)
     assert case.required_tools == ["get_recent_vitals", "get_active_medications"]
-    # Sanity: parse with pyyaml ensures the fixture is the canonical YAML
-    # shape we'll use in real case files.
-    assert "required_tools" in (yaml.safe_load(payload).get("expected") or {})
+    assert case.turns[0].required_tools == [
+        "get_recent_vitals",
+        "get_active_medications",
+    ]
 
 
 def test_case_loader_required_tools_default_empty() -> None:
@@ -186,8 +187,8 @@ def test_case_loader_required_tools_default_empty() -> None:
           care_team_includes: []
         session_context:
           patient_id: fixture-1
-        input:
-          message: hi
+        turns:
+          - prompt: hi
         expected:
           decision: allow
         """
@@ -197,39 +198,4 @@ def test_case_loader_required_tools_default_empty() -> None:
     tmp.write_text(payload)
     case = load_case(tmp)
     assert case.required_tools == []
-
-
-def test_case_loader_reads_required_tools_from_trajectory_block() -> None:
-    """Forward-looking shape: ``expected.trajectory.required_tools`` lines up
-    with the per-turn schema issue 014 will introduce."""
-    from pathlib import Path
-    from textwrap import dedent
-
-    from copilot.eval.case import load_case
-
-    payload = dedent(
-        """
-        id: smoke-x-trajectory-nested
-        tier: smoke
-        description: nested required_tools shape
-        workflow: W-2
-        authenticated_as:
-          user_id: u
-          role: hospitalist
-          care_team_includes: []
-        session_context:
-          patient_id: fixture-1
-        input:
-          message: hi
-        expected:
-          decision: allow
-          trajectory:
-            required_tools:
-              - get_recent_labs
-        """
-    ).strip()
-
-    tmp = Path("/tmp/case_loader_required_tools_nested.yaml")
-    tmp.write_text(payload)
-    case = load_case(tmp)
-    assert case.required_tools == ["get_recent_labs"]
+    assert case.turns[0].required_tools == []

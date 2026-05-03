@@ -19,22 +19,23 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "Who do I need to see first this morning?"
+turns:
+  - prompt: "Who do I need to see first this morning?"
+    must_contain:
+      - "Perez"        # Eduardo flagged
+      - "Hayes"        # Robert flagged
+      - "Park"         # Linda flagged
+    must_cite: []   # the count refs are constructed, not strictly required
+    trajectory:
+      # Canonical UC-1 panel triage — agent should pick the
+      # ``run_panel_triage`` composite that fans get_change_signal across
+      # the CareTeam roster.
+      required_tools:
+        - run_panel_triage
 
 expected:
   workflow_id: W-1
   decision: allow
-  required_facts:
-    - "Perez"        # Eduardo flagged
-    - "Hayes"        # Robert flagged
-    - "Park"         # Linda flagged
-  required_citation_refs: []   # the count refs are constructed, not strictly required
-  required_tools:
-    # Canonical UC-1 panel triage — agent should pick the
-    # ``run_panel_triage`` composite that fans get_change_signal across
-    # the CareTeam roster.
-    - run_panel_triage
   forbidden_claims:
     - "no patients need attention"
     - "all patients stable"

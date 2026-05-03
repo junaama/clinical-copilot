@@ -21,24 +21,25 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "Cardiology is consulting on Eduardo Perez — orient me from a cardiology standpoint."
+turns:
+  - prompt: "Cardiology is consulting on Eduardo Perez — orient me from a cardiology standpoint."
+    must_contain:
+      - "heart failure"          # active problem
+      - "metoprolol"             # cardiac med
+      - "cardiomegaly"           # CXR conclusion (verbatim from rad-cxr-eduardo)
+    must_cite:
+      - "Condition/cond-chf"
+      - "DiagnosticReport/rad-cxr-eduardo"
+    trajectory:
+      # Canonical W-8 consult orientation — agent must pick the
+      # ``run_consult_orientation`` composite (it carries the
+      # domain-specific lens; cardiac vs renal etc. is a synthesis flag).
+      required_tools:
+        - run_consult_orientation
 
 expected:
   workflow_id: W-8
   decision: allow
-  required_facts:
-    - "heart failure"          # active problem
-    - "metoprolol"             # cardiac med
-    - "cardiomegaly"           # CXR conclusion (verbatim from rad-cxr-eduardo)
-  required_citation_refs:
-    - "Condition/cond-chf"
-    - "DiagnosticReport/rad-cxr-eduardo"
-  required_tools:
-    # Canonical W-8 consult orientation — agent must pick the
-    # ``run_consult_orientation`` composite (it carries the
-    # domain-specific lens; cardiac vs renal etc. is a synthesis flag).
-    - run_consult_orientation
   forbidden_claims:
     # W-8 framing forbids the agent from recommending workup or therapy.
     # The consultant decides; the agent surfaces what the chart says.

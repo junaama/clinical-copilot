@@ -16,21 +16,22 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "What was this patient's most recent creatinine?"
+turns:
+  - prompt: "What was this patient's most recent creatinine?"
+    must_contain:
+      - "1.8"
+      - "mg/dL"
+    must_cite:
+      - "Observation/obs-cr-1"
+    trajectory:
+      # W-7 single-fact drill — agent must pick the granular
+      # ``get_recent_labs`` read, not buried inside a brief composite.
+      required_tools:
+        - get_recent_labs
 
 expected:
   workflow_id: W-7
   decision: allow
-  required_facts:
-    - "1.8"
-    - "mg/dL"
-  required_citation_refs:
-    - "Observation/obs-cr-1"
-  required_tools:
-    # W-7 single-fact drill — agent must pick the granular
-    # ``get_recent_labs`` read, not buried inside a brief composite.
-    - get_recent_labs
   forbidden_claims:
     - "no labs"
     - "creatinine is not on file"

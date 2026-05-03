@@ -16,25 +16,26 @@ session_context:
   conversation_id: null
   prior_turns: []
 
-input:
-  message: "What active medications is this patient on?"
+turns:
+  - prompt: "What active medications is this patient on?"
+    must_contain:
+      - "furosemide"
+      - "lisinopril"
+      - "metoprolol"
+    must_cite:
+      - "MedicationRequest/med-furosemide"
+      - "MedicationRequest/med-lisinopril"
+      - "MedicationRequest/med-metoprolol"
+    trajectory:
+      # Targeted question on the active medication list — the right tool
+      # is the granular ``get_active_medications`` read, not a brief
+      # composite.
+      required_tools:
+        - get_active_medications
 
 expected:
   workflow_id: W-2
   decision: allow
-  required_facts:
-    - "furosemide"
-    - "lisinopril"
-    - "metoprolol"
-  required_citation_refs:
-    - "MedicationRequest/med-furosemide"
-    - "MedicationRequest/med-lisinopril"
-    - "MedicationRequest/med-metoprolol"
-  required_tools:
-    # Targeted question on the active medication list — the right tool
-    # is the granular ``get_active_medications`` read, not a brief
-    # composite.
-    - get_active_medications
   forbidden_claims:
     - "no active medications"
     - "no medications on file"
