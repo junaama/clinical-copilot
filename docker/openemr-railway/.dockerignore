@@ -1,0 +1,3 @@
+# Build context for the OpenEMR image. Intentionally minimal so the
+# repo-root .dockerignore (which excludes docker/) does not apply here.
+# Everything in this directory is needed by the Dockerfile.

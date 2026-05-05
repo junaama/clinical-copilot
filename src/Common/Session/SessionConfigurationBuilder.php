@@ -102,12 +102,13 @@ class SessionConfigurationBuilder
     }
 
     /** @return array<string, mixed> */
-    public static function forApi(string $webRoot = ''): array
+    public static function forApi(string $webRoot = '', bool $readOnly = true): array
     {
         return (new self())
             ->setName(SessionUtil::API_SESSION_ID)
             ->setCookiePath((!empty($webRoot)) ? $webRoot . SessionUtil::API_WEBROOT : SessionUtil::API_WEBROOT)
             ->setCookieSecure(true)
+            ->setReadOnly($readOnly)
             ->build();
     }
 
