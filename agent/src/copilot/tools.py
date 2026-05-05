@@ -175,7 +175,8 @@ def _medication_fields(resource: dict[str, Any]) -> dict[str, Any]:
     *clinically* expired. Surface that as ``lifecycle_status='expired'`` so
     the LLM doesn't have to interpret the multi-field semantics.
     """
-    dosage = (resource.get("dosageInstruction") or [{}])[0]
+    _raw_dosage = (resource.get("dosageInstruction") or [{}])[0]
+    dosage = _raw_dosage if isinstance(_raw_dosage, dict) else {}
     raw_status = resource.get("status") or "unknown"
     lifecycle = raw_status
 

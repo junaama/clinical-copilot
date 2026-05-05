@@ -48,10 +48,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 COPY agent/pyproject.toml agent/uv.lock ./
-RUN uv sync --locked --no-install-project --no-dev
+RUN uv sync --locked --no-install-project --no-dev --extra postgres
 
 COPY agent/src ./src
-RUN uv sync --locked --no-dev --no-editable
+RUN uv sync --locked --no-dev --no-editable --extra postgres
 
 # ---------- runtime ----------
 FROM python:${PYTHON_VERSION}-slim AS runtime
