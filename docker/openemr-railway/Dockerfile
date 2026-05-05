@@ -16,3 +16,9 @@ FROM openemr/openemr:latest
 # (See ModulesClassLoader + custom_modules discovery in upstream OpenEMR.)
 COPY oe-module-copilot-launcher \
      /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-copilot-launcher
+
+# Layer local patches to upstream OpenEMR PHP on top. The patches/ tree
+# mirrors the upstream layout (patches/src/... → openemr/src/...), staged
+# by scripts/deploy-openemr.sh. Currently fixes session-lock serialization
+# on /apis/ requests by enabling read_and_close for the API session.
+COPY patches/ /var/www/localhost/htdocs/openemr/
