@@ -256,7 +256,7 @@ def _hybrid_sql(
     The outer query keeps the top ``_CANDIDATE_LIMIT`` rows for rerank.
     """
     qvec_literal = _format_pgvector(embedding)
-    domain_clause = "AND guideline = %(domain)s" if domain_filter else ""
+    domain_clause = "AND guideline ILIKE %(domain)s" if domain_filter else ""
     sql = f"""
         WITH sparse AS (
             SELECT chunk_id, guideline, section, page, content,
@@ -297,7 +297,7 @@ def _hybrid_sql(
     """
     params: dict[str, Any] = {"q": query, "qvec": qvec_literal}
     if domain_filter:
-        params["domain"] = domain_filter
+        params["domain"] = f"%{domain_filter}%"
     return sql, params
 
 

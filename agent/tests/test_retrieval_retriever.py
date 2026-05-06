@@ -319,7 +319,7 @@ def test_hybrid_sql_includes_query_and_vector_params() -> None:
     assert params["qvec"] == "[0.1000000,0.2000000,0.3000000]"
     assert "domain" not in params
     # No domain clause when no filter
-    assert "guideline = %(domain)s" not in sql
+    assert "guideline ILIKE %(domain)s" not in sql
     # RRF k=60 hard-coded
     assert "1.0 / (60 + rank)" in sql
 
@@ -327,8 +327,11 @@ def test_hybrid_sql_includes_query_and_vector_params() -> None:
 def test_hybrid_sql_with_domain_filter_adds_domain_param_and_clause() -> None:
     sql, params = _hybrid_sql("foo", [0.0] * 4, "ADA")
 
-    assert params["domain"] == "ADA"
-    assert sql.count("guideline = %(domain)s") == 2  # both sparse and dense
+    # Substring match so the LLM can pass brand names like "ADA" or
+    # "KDIGO" and still hit rows stored under the PDF stem
+    # ("ada-diabetes-glycemic-2024", "kdigo-ckd-2024", ...).
+    assert params["domain"] == "%ADA%"
+    assert sql.count("guideline ILIKE %(domain)s") == 2  # both sparse and dense
 
 
 def test_format_pgvector_renders_bracketed_csv() -> None:
