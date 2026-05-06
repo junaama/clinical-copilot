@@ -1,0 +1,48 @@
+{
+  "patient_name": "Kowalski, Anna",
+  "collection_date": "2026-04-20",
+  "ordering_provider": "Dr. Lee",
+  "lab_name": "Quest Diagnostics",
+  "results": [
+    {
+      "test_name": "Sodium",
+      "value": "138",
+      "unit": "mmol/L",
+      "reference_range": "136-145",
+      "abnormal_flag": "normal",
+      "confidence": "high"
+    },
+    {
+      "test_name": "Potassium",
+      "value": "5.2",
+      "unit": "mmol/L",
+      "reference_range": "3.5-5.0",
+      "abnormal_flag": "high",
+      "confidence": "high"
+    },
+    {
+      "test_name": "Creatinine",
+      "value": "1.8",
+      "unit": "mg/dL",
+      "reference_range": "0.6-1.2",
+      "abnormal_flag": "high",
+      "confidence": "high"
+    },
+    {
+      "test_name": "BUN",
+      "value": "32",
+      "unit": "mg/dL",
+      "reference_range": "7-20",
+      "abnormal_flag": "high",
+      "confidence": "high"
+    },
+    {
+      "test_name": "Glucose",
+      "value": "145",
+      "unit": "mg/dL",
+      "reference_range": "70-100",
+      "abnormal_flag": "high",
+      "confidence": "medium"
+    }
+  ]
+}

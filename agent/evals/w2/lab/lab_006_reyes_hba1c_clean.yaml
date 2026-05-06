@@ -1,0 +1,13 @@
+id: w2-lab-006
+category: lab_extraction
+description: Reyes HbA1c PNG — clean single-value extraction.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_reyes_hba1c.json
+fixture_response: |
+  Reyes' HbA1c from 2026-04-18 is 8.2% <cite ref="DocumentReference/lab-reyes-hba1c" page="1" field="results[0]" value="8.2"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

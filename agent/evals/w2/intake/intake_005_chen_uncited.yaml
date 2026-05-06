@@ -1,0 +1,15 @@
+id: w2-intake-005
+category: intake_extraction
+description: >
+  Negative sample — Chen intake narrative leaves the metformin claim
+  uncited. Gate must catch via citation_present.
+schema: IntakeExtraction
+fixture_extraction_path: ../fixtures/intake_chen.json
+fixture_response: |
+  Chen is on lisinopril 10 mg daily <cite ref="DocumentReference/intake-chen" page="1" field="current_medications[0]" value="lisinopril"/>. She is also taking metformin 500 mg twice daily.
+expected:
+  schema_valid: true
+  citation_present: false
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

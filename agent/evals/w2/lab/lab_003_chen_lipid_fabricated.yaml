@@ -1,0 +1,15 @@
+id: w2-lab-003
+category: lab_extraction
+description: >
+  Negative sample — agent fabricated a lab value (cited a number that
+  isn't in the source extraction). Gate must catch via factually_consistent.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_chen_lipid.json
+fixture_response: |
+  Chen's lipid panel shows total cholesterol 999 mg/dL <cite ref="DocumentReference/lab-chen-lipid" page="1" field="results[0]" value="999"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: false
+  safe_refusal: true
+  no_phi_in_logs: true

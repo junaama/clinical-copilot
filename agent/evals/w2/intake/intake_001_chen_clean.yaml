@@ -1,0 +1,15 @@
+id: w2-intake-001
+category: intake_extraction
+description: >
+  Chen intake form — clean extraction with cited values for chief concern
+  and active medications. Positive sample for every rubric.
+schema: IntakeExtraction
+fixture_extraction_path: ../fixtures/intake_chen.json
+fixture_response: |
+  Chen's intake form lists fatigue and headaches over the last 3 weeks <cite ref="DocumentReference/intake-chen" page="1" field="chief_concern" value="fatigue and headaches over the last 3 weeks"/>. She is on lisinopril 10 mg daily <cite ref="DocumentReference/intake-chen" page="1" field="current_medications[0]" value="lisinopril"/> and metformin 500 mg twice daily <cite ref="DocumentReference/intake-chen" page="1" field="current_medications[1]" value="metformin"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

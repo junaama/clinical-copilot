@@ -1,0 +1,16 @@
+{
+  "patient_name": "Reyes, Carlos",
+  "collection_date": "2026-04-18",
+  "ordering_provider": "Dr. Patel",
+  "lab_name": "Internal Lab",
+  "results": [
+    {
+      "test_name": "HbA1c",
+      "value": "8.2",
+      "unit": "%",
+      "reference_range": "<7.0",
+      "abnormal_flag": "high",
+      "confidence": "high"
+    }
+  ]
+}

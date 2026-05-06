@@ -1,0 +1,14 @@
+id: w2-evidence-008
+category: evidence_retrieval
+description: >
+  Agent hedges (no clinical claim) and asks a clarifying question. Tests
+  that citation_present does not over-fire when the response is
+  exclusively meta / clarification.
+fixture_response: |
+  Would you like guidance grounded in JNC 8 or in the more recent ACC/AHA 2017 update? Let me know which corpus to weight.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

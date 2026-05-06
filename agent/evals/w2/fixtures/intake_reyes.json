@@ -1,0 +1,23 @@
+{
+  "demographics": {
+    "first_name": "Carlos",
+    "last_name": "Reyes",
+    "dob": "1972-11-30",
+    "sex": "M"
+  },
+  "chief_concern": "blood sugar trending high",
+  "current_medications": [
+    {"name": "metformin", "dose": "1000 mg", "frequency": "twice daily"}
+  ],
+  "allergies": [
+    {"substance": "sulfa", "reaction": "rash"}
+  ],
+  "family_history": [
+    {"relation": "mother", "condition": "type 2 diabetes"},
+    {"relation": "father", "condition": "hypertension"}
+  ],
+  "social_history": {
+    "smoker": false,
+    "alcohol": "social"
+  }
+}

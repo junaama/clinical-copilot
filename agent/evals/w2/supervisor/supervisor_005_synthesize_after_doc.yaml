@@ -1,0 +1,14 @@
+id: w2-supervisor-005
+category: supervisor_routing
+description: >
+  Multi-step: supervisor dispatches to extract worker first, then loops
+  back to synthesize against guidelines. Response carries both a doc
+  citation and a guideline citation in the same paragraph.
+fixture_response: |
+  Chen's LDL is 140 mg/dL <cite ref="DocumentReference/lab-chen-lipid" page="1" field="results[1]" value="140"/>; ATP IV recommends initiating moderate-intensity statin therapy at this LDL for primary-prevention adults <cite ref="guideline:atp-iv-section-5" source="ATP IV" section="5"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

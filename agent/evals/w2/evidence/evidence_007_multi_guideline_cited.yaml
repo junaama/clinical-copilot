@@ -1,0 +1,14 @@
+id: w2-evidence-007
+category: evidence_retrieval
+description: >
+  Two guideline citations on a multi-source recommendation. Tests that
+  citation_present accepts more than one guideline ref in the same
+  paragraph.
+fixture_response: |
+  ADA recommends metformin first-line for type 2 diabetes <cite ref="guideline:ada-2024-section-9" source="ADA 2024" section="9"/>, with intensification when A1C remains >7.0% per AACE consensus <cite ref="guideline:aace-2024-section-3" source="AACE 2024" section="3"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

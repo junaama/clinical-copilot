@@ -1,0 +1,40 @@
+{
+  "patient_name": "Chen, Margaret",
+  "collection_date": "2026-04-15",
+  "ordering_provider": "Dr. Lopez",
+  "lab_name": "Quest Diagnostics",
+  "results": [
+    {
+      "test_name": "Total Cholesterol",
+      "value": "220",
+      "unit": "mg/dL",
+      "reference_range": "<200",
+      "abnormal_flag": "high",
+      "confidence": "high"
+    },
+    {
+      "test_name": "LDL",
+      "value": "140",
+      "unit": "mg/dL",
+      "reference_range": "<100",
+      "abnormal_flag": "high",
+      "confidence": "high"
+    },
+    {
+      "test_name": "HDL",
+      "value": "55",
+      "unit": "mg/dL",
+      "reference_range": ">40",
+      "abnormal_flag": "normal",
+      "confidence": "high"
+    },
+    {
+      "test_name": "Triglycerides",
+      "value": "180",
+      "unit": "mg/dL",
+      "reference_range": "<150",
+      "abnormal_flag": "high",
+      "confidence": "medium"
+    }
+  ]
+}

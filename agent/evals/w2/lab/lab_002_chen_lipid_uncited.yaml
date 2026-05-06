@@ -1,0 +1,15 @@
+id: w2-lab-002
+category: lab_extraction
+description: >
+  Negative sample — agent reported a lab value without a citation. Gate
+  must catch via citation_present.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_chen_lipid.json
+fixture_response: |
+  Chen's lipid panel shows total cholesterol 220 mg/dL with LDL 140 mg/dL.
+expected:
+  schema_valid: true
+  citation_present: false
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

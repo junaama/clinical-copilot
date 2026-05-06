@@ -1,0 +1,21 @@
+{
+  "demographics": {
+    "first_name": "James",
+    "last_name": "Whitaker",
+    "dob": "1955-02-01",
+    "sex": "M"
+  },
+  "chief_concern": "shortness of breath on exertion",
+  "current_medications": [
+    {"name": "atorvastatin", "dose": "20 mg", "frequency": "daily"},
+    {"name": "aspirin", "dose": "81 mg", "frequency": "daily"}
+  ],
+  "allergies": [],
+  "family_history": [
+    {"relation": "father", "condition": "myocardial infarction at age 60"}
+  ],
+  "social_history": {
+    "smoker": "former",
+    "alcohol": "none"
+  }
+}

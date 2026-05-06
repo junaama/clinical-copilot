@@ -1,0 +1,14 @@
+id: w2-supervisor-003
+category: supervisor_routing
+description: >
+  Week 1 per-patient brief request — supervisor must NOT route to a W2
+  worker. Response uses FHIR resource citations exclusively. Positive
+  sample for W1 backwards compatibility.
+fixture_response: |
+  Hayes is on lisinopril 10 mg daily <cite ref="MedicationRequest/med-hayes-1"/>. Routed to W1 brief.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

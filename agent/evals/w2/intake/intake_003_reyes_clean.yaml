@@ -1,0 +1,14 @@
+id: w2-intake-003
+category: intake_extraction
+description: >
+  Reyes intake form — clean extraction citing chief concern + allergy.
+schema: IntakeExtraction
+fixture_extraction_path: ../fixtures/intake_reyes.json
+fixture_response: |
+  Reyes presents with blood sugar trending high <cite ref="DocumentReference/intake-reyes" page="1" field="chief_concern" value="blood sugar trending high"/>. He reports a sulfa allergy with rash <cite ref="DocumentReference/intake-reyes" page="1" field="allergies[0]" value="sulfa"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

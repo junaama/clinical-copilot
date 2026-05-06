@@ -1,0 +1,23 @@
+{
+  "demographics": {
+    "first_name": "Margaret",
+    "last_name": "Chen",
+    "dob": "1968-07-14",
+    "sex": "F"
+  },
+  "chief_concern": "fatigue and headaches over the last 3 weeks",
+  "current_medications": [
+    {"name": "lisinopril", "dose": "10 mg", "frequency": "daily"},
+    {"name": "metformin", "dose": "500 mg", "frequency": "twice daily"}
+  ],
+  "allergies": [
+    {"substance": "penicillin", "reaction": "hives"}
+  ],
+  "family_history": [
+    {"relation": "mother", "condition": "type 2 diabetes"}
+  ],
+  "social_history": {
+    "smoker": false,
+    "alcohol": "occasional"
+  }
+}
