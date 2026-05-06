@@ -77,7 +77,15 @@ def make_retrieval_tools(
             }
 
         latency_ms = int((time.monotonic() - started) * 1000)
-        chunk_payloads = [c.model_dump() for c in chunks]
+        # Stamp each chunk with the canonical ``guideline_ref`` so the
+        # supervisor's evidence-retriever worker (issue 009) can scrape
+        # it into ``fetched_refs`` for the verifier to validate citations
+        # against.
+        chunk_payloads: list[dict[str, Any]] = []
+        for c in chunks:
+            payload = c.model_dump()
+            payload["guideline_ref"] = f"guideline:{c.chunk_id}"
+            chunk_payloads.append(payload)
         return {
             "ok": True,
             "rows": chunk_payloads,

@@ -30,6 +30,12 @@ The workflows (USER.md):
   W-9  re-consult — "what changed since I last touched this chart?"
   W-10 med-safety scan — pharmacist-style review across patients
   W-11 antibiotic stewardship — "should this patient still be on broad-spectrum?"
+  W-DOC document intent — "analyze this lab", "what does the intake form say?",
+       OR a system message of the form "[system] Document uploaded: <doc_type>
+       \"<filename>\" (document_id: <id>) for Patient/<uuid>" injected by the
+       upload endpoint.
+  W-EVD evidence intent — "what do guidelines say about ...", "is there a
+       recommendation for ...", "according to JNC 8 / ADA / KDIGO ...".
   unclear — the question doesn't clearly match any of the above
 
 Rules:
@@ -46,6 +52,13 @@ Rules:
   the user is talking about whichever patient is currently in focus.
   These are W-2 (general brief) or W-7 (specific fact), NEVER W-1 (which is
   cross-panel). "Did this patient have chest pain overnight?" → W-7.
+- A message starting with "[system] Document uploaded:" is ALWAYS W-DOC at
+  high confidence — it is the upload-endpoint sentinel and must route to
+  the supervisor.
+- "What do the guidelines say…" / "Is there evidence for…" / questions that
+  reference a published guideline by name (JNC 8, ADA, KDIGO, IDSA, AHA/ACC)
+  → W-EVD. If the question mixes a chart fact with a guideline ask, prefer
+  W-EVD — the supervisor will dispatch chart fetches as needed.
 - If the message is empty, ambiguous, or off-topic, return ``unclear`` with
   low confidence. Do NOT guess.
 """

@@ -80,3 +80,18 @@ class CoPilotState(TypedDict, total=False):
     # Structured wire block emitted by the synthesis node, carried through
     # to server.py so it can be returned in ChatResponse.
     block: dict[str, Any]
+
+    # Issue 009 — supervisor sub-graph fields. The supervisor records its
+    # last action (extract / retrieve_evidence / synthesize / clarify)
+    # and reasoning on every turn so the audit row + Langfuse spans can
+    # tell the dispatch story. ``handoff_events`` accumulates per-turn
+    # supervisor↔worker transitions; the reducer is plain append (no
+    # right-wins semantics — every event is significant).
+    # ``supervisor_iterations`` is a per-turn safety counter — the
+    # supervisor coerces to ``synthesize`` once it exceeds
+    # ``MAX_SUPERVISOR_ITERATIONS`` (set in graph.py) so a misbehaving
+    # LLM cannot infinite-loop between supervisor and workers.
+    supervisor_action: str
+    supervisor_reasoning: str
+    supervisor_iterations: int
+    handoff_events: Annotated[list[dict[str, Any]], operator.add]

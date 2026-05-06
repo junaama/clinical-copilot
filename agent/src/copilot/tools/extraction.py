@@ -133,6 +133,7 @@ def make_extraction_tools(
         return {
             "ok": True,
             "document_id": doc_id,
+            "document_ref": f"DocumentReference/{doc_id}",
             "doc_type": doc_type,
             "filename": path.name,
             "size_bytes": len(file_data),
@@ -154,10 +155,18 @@ def make_extraction_tools(
         if not ok:
             return _error_envelope(err or "list_failed", _ms(started))
 
+        # Stamp each row with a canonical ``document_ref`` so the
+        # supervisor's intake_extractor worker (issue 009) can scrape it
+        # into ``fetched_refs`` for the verifier.
+        documents_list = list(documents or [])
+        for d in documents_list:
+            doc_id = d.get("id") or d.get("document_id")
+            if doc_id and "document_ref" not in d:
+                d["document_ref"] = f"DocumentReference/{doc_id}"
         return {
             "ok": True,
-            "documents": list(documents or []),
-            "count": len(documents or []),
+            "documents": documents_list,
+            "count": len(documents_list),
             "latency_ms": _ms(started),
         }
 
@@ -239,6 +248,7 @@ def make_extraction_tools(
             "ok": True,
             "doc_type": doc_type,
             "document_id": document_id,
+            "document_ref": f"DocumentReference/{document_id}",
             "extraction_id": extraction_id,
             "extraction": extraction.model_dump(mode="json"),
             "bboxes": [b.model_dump(mode="json") for b in bboxes],
