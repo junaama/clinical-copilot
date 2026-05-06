@@ -1,19 +1,33 @@
 /**
- * Document upload widget (issue 011).
+ * Document upload widget (issue 011, mismatch guard issue 024).
  *
  * Drag-and-drop or file-picker for the active patient. Validates type/size
  * client-side before sending. POSTs multipart/form-data to /upload and emits
  * the resulting extraction up to the parent via `onUploaded`.
  *
+ * When the backend deterministically detects a doc-type mismatch (HTTP 409),
+ * the widget surfaces a correction affordance with three actions:
+ *  - Switch to detected type and retry
+ *  - Continue with the originally selected type (confirms the override)
+ *  - Cancel and re-pick a file
+ *
  * Always rendered. When `patientId` is empty, the widget shows but disables
  * upload with a hint to pick a patient first.
  */
 
-import { useCallback, useRef, useState, type ChangeEvent, type DragEvent, type JSX } from 'react';
+import {
+  useCallback,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type JSX,
+} from 'react';
 import {
   ALLOWED_MIME_TYPES,
   uploadDocument,
   validateFileForUpload,
+  type DocTypeMismatch,
   type UploadResult,
 } from '../api/upload';
 import type { DocType, ExtractionResponse } from '../api/extraction';
@@ -31,7 +45,17 @@ type UploadState =
   | { readonly kind: 'idle' }
   | { readonly kind: 'invalid'; readonly detail: string }
   | { readonly kind: 'uploading'; readonly fileName: string }
+  | {
+      readonly kind: 'mismatch';
+      readonly file: File;
+      readonly mismatch: DocTypeMismatch;
+    }
   | { readonly kind: 'error'; readonly status: number; readonly detail: string };
+
+const DOC_TYPE_LABEL: Record<DocType, string> = {
+  lab_pdf: 'Lab PDF',
+  intake_form: 'Intake form',
+};
 
 export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | null {
   const {
@@ -47,6 +71,34 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
   const [dragActive, setDragActive] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  const runUpload = useCallback(
+    async (
+      file: File,
+      effectiveDocType: DocType,
+      confirmDocType: boolean,
+    ): Promise<void> => {
+      setState({ kind: 'uploading', fileName: file.name });
+      const result: UploadResult = await uploadFn({
+        file,
+        patientId,
+        docType: effectiveDocType,
+        conversationId,
+        confirmDocType,
+      });
+      if (result.ok === true) {
+        setState({ kind: 'idle' });
+        onUploaded(result.response);
+        return;
+      }
+      if (result.ok === 'mismatch') {
+        setState({ kind: 'mismatch', file, mismatch: result.mismatch });
+        return;
+      }
+      setState({ kind: 'error', status: result.status, detail: result.detail });
+    },
+    [patientId, conversationId, onUploaded, uploadFn],
+  );
+
   const handleFile = useCallback(
     async (file: File): Promise<void> => {
       const invalid = validateFileForUpload(file);
@@ -54,21 +106,9 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
         setState({ kind: 'invalid', detail: invalid.detail });
         return;
       }
-      setState({ kind: 'uploading', fileName: file.name });
-      const result: UploadResult = await uploadFn({
-        file,
-        patientId,
-        docType,
-        conversationId,
-      });
-      if (!result.ok) {
-        setState({ kind: 'error', status: result.status, detail: result.detail });
-        return;
-      }
-      setState({ kind: 'idle' });
-      onUploaded(result.response);
+      await runUpload(file, docType, false);
     },
-    [patientId, docType, conversationId, onUploaded, uploadFn],
+    [docType, runUpload],
   );
 
   const onPick = useCallback(
@@ -98,6 +138,22 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
 
   const onDragLeave = useCallback((): void => {
     setDragActive(false);
+  }, []);
+
+  const onSwitchType = useCallback((): void => {
+    if (state.kind !== 'mismatch') return;
+    const next = state.mismatch.detectedType;
+    setDocType(next);
+    void runUpload(state.file, next, false);
+  }, [state, runUpload]);
+
+  const onConfirmAnyway = useCallback((): void => {
+    if (state.kind !== 'mismatch') return;
+    void runUpload(state.file, state.mismatch.requestedType, true);
+  }, [state, runUpload]);
+
+  const onCancelMismatch = useCallback((): void => {
+    setState({ kind: 'idle' });
   }, []);
 
   const hasPatient = Boolean(patientId);
@@ -138,6 +194,14 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
           />
           Intake form
         </label>
+      </div>
+
+      <div
+        className="upload-widget__active-type"
+        data-testid="upload-widget-active-type"
+        aria-live="polite"
+      >
+        Selected document type: <strong>{DOC_TYPE_LABEL[docType]}</strong>
       </div>
 
       <div
@@ -189,6 +253,43 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
       {state.kind === 'error' && (
         <div className="upload-widget__error" role="alert">
           Upload failed{state.status ? ` (HTTP ${state.status})` : ''}: {state.detail}
+        </div>
+      )}
+      {state.kind === 'mismatch' && (
+        <div
+          className="upload-widget__mismatch"
+          data-testid="upload-widget-mismatch"
+          role="alertdialog"
+          aria-labelledby="upload-mismatch-title"
+        >
+          <p id="upload-mismatch-title" className="upload-widget__mismatch-title">
+            This file looks like a {DOC_TYPE_LABEL[state.mismatch.detectedType]},
+            but you selected {DOC_TYPE_LABEL[state.mismatch.requestedType]}.
+          </p>
+          <p className="upload-widget__mismatch-message">{state.mismatch.message}</p>
+          <div className="upload-widget__mismatch-actions">
+            <button
+              type="button"
+              onClick={onSwitchType}
+              data-testid="upload-mismatch-switch"
+            >
+              Switch to {DOC_TYPE_LABEL[state.mismatch.detectedType]} and upload
+            </button>
+            <button
+              type="button"
+              onClick={onConfirmAnyway}
+              data-testid="upload-mismatch-confirm"
+            >
+              Upload as {DOC_TYPE_LABEL[state.mismatch.requestedType]} anyway
+            </button>
+            <button
+              type="button"
+              onClick={onCancelMismatch}
+              data-testid="upload-mismatch-cancel"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
     </div>

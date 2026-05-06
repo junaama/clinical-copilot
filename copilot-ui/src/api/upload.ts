@@ -17,8 +17,18 @@ export const ALLOWED_MIME_TYPES: readonly string[] = [
 
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20 MB
 
+export interface DocTypeMismatch {
+  readonly code: 'doc_type_mismatch';
+  readonly message: string;
+  readonly requestedType: DocType;
+  readonly detectedType: DocType;
+  readonly confidence: 'high' | 'medium' | 'low';
+  readonly evidence: readonly string[];
+}
+
 export type UploadResult =
   | { readonly ok: true; readonly response: ExtractionResponse }
+  | { readonly ok: 'mismatch'; readonly status: 409; readonly mismatch: DocTypeMismatch }
   | { readonly ok: false; readonly status: number; readonly detail: string };
 
 export interface UploadOptions {
@@ -26,6 +36,7 @@ export interface UploadOptions {
   readonly patientId: string;
   readonly docType: DocType;
   readonly conversationId?: string;
+  readonly confirmDocType?: boolean;
   readonly fetcher?: typeof fetch;
   readonly baseUrl?: string;
   readonly signal?: AbortSignal;
@@ -80,6 +91,9 @@ export async function uploadDocument(opts: UploadOptions): Promise<UploadResult>
   if (opts.conversationId) {
     form.append('conversation_id', opts.conversationId);
   }
+  if (opts.confirmDocType) {
+    form.append('confirm_doc_type', 'true');
+  }
 
   let resp: Response;
   try {
@@ -106,6 +120,12 @@ export async function uploadDocument(opts: UploadOptions): Promise<UploadResult>
   }
 
   if (!resp.ok) {
+    if (resp.status === 409) {
+      const mismatch = parseMismatchDetail(bodyText);
+      if (mismatch) {
+        return { ok: 'mismatch', status: 409, mismatch };
+      }
+    }
     return { ok: false, status: resp.status, detail: extractDetail(bodyText, resp.status) };
   }
 
@@ -120,6 +140,44 @@ export async function uploadDocument(opts: UploadOptions): Promise<UploadResult>
     return { ok: false, status: resp.status, detail: 'unexpected response shape' };
   }
   return { ok: true, response: parsed };
+}
+
+function parseMismatchDetail(bodyText: string): DocTypeMismatch | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const obj = parsed as Record<string, unknown>;
+  const detail = obj['detail'];
+  if (typeof detail !== 'object' || detail === null) return null;
+  const d = detail as Record<string, unknown>;
+  if (d['code'] !== 'doc_type_mismatch') return null;
+  const requested = d['requested_type'];
+  const detected = d['detected_type'];
+  const confidence = d['confidence'];
+  if (
+    (requested !== 'lab_pdf' && requested !== 'intake_form') ||
+    (detected !== 'lab_pdf' && detected !== 'intake_form') ||
+    (confidence !== 'high' && confidence !== 'medium' && confidence !== 'low')
+  ) {
+    return null;
+  }
+  const message = typeof d['message'] === 'string' ? d['message'] : '';
+  const rawEvidence = Array.isArray(d['evidence']) ? d['evidence'] : [];
+  const evidence: string[] = rawEvidence.filter(
+    (s: unknown): s is string => typeof s === 'string',
+  );
+  return {
+    code: 'doc_type_mismatch',
+    message,
+    requestedType: requested,
+    detectedType: detected,
+    confidence,
+    evidence,
+  };
 }
 
 function extractDetail(bodyText: string, status: number): string {

@@ -57,6 +57,7 @@ from .extraction.bbox_matcher import match_extraction_to_bboxes
 from .extraction.document_client import UPLOAD_LANDED_ID_LOST, DocumentClient
 from .extraction.persistence import DocumentExtractionStore
 from .extraction.schemas import IntakeExtraction, LabExtraction
+from .extraction.type_guard import detect_doc_type
 from .extraction.vlm import extract_document as _vlm_extract_document
 from .fhir import FhirClient
 from .graph import build_graph
@@ -1218,11 +1219,15 @@ async def _inject_upload_system_message(
         _log.warning("upload system-message injection failed: %s", exc)
 
 
+_TRUTHY_FORM_VALUES: frozenset[str] = frozenset({"true", "1", "yes", "on"})
+
+
 @app.post("/upload", response_model=UploadResponse)
 async def upload(
     file: UploadFile = File(...),  # noqa: B008 - FastAPI dependency injection idiom
     patient_id: str = Form(default=""),
     doc_type: str = Form(default=""),
+    confirm_doc_type: str = Form(default=""),
     conversation_id: str | None = Form(default=None),
     copilot_session: str | None = Cookie(default=None),
 ) -> UploadResponse:
@@ -1267,6 +1272,35 @@ async def upload(
     if conversation_id:
         _assert_patient_context_matches(conversation_id, patient_id)
 
+    # Document-type guard (issue 024). Cheap deterministic check that
+    # catches obvious lab-vs-intake mismatches before the wrong VLM
+    # pipeline runs. The clinician can override by re-submitting with
+    # ``confirm_doc_type=true``.
+    filename = file.filename or "upload.bin"
+    sniffed_mimetype = _sniff_mimetype(file_data, file.content_type)
+    detection = detect_doc_type(file_data, filename, sniffed_mimetype)
+    confirmed = confirm_doc_type.lower() in _TRUTHY_FORM_VALUES
+    if (
+        not confirmed
+        and detection.detected_type is not None
+        and detection.detected_type != doc_type
+        and detection.confidence == "high"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "doc_type_mismatch",
+                "message": (
+                    f"This file looks like a {detection.detected_type}, "
+                    f"not a {doc_type}. Switch the document type or confirm to upload anyway."
+                ),
+                "requested_type": doc_type,
+                "detected_type": detection.detected_type,
+                "confidence": detection.confidence,
+                "evidence": list(detection.evidence),
+            },
+        )
+
     # Resolve a SMART access token for OpenEMR. /chat threads it through
     # the graph state; /upload calls DocumentClient + VLM directly so we
     # bind it to the contextvar DocumentClient._resolve_token() reads
@@ -1290,7 +1324,6 @@ async def upload(
     set_active_smart_token(smart_access_token or None)
 
     document_client = _resolve_upload_document_client(app)
-    filename = file.filename or "upload.bin"
 
     ok, document_id, err, _latency = await document_client.upload(
         patient_id,
@@ -1313,7 +1346,7 @@ async def upload(
         )
 
     vlm_model = _resolve_upload_vlm_model(app)
-    mimetype = _sniff_mimetype(file_data, file.content_type)
+    mimetype = sniffed_mimetype
     result = await _vlm_extract_document(
         file_data,
         mimetype,
