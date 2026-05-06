@@ -12,21 +12,29 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import secrets
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-import os
-from pathlib import Path
-
-from fastapi import BackgroundTasks, Cookie, FastAPI, HTTPException, Response
+from fastapi import (
+    BackgroundTasks,
+    Cookie,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Response,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from .api.schemas import (
     Block,
@@ -44,6 +52,9 @@ from .conversations import (
     InMemoryConversationStore,
     open_conversation_store,
 )
+from .extraction.document_client import DocumentClient
+from .extraction.schemas import IntakeExtraction, LabExtraction
+from .extraction.vlm import extract_document as _vlm_extract_document
 from .fhir import FhirClient
 from .graph import build_graph
 from .observability import get_callback_handler
@@ -68,12 +79,13 @@ from .smart import (
     refresh_access_token,
     token_bundle_from_response,
 )
-from .tools import set_active_smart_token
+from .supervisor.upload import build_document_upload_message
 from .title_summarizer import (
     HaikuTitleSummarizer,
     build_default_haiku_factory,
 )
 from .token_crypto import TokenEncryptor, load_encryptor_from_env
+from .tools import set_active_smart_token
 
 _log = logging.getLogger(__name__)
 
@@ -1022,6 +1034,223 @@ async def get_conversation_messages(
         "last_focus_pid": row.last_focus_pid,
         "messages": messages,
     }
+
+
+# ---------------------------------------------------------------------------
+# Document upload (issue 011)
+# ---------------------------------------------------------------------------
+
+
+_VALID_UPLOAD_DOC_TYPES: frozenset[str] = frozenset({"lab_pdf", "intake_form"})
+
+# Mirror copilot-ui/src/api/upload.ts so the server-side cap matches the
+# client-side cap. DocumentClient also re-checks at the storage boundary.
+_MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024
+
+
+class UploadResponse(BaseModel):
+    """Wire shape returned by ``POST /upload``.
+
+    Mirrors copilot-ui/src/api/extraction.ts ``ExtractionResponse``: one of
+    ``lab`` or ``intake`` is populated according to ``doc_type``; the other
+    is ``None``. Both Pydantic extraction shapes are dumped via
+    ``model_dump(mode="json")`` so the field set on the wire is determined
+    by the schema, not by hand-maintained DTO mirroring.
+    """
+
+    document_id: str
+    doc_type: str
+    filename: str
+    lab: dict[str, Any] | None = None
+    intake: dict[str, Any] | None = None
+
+
+def _resolve_upload_document_client(req_app: FastAPI) -> Any:
+    """Return the DocumentClient bound to the app.
+
+    Tests inject a stub via ``app.state.document_client``. Production
+    builds one lazily from settings on first request.
+    """
+    existing = getattr(req_app.state, "document_client", None)
+    if existing is not None:
+        return existing
+    settings = req_app.state.settings
+    client = DocumentClient(settings)
+    req_app.state.document_client = client
+    return client
+
+
+def _resolve_upload_vlm_model(req_app: FastAPI) -> Any:
+    """Return the VLM model bound to the app, building lazily if needed."""
+    existing = getattr(req_app.state, "vlm_model", None)
+    if existing is not None:
+        return existing
+    from .llm import build_vision_model
+
+    settings = req_app.state.settings
+    model = build_vision_model(settings)
+    req_app.state.vlm_model = model
+    return model
+
+
+def _sniff_mimetype(file_data: bytes, fallback: str | None) -> str:
+    """Resolve a mimetype from the raw bytes, falling back to ``fallback``."""
+    if file_data.startswith(b"%PDF-"):
+        return "application/pdf"
+    if file_data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if file_data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    return fallback or "application/octet-stream"
+
+
+async def _inject_upload_system_message(
+    req_app: FastAPI,
+    conversation_id: str,
+    doc_type: str,
+    filename: str,
+    document_id: str,
+    patient_id: str,
+) -> None:
+    """Append a ``[system] Document uploaded …`` message to checkpointer state.
+
+    The classifier reads this on the next ``/chat`` turn and routes to
+    ``W-DOC``. Failures are logged but do not propagate — the UI's
+    synthetic chat turn following the upload covers the routing path
+    even if the checkpointer write fails.
+    """
+    checkpointer = getattr(req_app.state, "checkpointer", None)
+    if checkpointer is None:
+        return
+    msg = build_document_upload_message(
+        doc_type=doc_type,
+        filename=filename,
+        document_id=f"DocumentReference/{document_id}",
+        patient_id=f"Patient/{patient_id}"
+        if not patient_id.startswith("Patient/")
+        else patient_id,
+    )
+    graph = getattr(req_app.state, "graph", None)
+    if graph is None:
+        return
+    update_state = getattr(graph, "aupdate_state", None) or getattr(
+        graph, "update_state", None
+    )
+    if update_state is None:
+        return
+    try:
+        config = {"configurable": {"thread_id": conversation_id}}
+        result = update_state(config, {"messages": [msg]})
+        if hasattr(result, "__await__"):
+            await result
+    except Exception as exc:  # pragma: no cover - logged best-effort
+        _log.warning("upload system-message injection failed: %s", exc)
+
+
+@app.post("/upload", response_model=UploadResponse)
+async def upload(
+    file: UploadFile = File(...),  # noqa: B008 - FastAPI dependency injection idiom
+    patient_id: str = Form(default=""),
+    doc_type: str = Form(default=""),
+    conversation_id: str | None = Form(default=None),
+) -> UploadResponse:
+    """Upload a clinical document, run VLM extraction, return the result.
+
+    The endpoint is the agent-side glue between copilot-ui's
+    FileUploadWidget and the document-extraction pipeline. It:
+
+    1. Validates ``doc_type`` and ``patient_id`` shape.
+    2. Reads the file bytes (rejects empty / oversized).
+    3. Uploads to OpenEMR via :class:`DocumentClient`.
+    4. Runs the VLM pipeline against the uploaded bytes (no re-download).
+    5. Optionally injects a ``[system] Document uploaded …`` sentinel into
+       conversation state so the classifier sees it on the next turn.
+    6. Returns an ``UploadResponse`` mirroring the UI's TypeScript shape.
+    """
+
+    if doc_type not in _VALID_UPLOAD_DOC_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"invalid doc_type '{doc_type}'. "
+                f"Expected one of: {sorted(_VALID_UPLOAD_DOC_TYPES)}"
+            ),
+        )
+    if not patient_id:
+        raise HTTPException(status_code=400, detail="patient_id is required")
+
+    file_data = await file.read()
+    if not file_data:
+        raise HTTPException(status_code=400, detail="file is empty")
+    if len(file_data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"file exceeds the {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB upload cap"
+            ),
+        )
+
+    # Defense-in-depth: when a SMART bundle is bound to this conversation,
+    # ensure the upload's patient matches the launched patient.
+    if conversation_id:
+        _assert_patient_context_matches(conversation_id, patient_id)
+
+    document_client = _resolve_upload_document_client(app)
+    filename = file.filename or "upload.bin"
+
+    ok, document_id, err, _latency = await document_client.upload(
+        patient_id,
+        file_data,
+        filename,
+        doc_type,
+    )
+    if not ok or not document_id:
+        raise HTTPException(
+            status_code=502,
+            detail=f"upload_failed: {err or 'unknown'}",
+        )
+
+    vlm_model = _resolve_upload_vlm_model(app)
+    mimetype = _sniff_mimetype(file_data, file.content_type)
+    result = await _vlm_extract_document(
+        file_data,
+        mimetype,
+        doc_type,  # type: ignore[arg-type]
+        document_id=f"DocumentReference/{document_id}",
+        model=vlm_model,
+    )
+    if not result.ok or result.extraction is None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"extraction_failed: {result.error or 'no extraction'}",
+        )
+
+    if conversation_id:
+        await _inject_upload_system_message(
+            app,
+            conversation_id,
+            doc_type,
+            filename,
+            document_id,
+            patient_id,
+        )
+
+    extraction = result.extraction
+    extraction_dump = extraction.model_dump(mode="json")
+    lab_payload: dict[str, Any] | None = None
+    intake_payload: dict[str, Any] | None = None
+    if isinstance(extraction, LabExtraction):
+        lab_payload = extraction_dump
+    elif isinstance(extraction, IntakeExtraction):
+        intake_payload = extraction_dump
+
+    return UploadResponse(
+        document_id=document_id,
+        doc_type=doc_type,
+        filename=filename,
+        lab=lab_payload,
+        intake=intake_payload,
+    )
 
 
 # Static UI mount — must be last so the API routes above take precedence.
