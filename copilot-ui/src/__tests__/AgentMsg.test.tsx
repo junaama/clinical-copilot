@@ -140,6 +140,70 @@ describe('AgentMsg block dispatch', () => {
   });
 });
 
+describe('AgentMsg guideline citations (issue 027)', () => {
+  const guidelinePlainBlock = {
+    kind: 'plain' as const,
+    lead: 'ADA suggests an A1c target below 7% for most non-pregnant adults.',
+    citations: [
+      {
+        card: 'guideline' as const,
+        label: 'ADA · 6.5',
+        fhir_ref: 'guideline:ada-a1c-2024-1',
+      },
+    ],
+    followups: [] as readonly string[],
+  };
+
+  it('renders a guideline source chip with the source · section label', () => {
+    render(
+      <AgentMsg
+        message={makeMsg(guidelinePlainBlock)}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const chip = screen.getByText('ADA · 6.5');
+    expect(chip).toBeInTheDocument();
+    expect(chip.closest('button')?.dataset['card']).toBe('guideline');
+  });
+
+  it('passes the guideline citation back to onCite on click', async () => {
+    const user = userEvent.setup();
+    const onCite = vi.fn();
+    render(
+      <AgentMsg
+        message={makeMsg(guidelinePlainBlock)}
+        showCitations
+        onCite={onCite}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByText('ADA · 6.5'));
+    expect(onCite).toHaveBeenCalledTimes(1);
+    expect(onCite.mock.calls[0]?.[0]).toMatchObject({
+      card: 'guideline',
+      fhir_ref: 'guideline:ada-a1c-2024-1',
+    });
+  });
+
+  it('still hides the chip while the lead is streaming', () => {
+    render(
+      <AgentMsg
+        message={makeMsg(guidelinePlainBlock, /* streaming */ true)}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('ADA · 6.5')).not.toBeInTheDocument();
+    expect(screen.queryByText('Sources')).not.toBeInTheDocument();
+  });
+});
+
 describe('AgentErrorBubble', () => {
   it('renders an HTTP status and detail', () => {
     render(<AgentErrorBubble status={502} detail="upstream FHIR timeout" />);

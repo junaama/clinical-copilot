@@ -109,4 +109,24 @@ describe('parseChatResponse', () => {
     const result = parseChatResponse(ok);
     expect(result.block.citations[0]?.fhir_ref).toBeNull();
   });
+
+  it('accepts guideline citations on plain blocks (issue 027)', () => {
+    const ok = {
+      ...MOCK_PLAIN_RESPONSE,
+      block: {
+        ...MOCK_PLAIN_RESPONSE.block,
+        citations: [
+          {
+            card: 'guideline',
+            label: 'ADA · 6.5',
+            fhir_ref: 'guideline:ada-a1c-2024-1',
+          },
+        ],
+      },
+    };
+    const result = parseChatResponse(ok);
+    expect(result.block.kind).toBe('plain');
+    expect(result.block.citations[0]?.card).toBe('guideline');
+    expect(result.block.citations[0]?.fhir_ref).toBe('guideline:ada-a1c-2024-1');
+  });
 });

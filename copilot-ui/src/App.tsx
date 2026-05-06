@@ -37,6 +37,7 @@ import { useTweaks, type TweakValues } from './components/Tweaks/useTweaks';
 import { useSession } from './hooks/useSession';
 import { parseSmartLaunch, type SmartLaunchContext } from './api/smart';
 import type { ChatResponse, Citation } from './api/types';
+import { planCitationClick } from './api/citations';
 
 interface CopilotTweaks extends TweakValues {
   readonly surface: Surface;
@@ -385,15 +386,22 @@ function EhrLaunchApp({ smart }: { readonly smart: SmartLaunchContext }): JSX.El
   }, []);
 
   function onCite(citation: Citation): void {
-    setHighlights({ [citation.card]: true });
+    const effect = planCitationClick(citation);
+    if (effect.kind === 'noop') {
+      // Guideline citations point at the RAG corpus, not a chart card.
+      // The chip stays visible in the answer; clicking is a no-op.
+      return;
+    }
+
+    setHighlights({ [effect.card]: true });
     window.setTimeout(() => setHighlights({}), 1700);
 
     try {
       window.parent.postMessage(
         {
           type: 'copilot:flash-card',
-          card: citation.card,
-          fhir_ref: citation.fhir_ref,
+          card: effect.card,
+          fhir_ref: effect.fhir_ref,
         },
         '*',
       );
@@ -401,7 +409,7 @@ function EhrLaunchApp({ smart }: { readonly smart: SmartLaunchContext }): JSX.El
       // ignore - non-iframe context
     }
 
-    const el = document.querySelector(`[data-card="${citation.card}"]`);
+    const el = document.querySelector(`[data-card="${effect.card}"]`);
     if (el instanceof HTMLElement) {
       const r = el.getBoundingClientRect();
       if (r.top < 80 || r.bottom > window.innerHeight - 20) {

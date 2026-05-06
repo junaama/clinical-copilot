@@ -22,6 +22,7 @@ CitationCard = Literal[
     "prescriptions",
     "encounters",
     "documents",
+    "guideline",
     "other",
 ]
 
@@ -182,6 +183,12 @@ def fhir_ref_to_card(
 
     if not fhir_ref:
         return "other"
+    # Guideline corpus refs use a ``guideline:`` prefix instead of the
+    # FHIR ``ResourceType/id`` shape. Route them to a dedicated card so
+    # the frontend can render source chips without forcing them through
+    # the chart-card postMessage path.
+    if fhir_ref.startswith("guideline:"):
+        return "guideline"
     resource_type = fhir_ref.split("/", 1)[0]
     if resource_type == "Observation":
         if observation_category == "vital-signs":

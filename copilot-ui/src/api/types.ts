@@ -20,6 +20,7 @@ export const CITATION_CARDS = [
   'prescriptions',
   'encounters',
   'documents',
+  'guideline',
   'other',
 ] as const;
 
