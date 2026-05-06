@@ -16,6 +16,7 @@ next ``/chat`` turn.
 
 from __future__ import annotations
 
+import hashlib
 import io
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -75,6 +76,20 @@ class _StubDocumentClient:
         if not self.ok:
             return False, None, self.error or "stub_upload_failed", 1
         return True, self.document_id, None, 1
+
+
+class _StubExtractionStore:
+    def __init__(self) -> None:
+        self.lab_saves: list[dict[str, Any]] = []
+        self.intake_saves: list[dict[str, Any]] = []
+
+    async def save_lab_extraction(self, **kwargs: Any) -> int:
+        self.lab_saves.append(kwargs)
+        return 42
+
+    async def save_intake_extraction(self, **kwargs: Any) -> int:
+        self.intake_saves.append(kwargs)
+        return 17
 
 
 def _build_lab_extraction(document_id: str) -> LabExtraction:
@@ -161,6 +176,7 @@ def upload_client(monkeypatch: pytest.MonkeyPatch):
     )
 
     stub_doc = _StubDocumentClient()
+    stub_store = _StubExtractionStore()
     extraction_holder: dict[str, Any] = {}
     system_messages: list[SystemMessage] = []
 
@@ -220,8 +236,10 @@ def upload_client(monkeypatch: pytest.MonkeyPatch):
 
     with TestClient(server.app) as client:
         server.app.state.document_client = stub_doc
+        server.app.state.extraction_store = stub_store
         server.app.state.vlm_model = object()  # not used; extraction is stubbed
         client.stub_doc = stub_doc  # type: ignore[attr-defined]
+        client.stub_store = stub_store  # type: ignore[attr-defined]
         client.system_messages = system_messages  # type: ignore[attr-defined]
         client.extraction_holder = extraction_holder  # type: ignore[attr-defined]
         yield client
@@ -260,6 +278,29 @@ def test_upload_lab_pdf_returns_extraction_response(upload_client: TestClient) -
     assert upload_call["patient_id"] == "patient-eduardo-1"
     assert upload_call["filename"] == "hba1c.pdf"
     assert upload_call["category"] == "lab_pdf"
+
+
+def test_upload_persists_extraction_cache_keys(upload_client: TestClient) -> None:
+    pdf_bytes = b"%PDF-1.4\n%fake-pdf-bytes-for-test\n"
+
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": ("hba1c.pdf", io.BytesIO(pdf_bytes), "application/pdf"),
+        },
+        data={
+            "patient_id": "patient-eduardo-1",
+            "doc_type": "lab_pdf",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    saves = upload_client.stub_store.lab_saves  # type: ignore[attr-defined]
+    assert len(saves) == 1
+    assert saves[0]["document_id"] == "doc-123"
+    assert saves[0]["patient_id"] == "patient-eduardo-1"
+    assert saves[0]["filename"] == "hba1c.pdf"
+    assert saves[0]["content_sha256"] == hashlib.sha256(pdf_bytes).hexdigest()
 
 
 def test_upload_intake_form_returns_intake_payload(upload_client: TestClient) -> None:

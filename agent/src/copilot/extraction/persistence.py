@@ -34,6 +34,33 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 _log = logging.getLogger(__name__)
 
 
+def _decode_json(value: Any) -> Any:
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _row_to_dict(row: Any) -> dict[str, Any] | None:
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return {
+            **row,
+            "extraction_json": _decode_json(row.get("extraction_json")),
+            "bboxes_json": _decode_json(row.get("bboxes_json")),
+        }
+    return {
+        "id": int(row[0]),
+        "document_id": str(row[1]),
+        "patient_id": str(row[2]),
+        "doc_type": str(row[3]),
+        "extraction_json": _decode_json(row[4]),
+        "bboxes_json": _decode_json(row[5]),
+        "filename": row[6],
+        "content_sha256": row[7],
+    }
+
+
 @dataclass(frozen=True)
 class IntakeWriteSummary:
     """Per-section result of writing an intake extraction to OpenEMR."""
@@ -73,6 +100,8 @@ class DocumentExtractionStore:
         bboxes: list[FieldWithBBox],
         document_id: str,
         patient_id: str,
+        filename: str | None = None,
+        content_sha256: str | None = None,
     ) -> int:
         """Insert one extraction row and return its primary-key id."""
         return await self._insert(
@@ -81,6 +110,8 @@ class DocumentExtractionStore:
             bboxes_json=[b.model_dump(mode="json") for b in bboxes],
             document_id=document_id,
             patient_id=patient_id,
+            filename=filename,
+            content_sha256=content_sha256,
         )
 
     async def save_intake_extraction(
@@ -90,6 +121,8 @@ class DocumentExtractionStore:
         bboxes: list[FieldWithBBox],
         document_id: str,
         patient_id: str,
+        filename: str | None = None,
+        content_sha256: str | None = None,
     ) -> int:
         """Insert an intake extraction (mirror of save_lab for trace fidelity).
 
@@ -103,6 +136,47 @@ class DocumentExtractionStore:
             bboxes_json=[b.model_dump(mode="json") for b in bboxes],
             document_id=document_id,
             patient_id=patient_id,
+            filename=filename,
+            content_sha256=content_sha256,
+        )
+
+    async def get_latest_by_document_id(
+        self,
+        *,
+        patient_id: str,
+        document_id: str,
+    ) -> dict[str, Any] | None:
+        """Return the newest cached extraction for ``patient_id`` + ``document_id``."""
+        return await self._fetch_one(
+            """
+            SELECT id, document_id, patient_id, doc_type, extraction_json,
+                   bboxes_json, filename, content_sha256
+            FROM document_extractions
+            WHERE patient_id = %s AND document_id = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (patient_id, document_id),
+        )
+
+    async def get_latest_by_hash(
+        self,
+        *,
+        patient_id: str,
+        filename: str,
+        content_sha256: str,
+    ) -> dict[str, Any] | None:
+        """Return newest cached extraction for patient-scoped filename + content hash."""
+        return await self._fetch_one(
+            """
+            SELECT id, document_id, patient_id, doc_type, extraction_json,
+                   bboxes_json, filename, content_sha256
+            FROM document_extractions
+            WHERE patient_id = %s AND filename = %s AND content_sha256 = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (patient_id, filename, content_sha256),
         )
 
     async def _insert(
@@ -113,6 +187,8 @@ class DocumentExtractionStore:
         bboxes_json: list[dict[str, Any]],
         document_id: str,
         patient_id: str,
+        filename: str | None,
+        content_sha256: str | None,
     ) -> int:
         try:
             from psycopg_pool import AsyncConnectionPool
@@ -131,8 +207,9 @@ class DocumentExtractionStore:
                         """
                         INSERT INTO document_extractions
                             (document_id, patient_id, doc_type,
-                             extraction_json, bboxes_json)
-                        VALUES (%s, %s, %s, %s, %s)
+                             extraction_json, bboxes_json,
+                             filename, content_sha256)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                         """,
                         (
@@ -141,12 +218,38 @@ class DocumentExtractionStore:
                             doc_type,
                             json.dumps(extraction_json),
                             json.dumps(bboxes_json),
+                            filename,
+                            content_sha256,
                         ),
                     )
                     row = await cur.fetchone()
                     if not row:
                         raise RuntimeError("INSERT did not return id")
                     return int(row[0])
+        finally:
+            await pool.close()
+
+    async def _fetch_one(
+        self,
+        sql: str,
+        params: tuple[Any, ...],
+    ) -> dict[str, Any] | None:
+        try:
+            from psycopg_pool import AsyncConnectionPool
+        except ImportError as exc:  # pragma: no cover - install-time guard
+            raise RuntimeError(
+                "DocumentExtractionStore requires the 'postgres' extra. "
+                "Install with: uv sync --extra postgres"
+            ) from exc
+
+        pool = AsyncConnectionPool(self._dsn, open=False, min_size=1, max_size=2)
+        await pool.open()
+        try:
+            async with pool.connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(sql, params)
+                    row = await cur.fetchone()
+                    return _row_to_dict(row)
         finally:
             await pool.close()
 

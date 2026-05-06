@@ -136,6 +136,37 @@ async def _run_graph_turn(
     return await graph.ainvoke(inputs, config=config)
 
 
+async def _document_extraction_count(
+    *,
+    dsn: str,
+    patient_id: str,
+    document_id: str,
+) -> int:
+    """Count persisted extraction attempts for the live cache assertion."""
+    try:
+        from psycopg_pool import AsyncConnectionPool
+    except ImportError:
+        pytest.skip("live cache assertion requires psycopg_pool")
+
+    pool = AsyncConnectionPool(dsn, open=False, min_size=1, max_size=2)
+    await pool.open()
+    try:
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT count(*)
+                    FROM document_extractions
+                    WHERE patient_id = %s AND document_id = %s
+                    """,
+                    (patient_id, document_id),
+                )
+                row = await cur.fetchone()
+                return int(row[0]) if row else 0
+    finally:
+        await pool.close()
+
+
 def _last_ai_text(state: dict[str, Any]) -> str:
     """Return the terminal AIMessage text (verifier's precondition)."""
     msgs = state.get("messages") or []
@@ -275,6 +306,33 @@ async def test_e2e_upload_then_extract_lab_pdf() -> None:
 
     assert final.get("decision") == "allow", (
         f"expected decision=allow; got {final.get('decision')!r}"
+    )
+
+    count_after_first = await _document_extraction_count(
+        dsn=settings.checkpointer_dsn,
+        patient_id=patient_id,
+        document_id=doc_id,
+    )
+    assert count_after_first >= 1, "first extraction should persist a cache row"
+
+    second = await _run_graph_turn(
+        settings=settings,
+        conversation_id=conv_id,
+        user_message=(
+            f"For the same uploaded {CHEN_LIPID_PDF.name}, remind me of the LDL."
+        ),
+        extra_messages=[sentinel],
+    )
+    assert second.get("decision") == "allow", (
+        f"expected second decision=allow; got {second.get('decision')!r}"
+    )
+    count_after_second = await _document_extraction_count(
+        dsn=settings.checkpointer_dsn,
+        patient_id=patient_id,
+        document_id=doc_id,
+    )
+    assert count_after_second == count_after_first, (
+        "second extraction should be cache-served, not persisted as a new VLM run"
     )
 
 

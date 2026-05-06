@@ -10,6 +10,7 @@ and mirror ``agentforge-docs/CHAT-API-CONTRACT.md``.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -52,7 +53,9 @@ from .conversations import (
     InMemoryConversationStore,
     open_conversation_store,
 )
+from .extraction.bbox_matcher import match_extraction_to_bboxes
 from .extraction.document_client import UPLOAD_LANDED_ID_LOST, DocumentClient
+from .extraction.persistence import DocumentExtractionStore
 from .extraction.schemas import IntakeExtraction, LabExtraction
 from .extraction.vlm import extract_document as _vlm_extract_document
 from .fhir import FhirClient
@@ -1096,6 +1099,24 @@ def _resolve_upload_vlm_model(req_app: FastAPI) -> Any:
     return model
 
 
+def _resolve_upload_extraction_store(req_app: FastAPI) -> Any | None:
+    """Return the upload cache store when configured.
+
+    Tests inject ``app.state.extraction_store``. Production builds one
+    lazily from ``CHECKPOINTER_DSN``; when no DSN is configured, upload
+    still works but cache persistence is skipped.
+    """
+    existing = getattr(req_app.state, "extraction_store", None)
+    if existing is not None:
+        return existing
+    settings = req_app.state.settings
+    if not settings.checkpointer_dsn:
+        return None
+    store = DocumentExtractionStore(settings.checkpointer_dsn)
+    req_app.state.extraction_store = store
+    return store
+
+
 def _sniff_mimetype(file_data: bytes, fallback: str | None) -> str:
     """Resolve a mimetype from the raw bytes, falling back to ``fallback``."""
     if file_data.startswith(b"%PDF-"):
@@ -1105,6 +1126,53 @@ def _sniff_mimetype(file_data: bytes, fallback: str | None) -> str:
     if file_data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     return fallback or "application/octet-stream"
+
+
+async def _persist_upload_extraction_cache(
+    req_app: FastAPI,
+    *,
+    extraction: LabExtraction | IntakeExtraction,
+    file_data: bytes,
+    mimetype: str,
+    doc_type: str,
+    document_id: str,
+    patient_id: str,
+    filename: str,
+) -> None:
+    store = _resolve_upload_extraction_store(req_app)
+    if store is None:
+        return
+    try:
+        bboxes = match_extraction_to_bboxes(
+            extraction,
+            file_data,
+            mimetype=mimetype,
+        )
+    except Exception as exc:  # pragma: no cover - cache best-effort
+        _log.warning("upload cache bbox match failed: %s", exc)
+        bboxes = []
+    content_sha256 = hashlib.sha256(file_data).hexdigest()
+    try:
+        if isinstance(extraction, LabExtraction):
+            await store.save_lab_extraction(
+                extraction=extraction,
+                bboxes=bboxes,
+                document_id=document_id,
+                patient_id=patient_id,
+                filename=filename,
+                content_sha256=content_sha256,
+            )
+        elif isinstance(extraction, IntakeExtraction):
+            await store.save_intake_extraction(
+                extraction=extraction,
+                bboxes=bboxes,
+                document_id=document_id,
+                patient_id=patient_id,
+                filename=filename,
+                content_sha256=content_sha256,
+            )
+    except Exception as exc:  # pragma: no cover - cache best-effort
+        _log.warning("upload cache persistence failed: %s", exc)
 
 
 async def _inject_upload_system_message(
@@ -1258,6 +1326,17 @@ async def upload(
             status_code=502,
             detail=f"extraction_failed: {result.error or 'no extraction'}",
         )
+
+    await _persist_upload_extraction_cache(
+        app,
+        extraction=result.extraction,
+        file_data=file_data,
+        mimetype=mimetype,
+        doc_type=doc_type,
+        document_id=document_id,
+        patient_id=patient_id,
+        filename=filename,
+    )
 
     if conversation_id:
         await _inject_upload_system_message(

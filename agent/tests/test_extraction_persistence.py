@@ -97,6 +97,25 @@ def _lab_payload() -> LabExtraction:
     )
 
 
+def _cached_lab_row(
+    *,
+    patient_id: str = "patient-1",
+    document_id: str = "doc-1",
+    filename: str = "lab.pdf",
+    content_sha256: str = "sha-abc",
+) -> dict[str, Any]:
+    return {
+        "id": 42,
+        "document_id": document_id,
+        "patient_id": patient_id,
+        "doc_type": "lab_pdf",
+        "extraction_json": _lab_payload().model_dump(mode="json"),
+        "bboxes_json": [],
+        "filename": filename,
+        "content_sha256": content_sha256,
+    }
+
+
 # ---------------------------------------------------------------------------
 # IntakePersister
 # ---------------------------------------------------------------------------
@@ -250,6 +269,7 @@ class _FakePool:
 
     def __init__(self, returned_id: int = 42) -> None:
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
+        self.rows: list[dict[str, Any]] = []
         self._returned_id = returned_id
 
     async def open(self) -> None:
@@ -300,7 +320,46 @@ class _FakeCur:
     async def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         self._pool.executed.append((sql, params))
         if "RETURNING id" in sql:
+            self._pool.rows.append(
+                {
+                    "id": self._pool._returned_id,
+                    "document_id": params[0],
+                    "patient_id": params[1],
+                    "doc_type": params[2],
+                    "extraction_json": params[3],
+                    "bboxes_json": params[4],
+                    "filename": params[5],
+                    "content_sha256": params[6],
+                }
+            )
             self._last_row = (self._pool._returned_id,)
+        elif "content_sha256 = %s" in sql:
+            patient_id, filename, content_sha256 = params[:3]
+            self._last_row = _row_tuple(
+                next(
+                    (
+                        row
+                        for row in reversed(self._pool.rows)
+                        if row["patient_id"] == patient_id
+                        and row["filename"] == filename
+                        and row["content_sha256"] == content_sha256
+                    ),
+                    None,
+                )
+            )
+        elif "document_id = %s" in sql:
+            patient_id, document_id = params[:2]
+            self._last_row = _row_tuple(
+                next(
+                    (
+                        row
+                        for row in reversed(self._pool.rows)
+                        if row["patient_id"] == patient_id
+                        and row["document_id"] == document_id
+                    ),
+                    None,
+                )
+            )
 
     async def fetchone(self) -> tuple[int, ...] | None:
         return self._last_row
@@ -320,6 +379,21 @@ def _patch_pool(pool: _FakePool) -> Any:
     return patch("psycopg_pool.AsyncConnectionPool", _factory)
 
 
+def _row_tuple(row: dict[str, Any] | None) -> tuple[Any, ...] | None:
+    if row is None:
+        return None
+    return (
+        row["id"],
+        row["document_id"],
+        row["patient_id"],
+        row["doc_type"],
+        row["extraction_json"],
+        row["bboxes_json"],
+        row["filename"],
+        row["content_sha256"],
+    )
+
+
 async def test_save_lab_extraction_inserts_and_returns_id(fake_pool: _FakePool) -> None:
     pytest.importorskip("psycopg_pool")
     store = DocumentExtractionStore(dsn="postgres://fake")
@@ -329,17 +403,21 @@ async def test_save_lab_extraction_inserts_and_returns_id(fake_pool: _FakePool) 
             bboxes=[],
             document_id="doc-1",
             patient_id="patient-1",
+            filename="lab.pdf",
+            content_sha256="sha-abc",
         )
 
     assert new_id == 42
     assert fake_pool.executed, "expected at least one SQL statement"
     sql, params = fake_pool.executed[-1]
     assert "INSERT INTO document_extractions" in sql
-    # (document_id, patient_id, doc_type, extraction_json, bboxes_json)
+    # (document_id, patient_id, doc_type, extraction_json, bboxes_json, filename, content_sha256)
     assert params[0] == "doc-1"
     assert params[1] == "patient-1"
     assert params[2] == "lab_pdf"
     assert "results" in params[3]  # JSON-encoded extraction
+    assert params[5] == "lab.pdf"
+    assert params[6] == "sha-abc"
 
 
 async def test_save_intake_extraction_uses_intake_doc_type(fake_pool: _FakePool) -> None:
@@ -352,11 +430,42 @@ async def test_save_intake_extraction_uses_intake_doc_type(fake_pool: _FakePool)
             bboxes=[],
             document_id="doc-2",
             patient_id="patient-2",
+            filename="intake.png",
+            content_sha256="sha-intake",
         )
 
     assert new_id == 17
     _sql, params = fake_pool.executed[-1]
     assert params[2] == "intake_form"
+
+
+async def test_store_hash_lookup_is_scoped_by_patient(fake_pool: _FakePool) -> None:
+    pytest.importorskip("psycopg_pool")
+    store = DocumentExtractionStore(dsn="postgres://fake")
+    with _patch_pool(fake_pool):
+        await store.save_lab_extraction(
+            extraction=_lab_payload(),
+            bboxes=[],
+            document_id="doc-1",
+            patient_id="patient-1",
+            filename="lab.pdf",
+            content_sha256="sha-abc",
+        )
+        same_patient = await store.get_latest_by_hash(
+            patient_id="patient-1",
+            filename="lab.pdf",
+            content_sha256="sha-abc",
+        )
+        different_patient = await store.get_latest_by_hash(
+            patient_id="patient-2",
+            filename="lab.pdf",
+            content_sha256="sha-abc",
+        )
+
+    assert same_patient is not None
+    assert same_patient["document_id"] == "doc-1"
+    assert same_patient["extraction_json"]["results"][0]["test_name"] == "LDL"
+    assert different_patient is None
 
 
 # ---------------------------------------------------------------------------
