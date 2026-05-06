@@ -27,6 +27,9 @@ from pydantic import BaseModel, Field
 from .audit import AuditEvent, now_iso, write_audit_event
 from .blocks import (
     block_from_clarify_text,
+    build_citations,
+    extract_cite_attributes,
+    plain_block_from_text,
     refusal_plain_block,
     synthesize_overnight_block,
 )
@@ -612,8 +615,21 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             # turn (e.g., a previous regen-refusal). The supervisor path
             # doesn't synthesize a block itself, so without this update
             # the wire stays pinned to whatever block was set last.
-            from .blocks import plain_block_from_text  # local import to avoid cycle
-            fresh_block = plain_block_from_text(text)
+            #
+            # Issue 027: ratify the cite tags into Citation objects so
+            # guideline / FHIR / document refs survive the trip to the
+            # frontend as visible source chips. ``build_citations`` drops
+            # any ref not in ``fetched`` — but we already proved
+            # ``unresolved`` is empty, so every cited ref makes it.
+            ratified_citations = build_citations(
+                cited_refs=citations,
+                fetched_refs=fetched,
+                observation_categories=state.get("observation_categories") or {},
+                cite_attributes=extract_cite_attributes(text),
+            )
+            fresh_block = plain_block_from_text(
+                text, citations=ratified_citations
+            )
             return Command(
                 goto=END,
                 update={

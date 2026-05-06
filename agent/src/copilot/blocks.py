@@ -46,6 +46,20 @@ _CITE_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 
+# Match the full ``<cite ...>`` tag so we can pull additional attributes
+# (``source``, ``section``, ``page``, ``field``, ``value``) out of the
+# inner attribute string. Issue 027 surfaces ``source`` and ``section``
+# in guideline citation labels.
+_CITE_FULL_TAG_PATTERN = re.compile(
+    r'<cite\s+([^>]*?)\s*/?\s*>',
+    flags=re.IGNORECASE,
+)
+_CITE_INNER_REF_PATTERN = re.compile(
+    r'ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]',
+    flags=re.IGNORECASE,
+)
+_CITE_ATTR_KEYS: tuple[str, ...] = ("source", "section", "page", "field", "value")
+
 
 # Canonical follow-up chip strings, verbatim from the prototype copy. The
 # placeholders are filled in when patient names are available; otherwise we
@@ -79,22 +93,62 @@ def extract_cite_refs(text: str) -> list[str]:
     return seen
 
 
+def extract_cite_attributes(text: str) -> dict[str, dict[str, str]]:
+    """Map cited ref → its trailing ``<cite/>`` attribute dict.
+
+    The wire contract allows ``<cite ref="..." source="..." section="..."/>``
+    style tags for guideline references and ``page="..." field="..."
+    value="..."`` for document references. The verifier-level ``ref``
+    extraction discards these attributes; this helper preserves them so
+    downstream label construction can surface ``source``/``section`` on
+    guideline chips.
+
+    First occurrence wins on duplicate refs, mirroring
+    :func:`extract_cite_refs`'s dedup-preserving-order semantics.
+    """
+
+    attrs_by_ref: dict[str, dict[str, str]] = {}
+    for tag_match in _CITE_FULL_TAG_PATTERN.finditer(text or ""):
+        inner = tag_match.group(1) or ""
+        ref_match = _CITE_INNER_REF_PATTERN.search(inner)
+        if not ref_match:
+            continue
+        ref = ref_match.group(1).strip()
+        if not ref or ref in attrs_by_ref:
+            continue
+        attrs: dict[str, str] = {}
+        for key in _CITE_ATTR_KEYS:
+            attr_pattern = re.compile(
+                rf'\b{key}\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]',
+                flags=re.IGNORECASE,
+            )
+            m = attr_pattern.search(inner)
+            if m:
+                attrs[key] = m.group(1).strip()
+        attrs_by_ref[ref] = attrs
+    return attrs_by_ref
+
+
 def build_citations(
     cited_refs: Iterable[str],
     fetched_refs: Iterable[str],
     *,
     observation_categories: dict[str, str] | None = None,
+    cite_attributes: dict[str, dict[str, str]] | None = None,
 ) -> tuple[Citation, ...]:
     """Build ratified Citation objects for refs in ``cited_refs``.
 
     Refs not present in ``fetched_refs`` are dropped — the verifier handles
     refusal logic for those upstream. ``observation_categories`` is an
     optional ``{fhir_ref: category}`` map so Observation rows route to the
-    correct ``vitals`` vs ``labs`` chart card.
+    correct ``vitals`` vs ``labs`` chart card. ``cite_attributes`` carries
+    the trailing ``<cite/>`` attributes (``source``, ``section``, etc.)
+    so guideline chips can surface their source name and section.
     """
 
     fetched = set(fetched_refs)
     obs_cats = observation_categories or {}
+    attrs_by_ref = cite_attributes or {}
     citations: list[Citation] = []
     seen: set[str] = set()
     for ref in cited_refs:
@@ -104,13 +158,39 @@ def build_citations(
         card: CitationCard = fhir_ref_to_card(
             ref, observation_category=obs_cats.get(ref)
         )
+        attrs = attrs_by_ref.get(ref, {})
         citations.append(
-            Citation(card=card, label=_default_label_for(ref, card), fhir_ref=ref)
+            Citation(
+                card=card,
+                label=_default_label_for(ref, card, attrs),
+                fhir_ref=ref,
+            )
         )
     return tuple(citations)
 
 
-def _default_label_for(fhir_ref: str, card: CitationCard) -> str:
+def _default_label_for(
+    fhir_ref: str,
+    card: CitationCard,
+    attrs: dict[str, str] | None = None,
+) -> str:
+    """Render a chip label for ``fhir_ref``.
+
+    Guideline refs use the ``source`` / ``section`` attributes from the
+    original ``<cite/>`` tag when present so the chip identifies the
+    guideline by name rather than by opaque chunk id.
+    """
+    a = attrs or {}
+    if fhir_ref.startswith("guideline:"):
+        source = (a.get("source") or "").strip()
+        section = (a.get("section") or "").strip()
+        if source and section:
+            return f"{source} · {section}"
+        if source:
+            return source
+        if section:
+            return f"Guideline · {section}"
+        return "Guideline source"
     resource_type = fhir_ref.split("/", 1)[0] if "/" in fhir_ref else fhir_ref
     return f"{resource_type} ({card})"
 

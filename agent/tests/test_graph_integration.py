@@ -448,6 +448,21 @@ async def test_w_evd_synthesizes_after_one_dispatch(monkeypatch: pytest.MonkeyPa
     # Decision is allow (verifier passed).
     assert result.get("decision") == "allow"
 
+    # Issue 027: the verifier-built PlainBlock carries the ratified
+    # guideline citation so the frontend can render a source chip.
+    block = result.get("block") or {}
+    assert block.get("kind") == "plain", f"expected plain block; got {block!r}"
+    citations = block.get("citations") or ()
+    assert len(citations) == 1, (
+        f"expected one ratified guideline citation on the block; got {citations!r}"
+    )
+    citation = citations[0]
+    assert citation["card"] == "guideline"
+    assert citation["fhir_ref"] == "guideline:ada-a1c-2024-1"
+    # Label surfaces source / section pulled from the ``<cite/>`` tag.
+    assert "ADA" in citation["label"]
+    assert "6.5" in citation["label"]
+
 
 # ---------------------------------------------------------------------------
 # Transcript 2 — W-DOC: classifier must see the upload sentinel SystemMessage.
