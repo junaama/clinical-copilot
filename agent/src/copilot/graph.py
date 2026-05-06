@@ -607,7 +607,20 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
 
         if not unresolved:
             _audit(state, settings, decision="allow", final_text=text)
-            return Command(goto=END, update={"decision": "allow"})
+            # Build a fresh PlainBlock from this turn's AIMessage so the
+            # UI doesn't render a stale ``block`` left over from a prior
+            # turn (e.g., a previous regen-refusal). The supervisor path
+            # doesn't synthesize a block itself, so without this update
+            # the wire stays pinned to whatever block was set last.
+            from .blocks import plain_block_from_text  # local import to avoid cycle
+            fresh_block = plain_block_from_text(text)
+            return Command(
+                goto=END,
+                update={
+                    "decision": "allow",
+                    "block": fresh_block.model_dump(by_alias=True),
+                },
+            )
 
         regen = state.get("regen_count") or 0
         if regen >= MAX_REGENS:
