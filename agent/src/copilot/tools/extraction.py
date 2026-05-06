@@ -18,6 +18,8 @@ at construction time so the tools are testable end-to-end with fakes.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -27,6 +29,8 @@ from langchain_core.tools import StructuredTool
 from ..extraction.bbox_matcher import match_extraction_to_bboxes
 from ..extraction.vlm import extract_document as vlm_extract_document
 from .helpers import _enforce_patient_authorization
+
+_log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from langchain_core.language_models.chat_models import BaseChatModel
@@ -78,6 +82,84 @@ def _error_envelope(error: str, latency_ms: int = 0) -> dict[str, Any]:
         "error": error,
         "latency_ms": latency_ms,
     }
+
+
+def _cache_row_envelope(
+    row: dict[str, Any],
+    *,
+    cache_key: str,
+    latency_ms: int,
+) -> dict[str, Any]:
+    document_id = str(row.get("document_id") or "")
+    return {
+        "ok": True,
+        "cache_hit": True,
+        "cache_key": cache_key,
+        "doc_type": row.get("doc_type"),
+        "document_id": document_id,
+        "document_ref": f"DocumentReference/{document_id}",
+        "extraction_id": row.get("id"),
+        "extraction": row.get("extraction_json") or {},
+        "bboxes": row.get("bboxes_json") or [],
+        "intake_summary": None,
+        "pages_processed": None,
+        "latency_ms": latency_ms,
+    }
+
+
+async def _lookup_cache_by_document_id(
+    store: Any,
+    *,
+    patient_id: str,
+    document_id: str,
+) -> dict[str, Any] | None:
+    lookup = getattr(store, "get_latest_by_document_id", None)
+    if lookup is None:
+        return None
+    return await lookup(patient_id=patient_id, document_id=document_id)
+
+
+async def _lookup_cache_by_hash(
+    store: Any,
+    *,
+    patient_id: str,
+    filename: str | None,
+    content_sha256: str | None,
+) -> dict[str, Any] | None:
+    if not filename or not content_sha256:
+        return None
+    lookup = getattr(store, "get_latest_by_hash", None)
+    if lookup is None:
+        return None
+    return await lookup(
+        patient_id=patient_id,
+        filename=filename,
+        content_sha256=content_sha256,
+    )
+
+
+def _emit_cache_observability(
+    *,
+    cache_hit: bool,
+    cache_key: str,
+    doc_type: str,
+) -> None:
+    metadata = {
+        "cache_hit": cache_hit,
+        "cache_key": cache_key,
+        "doc_type": doc_type,
+    }
+    _log.info("extract_document cache lookup", extra=metadata)
+    try:
+        import langfuse  # type: ignore[import-not-found]
+
+        get_client = getattr(langfuse, "get_client", None)
+        client = get_client() if callable(get_client) else None
+        update_span = getattr(client, "update_current_span", None)
+        if callable(update_span):
+            update_span(metadata=metadata)
+    except Exception:  # pragma: no cover - observability must be best-effort
+        _log.debug("extract_document cache span update skipped", exc_info=True)
 
 
 def make_extraction_tools(
@@ -174,6 +256,8 @@ def make_extraction_tools(
         patient_id: str,
         document_id: str,
         doc_type: str,
+        filename: str | None = None,
+        content_sha256: str | None = None,
     ) -> dict[str, Any]:
         """Run the full pipeline: download → VLM → bbox match → persist."""
         started = time.monotonic()
@@ -182,11 +266,60 @@ def make_extraction_tools(
         if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
 
+        row = await _lookup_cache_by_document_id(
+            store, patient_id=patient_id, document_id=document_id
+        )
+        if row is not None:
+            cache_key = f"document_id:{document_id}"
+            _emit_cache_observability(
+                cache_hit=True,
+                cache_key=cache_key,
+                doc_type=doc_type,
+            )
+            return _cache_row_envelope(row, cache_key=cache_key, latency_ms=_ms(started))
+
+        row = await _lookup_cache_by_hash(
+            store,
+            patient_id=patient_id,
+            filename=filename,
+            content_sha256=content_sha256,
+        )
+        if row is not None:
+            cache_key = f"sha256:{content_sha256}"
+            _emit_cache_observability(
+                cache_hit=True,
+                cache_key=cache_key,
+                doc_type=doc_type,
+            )
+            return _cache_row_envelope(row, cache_key=cache_key, latency_ms=_ms(started))
+
         ok, file_data, mimetype, err, _latency = await document_client.download(
             patient_id, document_id
         )
         if not ok or file_data is None:
             return _error_envelope(err or "download_failed", _ms(started))
+
+        resolved_sha256 = hashlib.sha256(file_data).hexdigest()
+        row = await _lookup_cache_by_hash(
+            store,
+            patient_id=patient_id,
+            filename=filename,
+            content_sha256=resolved_sha256,
+        )
+        if row is not None:
+            cache_key = f"sha256:{resolved_sha256}"
+            _emit_cache_observability(
+                cache_hit=True,
+                cache_key=cache_key,
+                doc_type=doc_type,
+            )
+            return _cache_row_envelope(row, cache_key=cache_key, latency_ms=_ms(started))
+
+        _emit_cache_observability(
+            cache_hit=False,
+            cache_key=f"document_id:{document_id}",
+            doc_type=doc_type,
+        )
 
         try:
             result = await vlm_extract_document(
@@ -227,6 +360,8 @@ def make_extraction_tools(
                     bboxes=bboxes,
                     document_id=document_id,
                     patient_id=patient_id,
+                    filename=filename,
+                    content_sha256=resolved_sha256,
                 )
             else:  # intake_form
                 summary = await persister.persist_intake(
@@ -238,6 +373,8 @@ def make_extraction_tools(
                     bboxes=bboxes,
                     document_id=document_id,
                     patient_id=patient_id,
+                    filename=filename,
+                    content_sha256=resolved_sha256,
                 )
         except Exception as exc:
             return _error_envelope(
@@ -246,6 +383,8 @@ def make_extraction_tools(
 
         return {
             "ok": True,
+            "cache_hit": False,
+            "cache_key": f"document_id:{document_id}",
             "doc_type": doc_type,
             "document_id": document_id,
             "document_ref": f"DocumentReference/{document_id}",

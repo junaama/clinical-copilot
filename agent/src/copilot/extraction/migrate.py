@@ -33,8 +33,18 @@ _DDL_STATEMENTS: tuple[str, ...] = (
         doc_type        TEXT NOT NULL,
         extraction_json JSONB NOT NULL,
         bboxes_json     JSONB NOT NULL,
+        filename        TEXT,
+        content_sha256  TEXT,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
     )
+    """,
+    """
+    ALTER TABLE document_extractions
+        ADD COLUMN IF NOT EXISTS filename TEXT
+    """,
+    """
+    ALTER TABLE document_extractions
+        ADD COLUMN IF NOT EXISTS content_sha256 TEXT
     """,
     """
     CREATE INDEX IF NOT EXISTS document_extractions_document_idx
@@ -43,6 +53,10 @@ _DDL_STATEMENTS: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS document_extractions_patient_idx
         ON document_extractions (patient_id)
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS document_extractions_hash_idx
+        ON document_extractions (patient_id, filename, content_sha256)
     """,
 )
 

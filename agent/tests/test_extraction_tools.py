@@ -25,6 +25,7 @@ Dependencies are mocked end-to-end:
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -90,6 +91,8 @@ def _store() -> MagicMock:
     store = MagicMock()
     store.save_lab_extraction = AsyncMock(return_value=42)
     store.save_intake_extraction = AsyncMock(return_value=17)
+    store.get_latest_by_document_id = AsyncMock(return_value=None)
+    store.get_latest_by_hash = AsyncMock(return_value=None)
     return store
 
 
@@ -129,6 +132,24 @@ def _lab_extraction() -> LabExtraction:
         extraction_model="claude-sonnet-4",
         extraction_timestamp="2026-05-06T12:00:00Z",
     )
+
+
+def _cached_lab_row(
+    *,
+    document_id: str = "doc-1",
+    filename: str = "lab.pdf",
+    content_sha256: str = "sha-abc",
+) -> dict[str, Any]:
+    return {
+        "id": 42,
+        "document_id": document_id,
+        "patient_id": "patient-1",
+        "doc_type": "lab_pdf",
+        "extraction_json": _lab_extraction().model_dump(mode="json"),
+        "bboxes_json": [],
+        "filename": filename,
+        "content_sha256": content_sha256,
+    }
 
 
 def _intake_extraction() -> IntakeExtraction:
@@ -360,6 +381,120 @@ async def test_extract_document_lab_persists_to_store_and_returns_envelope() -> 
     assert result["extraction_id"] == 42
     assert result["intake_summary"] is None
     assert result["extraction"]["results"][0]["test_name"] == "LDL"
+
+
+async def test_extract_document_cache_miss_persists_filename_and_content_hash() -> None:
+    file_bytes = b"%PDF-cache-miss-bytes"
+    document_client = _document_client(
+        download=(True, file_bytes, "application/pdf", None, 5)
+    )
+    store = _store()
+    tools = {
+        t.name: t
+        for t in make_extraction_tools(
+            gate=_allow_gate(),
+            document_client=document_client,
+            vlm_model=MagicMock(),
+            store=store,
+            persister=_persister(),
+        )
+    }
+
+    with (
+        patch(
+            "copilot.tools.extraction.vlm_extract_document",
+            _vlm_success(_lab_extraction()),
+        ),
+        patch(
+            "copilot.tools.extraction.match_extraction_to_bboxes",
+            _bboxes_passthrough(),
+        ),
+    ):
+        result = await tools["extract_document"].ainvoke(
+            {
+                "patient_id": "patient-1",
+                "document_id": "doc-1",
+                "doc_type": "lab_pdf",
+                "filename": "lab.pdf",
+            }
+        )
+
+    assert result["ok"] is True
+    assert result["cache_hit"] is False
+    save_kwargs = store.save_lab_extraction.await_args.kwargs
+    assert save_kwargs["filename"] == "lab.pdf"
+    assert save_kwargs["content_sha256"] == hashlib.sha256(file_bytes).hexdigest()
+
+
+async def test_extract_document_returns_cached_document_id_hit_without_download_or_vlm() -> None:
+    store = _store()
+    store.get_latest_by_document_id = AsyncMock(return_value=_cached_lab_row())
+    document_client = _document_client()
+    vlm = _vlm_success(_lab_extraction())
+    tools = {
+        t.name: t
+        for t in make_extraction_tools(
+            gate=_allow_gate(),
+            document_client=document_client,
+            vlm_model=MagicMock(),
+            store=store,
+            persister=_persister(),
+        )
+    }
+
+    with patch("copilot.tools.extraction.vlm_extract_document", vlm):
+        result = await tools["extract_document"].ainvoke(
+            {
+                "patient_id": "patient-1",
+                "document_id": "doc-1",
+                "doc_type": "lab_pdf",
+            }
+        )
+
+    assert result["ok"] is True
+    assert result["cache_hit"] is True
+    assert result["cache_key"] == "document_id:doc-1"
+    assert result["extraction"]["results"][0]["test_name"] == "LDL"
+    document_client.download.assert_not_awaited()
+    vlm.assert_not_awaited()
+    store.save_lab_extraction.assert_not_awaited()
+
+
+async def test_extract_document_returns_cached_hash_hit_without_download_or_vlm() -> None:
+    store = _store()
+    store.get_latest_by_hash = AsyncMock(
+        return_value=_cached_lab_row(document_id="real-doc-7")
+    )
+    document_client = _document_client()
+    vlm = _vlm_success(_lab_extraction())
+    tools = {
+        t.name: t
+        for t in make_extraction_tools(
+            gate=_allow_gate(),
+            document_client=document_client,
+            vlm_model=MagicMock(),
+            store=store,
+            persister=_persister(),
+        )
+    }
+
+    with patch("copilot.tools.extraction.vlm_extract_document", vlm):
+        result = await tools["extract_document"].ainvoke(
+            {
+                "patient_id": "patient-1",
+                "document_id": "legacy-doc",
+                "doc_type": "lab_pdf",
+                "filename": "lab.pdf",
+                "content_sha256": "sha-abc",
+            }
+        )
+
+    assert result["ok"] is True
+    assert result["cache_hit"] is True
+    assert result["cache_key"] == "sha256:sha-abc"
+    assert result["document_id"] == "real-doc-7"
+    document_client.download.assert_not_awaited()
+    vlm.assert_not_awaited()
 
 
 async def test_extract_document_intake_writes_intake_and_logs_summary() -> None:

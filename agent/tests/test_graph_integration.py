@@ -21,15 +21,20 @@ file that fails without its fix and passes with it. See the issue brief at
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from copilot.care_team import AuthDecision, CareTeamGate
 from copilot.config import Settings
+from copilot.extraction.schemas import LabExtraction, LabResult, SourceCitation
 from copilot.supervisor.graph import MAX_SUPERVISOR_ITERATIONS
 from copilot.supervisor.schemas import SupervisorAction, SupervisorDecision
+from copilot.tools.extraction import make_extraction_tools
 from copilot.tools.helpers import get_active_smart_token, get_active_user_id
 
 # ---------------------------------------------------------------------------
@@ -77,6 +82,56 @@ class _FakeAgent:
             )
         )
         return {"messages": list(self._script.messages)}
+
+
+class _ToolInvokingAgent:
+    """Worker fake that invokes the real ``extract_document`` StructuredTool."""
+
+    def __init__(self, tools: list[Any], *, document_id: str) -> None:
+        self._tools = {tool.name: tool for tool in tools}
+        self._document_id = document_id
+        self.invocations = 0
+
+    async def ainvoke(self, _inputs: dict[str, Any]) -> dict[str, Any]:
+        self.invocations += 1
+        result = await self._tools["extract_document"].ainvoke(
+            {
+                "patient_id": "Patient/fixture-1",
+                "document_id": self._document_id,
+                "doc_type": "lab_pdf",
+            }
+        )
+        tool_call_id = "cache-call-1"
+        return {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "extract_document",
+                            "args": {
+                                "patient_id": "Patient/fixture-1",
+                                "document_id": self._document_id,
+                                "doc_type": "lab_pdf",
+                            },
+                            "id": tool_call_id,
+                        }
+                    ],
+                ),
+                ToolMessage(
+                    content=json.dumps(result),
+                    tool_call_id=tool_call_id,
+                    name="extract_document",
+                ),
+                AIMessage(
+                    content=(
+                        "Cached LDL is 180 mg/dL "
+                        f'<cite ref="DocumentReference/{self._document_id}" '
+                        'page="1" field="results[0].value" value="180"/>.'
+                    )
+                ),
+            ]
+        }
 
 
 class _FakeStructured:
@@ -253,6 +308,40 @@ def _citation_refs(text: str) -> list[str]:
     from copilot.graph import _extract_citations
 
     return _extract_citations(text)
+
+
+def _cached_lab_row(document_id: str) -> dict[str, Any]:
+    citation = SourceCitation(
+        source_type="lab_pdf",
+        source_id=f"DocumentReference/{document_id}",
+    )
+    extraction = LabExtraction(
+        results=[
+            LabResult(
+                test_name="LDL",
+                value="180",
+                unit="mg/dL",
+                reference_range="<100",
+                collection_date="2026-04-15",
+                abnormal_flag="high",
+                confidence="high",
+                source_citation=citation,
+            )
+        ],
+        source_document_id=f"DocumentReference/{document_id}",
+        extraction_model="claude-sonnet-4",
+        extraction_timestamp="2026-05-06T12:00:00Z",
+    )
+    return {
+        "id": 42,
+        "document_id": document_id,
+        "patient_id": "Patient/fixture-1",
+        "doc_type": "lab_pdf",
+        "extraction_json": extraction.model_dump(mode="json"),
+        "bboxes_json": [],
+        "filename": "p01-chen-lipid-panel.pdf",
+        "content_sha256": "sha-cached",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +572,109 @@ async def test_w_doc_routes_when_upload_sentinel_present(
     cited = set(_citation_refs(final.content))
     assert cited <= fetched, f"unresolved citations: {cited - fetched}"
     assert "DocumentReference/doc-42" in cited
+    assert result.get("decision") == "allow"
+
+
+async def test_w_doc_upload_turn_uses_cached_extraction_without_vlm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from copilot import graph as graph_module
+    from copilot.graph import build_graph
+    from copilot.supervisor import workers as workers_module
+
+    document_id = "doc-cache-42"
+    upload_sentinel = SystemMessage(
+        content=(
+            '[system] Document uploaded: lab_pdf "p01-chen-lipid-panel.pdf" '
+            f"(document_id: DocumentReference/{document_id}) for Patient/fixture-1"
+        )
+    )
+    fake_model = _FakeChatModel(
+        workflow_decisions=[_wd("W-DOC", 0.98)],
+        supervisor_decisions=[
+            SupervisorDecision(
+                action=SupervisorAction.EXTRACT,
+                reasoning="Uploaded document should be extracted.",
+            ),
+        ],
+    )
+    monkeypatch.setattr(graph_module, "build_chat_model", lambda _settings: fake_model)
+    monkeypatch.setattr(
+        graph_module, "synthesize_overnight_block", _stub_synthesize_overnight_block
+    )
+    monkeypatch.setattr(
+        graph_module,
+        "create_agent",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("W-DOC cache test must not invoke agent_node")
+        ),
+    )
+
+    gate = MagicMock(spec=CareTeamGate)
+    gate.assert_authorized = AsyncMock(return_value=AuthDecision.ALLOWED)
+    document_client = MagicMock()
+    document_client.upload = AsyncMock()
+    document_client.list = AsyncMock()
+    document_client.download = AsyncMock()
+    store = MagicMock()
+    store.get_latest_by_document_id = AsyncMock(
+        return_value=_cached_lab_row(document_id)
+    )
+    store.get_latest_by_hash = AsyncMock(return_value=None)
+    store.save_lab_extraction = AsyncMock()
+    store.save_intake_extraction = AsyncMock()
+    persister = MagicMock()
+    persister.persist_intake = AsyncMock()
+
+    extraction_tools = make_extraction_tools(
+        gate=gate,
+        document_client=document_client,
+        vlm_model=MagicMock(),
+        store=store,
+        persister=persister,
+    )
+    monkeypatch.setattr(graph_module, "make_tools", lambda _settings: extraction_tools)
+
+    tool_agent: _ToolInvokingAgent | None = None
+
+    def _create_worker_agent(*, model: Any, tools: list[Any], system_prompt: str) -> Any:
+        nonlocal tool_agent
+        from copilot.supervisor.workers import INTAKE_EXTRACTOR_SYSTEM
+
+        if system_prompt != INTAKE_EXTRACTOR_SYSTEM:
+            return _FakeAgent(_FakeAgentScript(messages=[AIMessage(content="unused")]))
+        tool_agent = _ToolInvokingAgent(tools, document_id=document_id)
+        return tool_agent
+
+    monkeypatch.setattr(workers_module, "create_agent", _create_worker_agent)
+
+    vlm = AsyncMock()
+    with patch("copilot.tools.extraction.vlm_extract_document", vlm):
+        graph = build_graph(_settings())
+        result = await graph.ainvoke(
+            {
+                "messages": [
+                    upload_sentinel,
+                    HumanMessage(content="walk me through what's notable"),
+                ],
+                "conversation_id": "conv-doc-cache-1",
+                "user_id": "dr_smith",
+                "smart_access_token": "stub-token",
+                "patient_id": "Patient/fixture-1",
+            },
+            _config("conv-doc-cache-1"),
+        )
+
+    assert tool_agent is not None
+    assert tool_agent.invocations == 1
+    document_client.download.assert_not_awaited()
+    vlm.assert_not_awaited()
+    store.save_lab_extraction.assert_not_awaited()
+
+    final = _final_message(result)
+    assert isinstance(final, AIMessage)
+    assert f"DocumentReference/{document_id}" in (result.get("fetched_refs") or [])
+    assert f"DocumentReference/{document_id}" in set(_citation_refs(final.content))
     assert result.get("decision") == "allow"
 
 
