@@ -145,7 +145,7 @@ async def run_case(
         state_fetched = set(result.get("fetched_refs") or [])
         state_workflow = result.get("workflow_id")
         state_confidence = result.get("classifier_confidence")
-    except Exception as exc:  # noqa: BLE001 — eval should never bring down the runner
+    except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
         _log.exception("case %s raised", case.id)
         result = {}

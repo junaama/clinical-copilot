@@ -57,14 +57,14 @@ class LangfuseClient:
                 _log.info("langfuse client initialized; experiment=%s", self.experiment_name)
             except ImportError:
                 _log.warning("langfuse package not installed; install via 'uv sync'")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 _log.warning("langfuse init failed; continuing without push: %s", exc)
 
     @property
     def enabled(self) -> bool:
         return self._sdk is not None
 
-    def record_case(self, result: "CaseResult") -> str | None:
+    def record_case(self, result: CaseResult) -> str | None:
         """Push a case's trace + scores. Returns the trace id, or ``None``.
 
         Uses the langfuse 4.x API surface: ``start_as_current_observation``
@@ -114,7 +114,7 @@ class LangfuseClient:
 
             self._sdk.flush()
             return trace_id
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _log.warning("langfuse push failed for case %s: %s", result.case.id, exc)
             return None
 
@@ -155,7 +155,7 @@ class LangfuseClient:
                         "judge": "faithfulness",
                     }
                 )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _log.warning("langfuse faithfulness citation span failed: %s", exc)
 
     def record_faithfulness_uncited_sweep(
@@ -201,11 +201,11 @@ class LangfuseClient:
         if self._sdk is not None:
             try:
                 self._sdk.flush()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 _log.exception("langfuse flush failed")
 
 
-def _flatten_scores(result: "CaseResult") -> list[tuple[str, float, str | None]]:
+def _flatten_scores(result: CaseResult) -> list[tuple[str, float, str | None]]:
     """Convert the runner's nested scores dict into a flat list for Langfuse."""
     out: list[tuple[str, float, str | None]] = []
 

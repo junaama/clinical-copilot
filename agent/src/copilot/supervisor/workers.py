@@ -32,6 +32,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from ..audit import now_iso
+from ..tools import set_active_registry, set_active_smart_token, set_active_user_id
 from .schemas import HandoffEvent
 
 _log = logging.getLogger(__name__)
@@ -188,6 +189,14 @@ async def _run_worker(
     state reducers, gate_decisions is overwritten because it tracks the
     most recent attempt only.
     """
+    # Bind tool-layer contextvars from state. Without this the
+    # CareTeam gate (user_id) and FHIR/Document clients (smart token)
+    # see empty values and short-circuit with "no_active_user" /
+    # "no_token". ``agent_node`` does the same at graph.py:471-473.
+    set_active_smart_token(state.get("smart_access_token") or None)
+    set_active_user_id(state.get("user_id") or None)
+    set_active_registry(dict(state.get("resolved_patients") or {}))
+
     result = await agent.ainvoke({"messages": state.get("messages", [])})
     sub_messages = result.get("messages", [])
 
@@ -206,7 +215,29 @@ async def _run_worker(
                     }
                 )
 
-    final = sub_messages[-1] if sub_messages else AIMessage(content="")
+    # Verifier requires the last message to be an AIMessage. If the
+    # sub-agent stopped on a ToolMessage (recursion limit or the LLM
+    # didn't emit a final response), fall back to the most-recent
+    # AIMessage in the run, or synthesize a minimal one summarizing
+    # what the worker fetched. Without this guard the verifier's
+    # ``not isinstance(last, AIMessage)`` branch fires and the user
+    # sees "I couldn't produce a verifiable response."
+    last_ai_message: AIMessage | None = next(
+        (m for m in reversed(sub_messages) if isinstance(m, AIMessage) and m.content),
+        None,
+    )
+    if last_ai_message is not None:
+        final = last_ai_message
+    elif sub_messages:
+        ref_summary = ", ".join(_extract_refs_for_summary(sub_messages)) or "no refs"
+        final = AIMessage(
+            content=(
+                f"{from_node} retrieved {len(sub_messages)} sub-message(s) "
+                f"but did not emit a synthesis. Refs collected: {ref_summary}."
+            )
+        )
+    else:
+        final = AIMessage(content=f"{from_node} produced no output.")
 
     # Worker → supervisor handoff event so the audit log shows the round
     # trip even when the supervisor would re-dispatch.
@@ -251,6 +282,28 @@ import re  # noqa: E402
 _FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
 _DOCUMENT_REF_PATTERN = re.compile(r'"document_ref"\s*:\s*"([^"]+)"')
 _GUIDELINE_REF_PATTERN = re.compile(r'"guideline_ref"\s*:\s*"([^"]+)"')
+
+
+def _extract_refs_for_summary(messages: list) -> list[str]:
+    """Best-effort: collect refs across every ToolMessage in ``messages``.
+
+    Used by the no-AIMessage fallback in ``_run_worker`` so the
+    placeholder synthesis can name what was retrieved instead of
+    returning an opaque empty string.
+    """
+    refs: list[str] = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            refs.extend(_extract_refs(msg))
+    # Dedup preserving order.
+    seen: set[str] = set()
+    out: list[str] = []
+    for ref in refs:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        out.append(ref)
+    return out
 
 
 def _extract_refs(msg: ToolMessage) -> list[str]:

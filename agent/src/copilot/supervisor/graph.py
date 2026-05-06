@@ -102,12 +102,30 @@ def build_supervisor_node(chat_model: BaseChatModel):
         )
 
         iterations = int(state.get("supervisor_iterations") or 0)
+        # Hard guard against re-dispatch loops: once a worker has produced
+        # tool results or fetched refs, the supervisor's job is done —
+        # synthesize. The LLM-based decision sees only the original user
+        # message and would re-dispatch the same worker indefinitely
+        # otherwise (Langfuse showed cap-hit traces).
+        prior_tool_results = state.get("tool_results") or []
+        prior_fetched_refs = state.get("fetched_refs") or []
+        worker_already_ran = bool(prior_tool_results) or bool(prior_fetched_refs)
+
         if iterations >= MAX_SUPERVISOR_ITERATIONS:
             decision = SupervisorDecision(
                 action=SupervisorAction.SYNTHESIZE,
                 reasoning=(
                     "Supervisor iteration cap reached; forcing synthesis to "
                     "avoid runaway dispatch."
+                ),
+            )
+        elif iterations >= 1 and worker_already_ran:
+            decision = SupervisorDecision(
+                action=SupervisorAction.SYNTHESIZE,
+                reasoning=(
+                    f"Worker dispatched and produced "
+                    f"{len(prior_tool_results)} tool result(s) / "
+                    f"{len(prior_fetched_refs)} ref(s); synthesizing."
                 ),
             )
         else:
