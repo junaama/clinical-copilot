@@ -48,10 +48,15 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 COPY agent/pyproject.toml agent/uv.lock ./
-RUN uv sync --locked --no-install-project --no-dev --extra postgres
+# Install both extras: ``postgres`` for the LangGraph checkpointer +
+# psycopg pool, ``retrieval`` for pgvector and Cohere (W2 hybrid evidence
+# retrieval, issues 007/008/012). Without ``retrieval`` the deployed
+# image imports cohere/pgvector lazily and fails the first guideline
+# query at runtime.
+RUN uv sync --locked --no-install-project --no-dev --extra postgres --extra retrieval
 
 COPY agent/src ./src
-RUN uv sync --locked --no-dev --no-editable --extra postgres
+RUN uv sync --locked --no-dev --no-editable --extra postgres --extra retrieval
 
 # ---------- runtime ----------
 FROM python:${PYTHON_VERSION}-slim AS runtime
