@@ -338,24 +338,35 @@ function StandaloneApp(): JSX.Element {
               navigateToRoot();
             }}
             onCite={() => {}}
+            composerSlot={
+              <FileUploadWidget
+                patientId={focusPatient?.id ?? ''}
+                patientName={
+                  focusPatient
+                    ? focusPatient.name || `Patient/${focusPatient.id}`
+                    : ''
+                }
+                conversationId={conversationId}
+                onUploaded={handleUploaded}
+              />
+            }
           />
-          <div className="standalone-aside">
-            <FileUploadWidget
-              patientId={focusPatient?.id ?? ''}
-              patientName={
-                focusPatient
-                  ? focusPatient.name || `Patient/${focusPatient.id}`
-                  : ''
-              }
-              conversationId={conversationId}
-              onUploaded={handleUploaded}
-            />
+        </div>
+        <aside className="standalone-aside" aria-label="extraction results">
+          <header className="standalone-aside__header">
+            <h2 className="standalone-aside__title">Extracted</h2>
+          </header>
+          {extraction ? (
             <ExtractionResultsPanel
               extraction={extraction}
               onDismiss={() => setExtraction(null)}
             />
-          </div>
-        </div>
+          ) : (
+            <p className="standalone-aside__empty">
+              Upload a lab PDF or intake form to see extracted values here.
+            </p>
+          )}
+        </aside>
       </div>
     </AppShell>
   );
