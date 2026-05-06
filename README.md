@@ -5,6 +5,80 @@ Agent that sits inside the OpenEMR chart and answers the two questions a hospita
 
 > [Live demo](https://copilot-agent-production-3776.up.railway.app/) — sign in with `dr_smith` / `dr_smith_pass` (a non-admin clinician seeded with a CareTeam-bounded panel; see [`agent/scripts/seed/seed_careteam.py`](agent/scripts/seed/seed_careteam.py)).
 
+═══════════════════════════════════════════════════════════════════════════════
+## ▼ WEEK 2 — MULTIMODAL EVIDENCE AGENT (current state) ▼
+═══════════════════════════════════════════════════════════════════════════════
+
+Week 2 extends the Week 1 agent with **document ingestion + VLM extraction**, **hybrid evidence retrieval over a clinical guideline corpus**, and a **supervisor + workers multi-agent topology**. Full design in [`W2_ARCHITECTURE.md`](W2_ARCHITECTURE.md); requirements in [`issues/prd.md`](issues/prd.md). The Week 1 path (W-1 through W-11) is preserved unchanged below the delimiter.
+
+### What's new
+
+| Capability | What it does | Where |
+|---|---|---|
+| **Document ingestion** | Upload (or surface existing) lab PDFs and intake forms from OpenEMR's native document store, extract structured facts via Claude Sonnet 4 vision with strict Pydantic schemas, persist intake data via Standard API writes, and compute per-field bounding boxes from PyMuPDF OCR spans (no VLM-hallucinated coordinates). | [`agent/src/copilot/extraction/`](agent/src/copilot/extraction/) |
+| **Hybrid evidence retrieval** | ~150-page guideline corpus (JNC 8, ADA, KDIGO, IDSA, AHA/ACC) indexed in `pgvector` next to the LangGraph checkpointer. Single-query hybrid search (`tsvector` BM25 + cosine via RRF), reranked with Cohere `rerank-english-v3.0`. No new infra services. | [`agent/src/copilot/retrieval/`](agent/src/copilot/retrieval/) |
+| **Supervisor + workers** | Classifier routes structured-data intents to the W1 `agent_node` (preserved) and document/evidence intents to a new `supervisor_node` that dispatches an `intake_extractor` and an `evidence_retriever` worker. Every routing decision is logged as a `HandoffEvent`. | [`agent/src/copilot/supervisor/`](agent/src/copilot/supervisor/) |
+| **Extended citation contract** | `<cite ref="DocumentReference/{id}" page="{n}" field="{path}" value="{literal}"/>` for extracted facts and `<cite ref="guideline:{chunk_id}" source="{name}" section="{section}"/>` for evidence. Verifier validates every ref against this turn's `fetched_refs`. | [`agent/src/copilot/graph.py`](agent/src/copilot/graph.py) |
+| **Dual write client** | `FhirClient.update_patient` for the one FHIR write that works on this build, plus `StandardApiClient` for document upload, allergy, medication, medical_problem. CareTeam gate enforced before any write. | [`agent/src/copilot/standard_api_client.py`](agent/src/copilot/standard_api_client.py) |
+| **W2 eval gate** | 50 fixture-based cases across 8 categories, scored on 5 boolean rubrics, gated by [`.eval_baseline.json`](.eval_baseline.json) with a >5% per-category regression threshold. Fires from a pre-push hook only when `agent/src/`, `agent/evals/`, or `data/guidelines/` change. Deterministic, no live VLM, sub-second wall time. | [`agent/src/copilot/eval/w2_*`](agent/src/copilot/eval/) |
+
+### Week 2 eval results — 2026-05-06
+
+```
+$ cd agent && uv run python -m copilot.eval.w2_baseline_cli check
+
+W2 eval gate: PASSED (5 categories OK)
+
+  [PASS] schema_valid:         100.0% (baseline 100.0%; ≥ floor 95%)
+  [PASS] citation_present:     100.0% (baseline 100.0%; ≥ floor 90%)
+  [PASS] factually_consistent: 100.0% (baseline 100.0%; ≥ floor 90%)
+  [PASS] safe_refusal:         100.0% (baseline 100.0%; ≥ floor 95%)
+  [PASS] no_phi_in_logs:       100.0% (baseline 100.0%; ≥ floor 100%)
+```
+
+**50/50 cases pass their declared verdicts. Gate runs in <1s wall time** (PRD budget: <30s).
+
+| Category | Cases | Pass | Focus |
+|---|---:|---:|---|
+| Lab PDF extraction | 10 | 10 | Schema validation, abnormal flags, multi-page, low-confidence flagging, fabricated-value detection |
+| Intake form extraction | 8 | 8 | Demographics + allergies + medications + medical problems, missing fields, schema-invalid catches |
+| Evidence retrieval | 8 | 8 | Correct guideline cited (JNC 8 / ADA / KDIGO), uncited-claim detection, no-results refusal |
+| Citation contract | 6 | 6 | DocumentReference + guideline + FHIR refs, value-attr mismatch, missing `<cite>` tag |
+| Supervisor routing | 6 | 6 | doc / evidence / W1-preserved / clarify branches, misroute caught |
+| Safe refusal | 6 | 6 | Off-panel patient, unknown patient, no-evidence refusal, unsafe dose, missing refusal phrasing |
+| Regression (W1) | 3 | 3 | W1 brief, panel triage, clarify — verifies Week 1 paths are unchanged |
+| No-PHI-in-logs | 3 | 3 | Trace scanned for known fixture identifiers (DOB, SSN), zero leaks |
+| **Total** | **50** | **50** | — |
+
+The gate is sensitive enough to catch a single-case regression in any boolean category — a 1/10 lab-extraction failure is a 10% drop, which trips the >5% per-category threshold. The grader's "introduce a regression and confirm CI fails" test is wired against this same gate.
+
+The `make eval-full` tier (live VLM on fixture documents) remains available for catching extraction drift; it is not run from the pre-push hook.
+
+### How to run
+
+```bash
+# Week 2 prerequisites (in addition to Week 1 setup)
+export COHERE_API_KEY=...           # rerank + embeddings
+# DATABASE_URL already set from Week 1 (LangGraph checkpointer + guideline_chunks)
+
+# One-time: enable pgvector, create guideline_chunks table, index the corpus
+cd agent
+uv run python -m copilot.retrieval.migrate
+uv run python -m copilot.retrieval.indexer --corpus-dir ../data/guidelines
+
+# W2 fixture eval gate (pre-push hook target)
+uv run python -m copilot.eval.w2_baseline_cli check
+
+# Live agent (W1 + W2 capabilities)
+uv run uvicorn copilot.server:app --host 0.0.0.0 --port 8000
+```
+
+═══════════════════════════════════════════════════════════════════════════════
+## ▼ WEEK 1 — STATUS QUO (preserved, unchanged) ▼
+═══════════════════════════════════════════════════════════════════════════════
+
+Everything below this line documents the Week 1 baseline as shipped. The Week 1 agent path, eval tiers, deployments, and cost model are unchanged in Week 2.
+
 ---
 
 ## User journey
