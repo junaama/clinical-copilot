@@ -145,6 +145,89 @@ def _extract_citations(text: str) -> list[str]:
     return seen
 
 
+# Issue 028: heuristics for fail-closed verification of guideline / evidence
+# answers. The W-EVD path runs the evidence_retriever worker, which fetches
+# guideline chunks and synthesizes a clinical recommendation. If the
+# synthesizer comes back asserting a clinical claim without a ratified
+# guideline citation we must refuse rather than let uncited medical advice
+# reach the user.
+#
+# These patterns intentionally mirror the eval rubric in
+# ``copilot.eval.w2_evaluators`` so the verifier and offline grading agree
+# on what counts as a clinical claim.
+_CLINICAL_CLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Numeric value with a clinical unit (vitals, labs, dose, target).
+    re.compile(
+        r"\b\d+(?:\.\d+)?\s*"
+        r"(?:mg|mcg|mmol|mEq|mL|g|kg|bpm|mmHg|%|/dL|/L|/min)\b",
+        re.IGNORECASE,
+    ),
+    # Lab name immediately followed by a numeric threshold.
+    re.compile(
+        r"\b(?:A1C|HbA1c|LDL|HDL|cholesterol|creatinine|potassium|sodium|"
+        r"glucose|hemoglobin|WBC|platelets|BUN|GFR|TSH|INR)\b[^.?!]{0,40}\d",
+        re.IGNORECASE,
+    ),
+    # Recommendation verb (recommends / should / target / first-line).
+    re.compile(
+        r"\b(?:recommend(?:s|ed|ation)?|should\s+(?:be|use|take|consider|"
+        r"start|stop)|target(?:ing|ed)?|first[-\s]?line|prescrib(?:e|ed|"
+        r"ing)|initiate(?:d|s)?|titrat(?:e|ed|ing))\b",
+        re.IGNORECASE,
+    ),
+)
+
+# Phrases that mark a clean evidence-gap admission. When the synthesizer
+# explains "no relevant evidence", the absence of guideline citations is
+# correct behavior, not a failure.
+_EVIDENCE_GAP_PHRASES: tuple[str, ...] = (
+    "no relevant guideline",
+    "no relevant evidence",
+    "could not find",
+    "couldn't find",
+    "couldn't ground",
+    "cannot ground",
+    "no citeable evidence",
+    "no guideline evidence",
+    "i don't see relevant evidence",
+    "i can't find evidence",
+    "no matching guideline",
+    "without grounding",
+    "evidence gap",
+)
+
+
+def _is_evidence_path(state: CoPilotState) -> bool:
+    """True if this turn ran the evidence-retriever worker.
+
+    The classifier emits ``W-EVD`` for guideline questions and the
+    supervisor sets ``supervisor_action == retrieve_evidence`` when it
+    dispatches the worker. Either signal is enough — they should agree
+    on the happy path but the audit row is set from supervisor_action so
+    we accept that as the authoritative trace.
+    """
+    if (state.get("workflow_id") or "") == "W-EVD":
+        return True
+    if (state.get("supervisor_action") or "") == "retrieve_evidence":
+        return True
+    return False
+
+
+def _has_guideline_citation(citations: list[str]) -> bool:
+    return any(c.startswith("guideline:") for c in citations)
+
+
+def _has_clinical_claim(text: str) -> bool:
+    if not text:
+        return False
+    return any(p.search(text) for p in _CLINICAL_CLAIM_PATTERNS)
+
+
+def _has_evidence_gap_language(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(phrase in lowered for phrase in _EVIDENCE_GAP_PHRASES)
+
+
 def _refs_from_tool_message(msg: ToolMessage) -> set[str]:
     content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
     return set(_FHIR_REF_PATTERN.findall(content))
@@ -607,6 +690,41 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         citations = _extract_citations(text)
         fetched = set(state.get("fetched_refs") or [])
         unresolved = [c for c in citations if c not in fetched]
+
+        # Issue 028: fail-closed for W-EVD answers that assert clinical
+        # recommendations without a ratified guideline citation. We check
+        # this before the "all resolved" branch so an answer that cites
+        # only chart refs (FHIR Observation, etc.) on a guideline-intent
+        # turn still gets rejected for the missing guideline citation.
+        if (
+            _is_evidence_path(state)
+            and not _has_guideline_citation(citations)
+            and _has_clinical_claim(text)
+            and not _has_evidence_gap_language(text)
+        ):
+            refusal_text = (
+                "I couldn't ground this recommendation against the clinical "
+                "guideline corpus available in this turn. No citeable "
+                "guideline evidence was retrieved, so I won't offer an "
+                "uncited recommendation. Please rephrase the question or "
+                "consult the guideline directly."
+            )
+            refusal = AIMessage(content=refusal_text)
+            refusal_block = refusal_plain_block(refusal_text)
+            _audit(
+                state,
+                settings,
+                decision="refused_unsourced",
+                escalation_reason="uncited_guideline_claim",
+            )
+            return Command(
+                goto=END,
+                update={
+                    "messages": [refusal],
+                    "decision": "refused_unsourced",
+                    "block": refusal_block.model_dump(by_alias=True),
+                },
+            )
 
         if not unresolved:
             _audit(state, settings, decision="allow", final_text=text)
