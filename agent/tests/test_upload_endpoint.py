@@ -443,3 +443,112 @@ def test_upload_skips_system_message_when_no_conversation_id(
     assert response.status_code == 200
     msgs: list[SystemMessage] = upload_client.system_messages  # type: ignore[attr-defined]
     assert msgs == []
+
+
+# ---------------------------------------------------------------------------
+# Issue 024: document-type mismatch guard
+# ---------------------------------------------------------------------------
+
+
+def _read_fixture(rel: str) -> bytes:
+    from pathlib import Path
+
+    fixtures = Path(__file__).resolve().parents[2] / "example-documents"
+    return (fixtures / rel).read_bytes()
+
+
+def test_upload_returns_409_when_intake_pdf_uploaded_as_lab(
+    upload_client: TestClient,
+) -> None:
+    """Selecting lab_pdf for an intake-shaped PDF surfaces a structured mismatch."""
+
+    intake_bytes = _read_fixture("intake-forms/p02-whitaker-intake.pdf")
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": ("p02-whitaker-intake.pdf", io.BytesIO(intake_bytes), "application/pdf"),
+        },
+        data={
+            "patient_id": "p-eduardo",
+            "doc_type": "lab_pdf",
+            "conversation_id": "conv-1",
+        },
+    )
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "doc_type_mismatch"
+    assert detail["requested_type"] == "lab_pdf"
+    assert detail["detected_type"] == "intake_form"
+    assert detail["confidence"] == "high"
+    assert isinstance(detail["evidence"], list)
+    # No upload to OpenEMR happened — the mismatch fired first.
+    assert upload_client.stub_doc.uploads == []  # type: ignore[attr-defined]
+
+
+def test_upload_returns_409_when_lab_pdf_uploaded_as_intake(
+    upload_client: TestClient,
+) -> None:
+    lab_bytes = _read_fixture("lab-results/p01-chen-lipid-panel.pdf")
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": ("p01-chen-lipid-panel.pdf", io.BytesIO(lab_bytes), "application/pdf"),
+        },
+        data={"patient_id": "p-1", "doc_type": "intake_form"},
+    )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["detected_type"] == "lab_pdf"
+    assert detail["requested_type"] == "intake_form"
+
+
+def test_upload_proceeds_when_confirm_doc_type_is_set(
+    upload_client: TestClient,
+) -> None:
+    """confirm_doc_type=true overrides the guard and continues with the chosen type."""
+
+    intake_bytes = _read_fixture("intake-forms/p02-whitaker-intake.pdf")
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": ("p02-whitaker-intake.pdf", io.BytesIO(intake_bytes), "application/pdf"),
+        },
+        data={
+            "patient_id": "p-1",
+            "doc_type": "lab_pdf",
+            "confirm_doc_type": "true",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["doc_type"] == "lab_pdf"
+
+
+def test_upload_happy_path_lab_lab_does_not_trigger_guard(
+    upload_client: TestClient,
+) -> None:
+    """A lab-shaped file selected as lab_pdf uploads normally — no guard prompt."""
+
+    lab_bytes = _read_fixture("lab-results/p01-chen-lipid-panel.pdf")
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": ("p01-chen-lipid-panel.pdf", io.BytesIO(lab_bytes), "application/pdf"),
+        },
+        data={"patient_id": "p-1", "doc_type": "lab_pdf"},
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_upload_happy_path_intake_intake_does_not_trigger_guard(
+    upload_client: TestClient,
+) -> None:
+    intake_bytes = _read_fixture("intake-forms/p02-whitaker-intake.pdf")
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": ("p02-whitaker-intake.pdf", io.BytesIO(intake_bytes), "application/pdf"),
+        },
+        data={"patient_id": "p-1", "doc_type": "intake_form"},
+    )
+    assert response.status_code == 200, response.text

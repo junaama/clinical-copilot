@@ -81,7 +81,7 @@ describe('uploadDocument', () => {
     });
 
     expect(result.ok).toBe(true);
-    if (result.ok) {
+    if (result.ok === true) {
       expect(result.response.document_id).toBe('doc-123');
       expect(result.response.doc_type).toBe('lab_pdf');
     }
@@ -136,6 +136,92 @@ describe('uploadDocument', () => {
     if (!result.ok) {
       expect(result.status).toBe(0);
       expect(result.detail).toBe('fetch failed');
+    }
+  });
+
+  it('returns ok:"mismatch" with structured detail on HTTP 409', async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: async () =>
+        JSON.stringify({
+          detail: {
+            code: 'doc_type_mismatch',
+            message: 'This file looks like an intake_form.',
+            requested_type: 'lab_pdf',
+            detected_type: 'intake_form',
+            confidence: 'high',
+            evidence: ["text contains 'patient demographics'"],
+          },
+        }),
+    } as Response);
+
+    const result = await uploadDocument({
+      file: makeFile({}),
+      patientId: 'pat-1',
+      docType: 'lab_pdf',
+      fetcher: fetcher as unknown as typeof fetch,
+      baseUrl: 'http://test',
+    });
+
+    expect(result.ok).toBe('mismatch');
+    if (result.ok === 'mismatch') {
+      expect(result.status).toBe(409);
+      expect(result.mismatch.requestedType).toBe('lab_pdf');
+      expect(result.mismatch.detectedType).toBe('intake_form');
+      expect(result.mismatch.confidence).toBe('high');
+      expect(result.mismatch.evidence).toEqual([
+        "text contains 'patient demographics'",
+      ]);
+    }
+  });
+
+  it('passes confirm_doc_type=true when confirmDocType option is set', async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          document_id: 'doc-9',
+          doc_type: 'lab_pdf',
+          filename: 'x.pdf',
+          lab: null,
+          intake: null,
+        }),
+    } as Response);
+
+    await uploadDocument({
+      file: makeFile({}),
+      patientId: 'pat-1',
+      docType: 'lab_pdf',
+      confirmDocType: true,
+      fetcher: fetcher as unknown as typeof fetch,
+      baseUrl: 'http://test',
+    });
+
+    const [, init] = fetcher.mock.calls[0] as [string, RequestInit];
+    const form = init.body as FormData;
+    expect(form.get('confirm_doc_type')).toBe('true');
+  });
+
+  it('falls back to ok:false on a 409 with non-mismatch detail', async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      text: async () => JSON.stringify({ detail: 'something else' }),
+    } as Response);
+
+    const result = await uploadDocument({
+      file: makeFile({}),
+      patientId: 'pat-1',
+      docType: 'lab_pdf',
+      fetcher: fetcher as unknown as typeof fetch,
+      baseUrl: 'http://test',
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok === false) {
+      expect(result.status).toBe(409);
+      expect(result.detail).toBe('something else');
     }
   });
 

@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { FileUploadWidget } from '../components/FileUploadWidget';
 import type { ExtractionResponse } from '../api/extraction';
+import type { DocTypeMismatch } from '../api/upload';
 
 function makeFile(opts: { name?: string; type?: string; size?: number }): File {
   const { name = 'lab.pdf', type = 'application/pdf', size = 1024 } = opts;
@@ -129,6 +130,222 @@ describe('FileUploadWidget', () => {
 
     await waitFor(() => expect(uploadFn).toHaveBeenCalled());
     expect(uploadFn.mock.calls[0]?.[0]).toMatchObject({ docType: 'intake_form' });
+  });
+
+  it('shows the active document type prominently before a file is picked', () => {
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="Eduardo Perez"
+        onUploaded={() => {}}
+      />,
+    );
+    const indicator = screen.getByTestId('upload-widget-active-type');
+    expect(indicator).toHaveTextContent(/Selected document type/i);
+    expect(indicator).toHaveTextContent(/Lab PDF/i);
+  });
+
+  it('updates the prominent active-type label when the radio changes', async () => {
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="—"
+        onUploaded={() => {}}
+      />,
+    );
+    await userEvent.click(screen.getByLabelText(/intake form/i));
+    expect(screen.getByTestId('upload-widget-active-type')).toHaveTextContent(
+      /Intake form/i,
+    );
+  });
+
+  it('runs the same upload path for drag-and-drop as for the file picker', async () => {
+    const uploadFn = vi.fn().mockResolvedValue({ ok: true, response: SAMPLE_RESPONSE });
+    const onUploaded = vi.fn();
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="—"
+        onUploaded={onUploaded}
+        uploadFn={uploadFn}
+      />,
+    );
+    const drop = screen.getByLabelText('drop file or click to choose');
+    const file = makeFile({ name: 'labs.pdf' });
+    fireEvent.drop(drop, {
+      dataTransfer: { files: [file] },
+    });
+    await waitFor(() => expect(uploadFn).toHaveBeenCalledTimes(1));
+    expect(onUploaded).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders mismatch UI on 409 and offers switch / confirm / cancel', async () => {
+    const mismatch: DocTypeMismatch = {
+      code: 'doc_type_mismatch',
+      message: 'This file looks like an intake form, not a lab PDF.',
+      requestedType: 'lab_pdf',
+      detectedType: 'intake_form',
+      confidence: 'high',
+      evidence: ["text contains 'patient demographics'"],
+    };
+    const uploadFn = vi.fn().mockResolvedValueOnce({
+      ok: 'mismatch',
+      status: 409,
+      mismatch,
+    });
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="—"
+        onUploaded={() => {}}
+        uploadFn={uploadFn}
+      />,
+    );
+    const input = screen.getByLabelText('choose document') as HTMLInputElement;
+    await userEvent.upload(input, makeFile({ name: 'intake.pdf' }));
+    expect(await screen.findByTestId('upload-widget-mismatch')).toBeInTheDocument();
+    expect(screen.getByTestId('upload-mismatch-switch')).toBeInTheDocument();
+    expect(screen.getByTestId('upload-mismatch-confirm')).toBeInTheDocument();
+    expect(screen.getByTestId('upload-mismatch-cancel')).toBeInTheDocument();
+  });
+
+  it('switching type retries upload with the detected type', async () => {
+    const mismatch: DocTypeMismatch = {
+      code: 'doc_type_mismatch',
+      message: 'This file looks like an intake form.',
+      requestedType: 'lab_pdf',
+      detectedType: 'intake_form',
+      confidence: 'high',
+      evidence: [],
+    };
+    const onUploaded = vi.fn();
+    const uploadFn = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: 'mismatch', status: 409, mismatch })
+      .mockResolvedValueOnce({
+        ok: true,
+        response: { ...SAMPLE_RESPONSE, doc_type: 'intake_form' },
+      });
+
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="—"
+        onUploaded={onUploaded}
+        uploadFn={uploadFn}
+      />,
+    );
+    await userEvent.upload(
+      screen.getByLabelText('choose document') as HTMLInputElement,
+      makeFile({ name: 'intake.pdf' }),
+    );
+    await screen.findByTestId('upload-widget-mismatch');
+    await userEvent.click(screen.getByTestId('upload-mismatch-switch'));
+    await waitFor(() => expect(uploadFn).toHaveBeenCalledTimes(2));
+    const secondCall = uploadFn.mock.calls[1]?.[0] as Record<string, unknown>;
+    expect(secondCall['docType']).toBe('intake_form');
+    expect(secondCall['confirmDocType']).toBe(false);
+    expect(onUploaded).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirm-anyway retries with confirmDocType=true and the originally selected type', async () => {
+    const mismatch: DocTypeMismatch = {
+      code: 'doc_type_mismatch',
+      message: '',
+      requestedType: 'lab_pdf',
+      detectedType: 'intake_form',
+      confidence: 'high',
+      evidence: [],
+    };
+    const uploadFn = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: 'mismatch', status: 409, mismatch })
+      .mockResolvedValueOnce({ ok: true, response: SAMPLE_RESPONSE });
+
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="—"
+        onUploaded={() => {}}
+        uploadFn={uploadFn}
+      />,
+    );
+    await userEvent.upload(
+      screen.getByLabelText('choose document') as HTMLInputElement,
+      makeFile({ name: 'intake.pdf' }),
+    );
+    await screen.findByTestId('upload-widget-mismatch');
+    await userEvent.click(screen.getByTestId('upload-mismatch-confirm'));
+    await waitFor(() => expect(uploadFn).toHaveBeenCalledTimes(2));
+    const secondCall = uploadFn.mock.calls[1]?.[0] as Record<string, unknown>;
+    expect(secondCall['docType']).toBe('lab_pdf');
+    expect(secondCall['confirmDocType']).toBe(true);
+  });
+
+  it('cancel returns to idle state without retrying', async () => {
+    const mismatch: DocTypeMismatch = {
+      code: 'doc_type_mismatch',
+      message: '',
+      requestedType: 'lab_pdf',
+      detectedType: 'intake_form',
+      confidence: 'high',
+      evidence: [],
+    };
+    const uploadFn = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: 'mismatch', status: 409, mismatch });
+
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="—"
+        onUploaded={() => {}}
+        uploadFn={uploadFn}
+      />,
+    );
+    await userEvent.upload(
+      screen.getByLabelText('choose document') as HTMLInputElement,
+      makeFile({ name: 'intake.pdf' }),
+    );
+    await screen.findByTestId('upload-widget-mismatch');
+    await userEvent.click(screen.getByTestId('upload-mismatch-cancel'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('upload-widget-mismatch')).not.toBeInTheDocument(),
+    );
+    expect(uploadFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('keyboard users can resolve the mismatch via Tab + Enter', async () => {
+    const mismatch: DocTypeMismatch = {
+      code: 'doc_type_mismatch',
+      message: '',
+      requestedType: 'lab_pdf',
+      detectedType: 'intake_form',
+      confidence: 'high',
+      evidence: [],
+    };
+    const uploadFn = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: 'mismatch', status: 409, mismatch })
+      .mockResolvedValueOnce({ ok: true, response: SAMPLE_RESPONSE });
+
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="—"
+        onUploaded={() => {}}
+        uploadFn={uploadFn}
+      />,
+    );
+    await userEvent.upload(
+      screen.getByLabelText('choose document') as HTMLInputElement,
+      makeFile({ name: 'intake.pdf' }),
+    );
+    const switchBtn = await screen.findByTestId('upload-mismatch-switch');
+    switchBtn.focus();
+    expect(switchBtn).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(uploadFn).toHaveBeenCalledTimes(2));
   });
 
   it('shows an "Uploading…" state while the upload is in flight', async () => {
