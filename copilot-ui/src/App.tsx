@@ -23,17 +23,20 @@ import {
 } from './components/AgentPanel';
 import { AppShell } from './components/AppShell';
 import { ConversationSidebar } from './components/ConversationSidebar';
+import { ExtractionResultsPanel } from './components/ExtractionResultsPanel';
+import { FileUploadWidget } from './components/FileUploadWidget';
 import { Launcher } from './components/Launcher';
 import { LoginPage } from './components/LoginPage';
 import { PanelView } from './components/PanelView';
 import type { PanelPatient } from './api/panel';
 import { fetchConversationMessages } from './api/conversations';
+import type { ExtractionResponse } from './api/extraction';
 import { TweaksPanel } from './components/Tweaks/TweaksPanel';
 import { TweakButton, TweakColor, TweakRadio, TweakSection, TweakToggle } from './components/Tweaks/controls';
 import { useTweaks, type TweakValues } from './components/Tweaks/useTweaks';
 import { useSession } from './hooks/useSession';
 import { parseSmartLaunch, type SmartLaunchContext } from './api/smart';
-import type { Citation } from './api/types';
+import type { ChatResponse, Citation } from './api/types';
 
 interface CopilotTweaks extends TweakValues {
   readonly surface: Surface;
@@ -120,6 +123,13 @@ function StandaloneApp(): JSX.Element {
 
   const [pendingMessage, setPendingMessage] = useState<PendingUserMessage | null>(null);
   const [sidebarRefresh, setSidebarRefresh] = useState<number>(0);
+  // Issue 011: track the active patient (focus_pid carried back in /chat
+  // responses) and any extraction returned from the most recent upload.
+  const [focusPatient, setFocusPatient] = useState<{
+    readonly id: string;
+    readonly name: string;
+  } | null>(null);
+  const [extraction, setExtraction] = useState<ExtractionResponse | null>(null);
 
   // Bump the sidebar refresh token whenever messages grow — the sidebar
   // refetches its list and the new conversation appears with its title.
@@ -222,6 +232,8 @@ function StandaloneApp(): JSX.Element {
       if (id === conversationId) return;
       setConversationId(id);
       setMessages([]);
+      setFocusPatient(null);
+      setExtraction(null);
       navigateToConversation(id);
     },
     [conversationId],
@@ -230,8 +242,54 @@ function StandaloneApp(): JSX.Element {
   const handleCreateConversation = useCallback((id: string): void => {
     setConversationId(id);
     setMessages([]);
+    setFocusPatient(null);
+    setExtraction(null);
     navigateToConversation(id);
   }, []);
+
+  // The upload widget needs a stable patient id; resolve it from the chat
+  // state (returned in every /chat response) — not from the panel click,
+  // because the agent does the actual resolve_patient lookup. Keep the name
+  // shown alongside ("for Eduardo Perez") in step with the panel-click trail.
+  const handleChatResponse = useCallback((resp: ChatResponse): void => {
+    if (resp.state.patient_id && resp.state.patient_id !== focusPatient?.id) {
+      setFocusPatient({
+        id: resp.state.patient_id,
+        name: focusPatient?.name ?? '',
+      });
+    }
+  }, [focusPatient]);
+
+  const handlePatientClickWithFocus = useCallback(
+    (patient: PanelPatient): void => {
+      // Cache name now so the upload widget can label "for X" before /chat
+      // returns and confirms patient_id.
+      setFocusPatient({
+        id: patient.patient_id,
+        name: `${patient.given_name} ${patient.family_name}`,
+      });
+      setExtraction(null);
+      handlePatientClick(patient);
+    },
+    [handlePatientClick],
+  );
+
+  const handleUploaded = useCallback(
+    (response: ExtractionResponse): void => {
+      setExtraction(response);
+      // Inject a synthetic user turn so the agent reads the just-uploaded
+      // document and answers in the chat. Backend stores the actual system
+      // message; this keeps the UX coherent (chat responds to upload).
+      setPendingMessage({
+        id: `upload-${response.document_id}-${Date.now().toString(36)}`,
+        text:
+          response.doc_type === 'lab_pdf'
+            ? `I just uploaded ${response.filename}. Walk me through what's notable.`
+            : `I just uploaded ${response.filename}. Summarize the intake form.`,
+      });
+    },
+    [],
+  );
 
   if (session.state === 'loading') {
     return (
@@ -258,7 +316,7 @@ function StandaloneApp(): JSX.Element {
         />
         <div className="standalone-main">
           {messages.length === 0 && pendingMessage === null ? (
-            <PanelView onPatientClick={handlePatientClick} />
+            <PanelView onPatientClick={handlePatientClickWithFocus} />
           ) : null}
           <AgentPanel
             open={true}
@@ -275,11 +333,26 @@ function StandaloneApp(): JSX.Element {
             setMessages={(updater) => setMessages((prev) => updater(prev))}
             pendingUserMessage={pendingMessage}
             onPendingMessageHandled={() => setPendingMessage(null)}
+            onResponse={handleChatResponse}
             onClose={() => {
               navigateToRoot();
             }}
             onCite={() => {}}
           />
+          {focusPatient !== null ? (
+            <div className="standalone-aside">
+              <FileUploadWidget
+                patientId={focusPatient.id}
+                patientName={focusPatient.name || `Patient/${focusPatient.id}`}
+                conversationId={conversationId}
+                onUploaded={handleUploaded}
+              />
+              <ExtractionResultsPanel
+                extraction={extraction}
+                onDismiss={() => setExtraction(null)}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
     </AppShell>

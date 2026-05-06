@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type JSX } from 'react';
 import { sendChat } from '../api/client';
-import type { Citation } from '../api/types';
+import type { ChatResponse, Citation } from '../api/types';
 import { AgentMsg, AgentErrorBubble, type AgentMessage } from './AgentMsg';
 import { Launcher } from './Launcher';
 import { Thinking } from './Thinking';
@@ -59,6 +59,9 @@ export interface AgentPanelProps {
   readonly onCite: (citation: Citation) => void;
   readonly pendingUserMessage?: PendingUserMessage | null;
   readonly onPendingMessageHandled?: () => void;
+  /** Fires once per successful /chat response so the shell can react to
+   *  patient-focus changes (issue 011: upload widget visibility). */
+  readonly onResponse?: (response: ChatResponse) => void;
 }
 
 export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
@@ -79,6 +82,7 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     onCite,
     pendingUserMessage,
     onPendingMessageHandled,
+    onResponse,
   } = props;
 
   const [draft, setDraft] = useState<string>('');
@@ -140,6 +144,7 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     };
     setMessages((prev) => [...prev, agentMsg]);
     setBusy(false);
+    onResponse?.(result.response);
 
     // Flip streaming false after the typewriter has a chance to finish so the
     // body (cohort/deltas/timeline/citations/followups) paints in.
