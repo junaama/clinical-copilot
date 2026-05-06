@@ -541,3 +541,61 @@ async def test_extract_document_includes_bboxes_in_envelope() -> None:
     assert result["ok"] is True
     assert len(result["bboxes"]) == 1
     assert result["bboxes"][0]["field_path"] == "results[0].value"
+
+
+# ---------------------------------------------------------------------------
+# Document-ref payload (issue 009)
+#
+# The supervisor's intake_extractor worker scrapes ``document_ref`` JSON
+# keys from tool messages to populate ``fetched_refs``. The verifier
+# then validates ``<cite ref="DocumentReference/..."/>`` tags against
+# that set. attach_document, list_patient_documents, and extract_document
+# must each emit ``document_ref`` keys on success so the wiring works
+# end to end.
+# ---------------------------------------------------------------------------
+
+
+async def test_attach_document_emits_document_ref(tmp_path: Path) -> None:
+    file_path = tmp_path / "lab.pdf"
+    file_path.write_bytes(b"%PDF-1.4 stub")
+    tools = _build_tools()
+    result = await tools["attach_document"].ainvoke(
+        {
+            "patient_id": "patient-1",
+            "file_path": str(file_path),
+            "doc_type": "lab_pdf",
+        }
+    )
+
+    assert result["document_ref"] == "DocumentReference/doc-1"
+
+
+async def test_list_patient_documents_emits_document_ref_per_row() -> None:
+    tools = _build_tools()
+    result = await tools["list_patient_documents"].ainvoke({"patient_id": "patient-1"})
+
+    assert result["documents"][0]["document_ref"] == "DocumentReference/doc-1"
+
+
+async def test_extract_document_emits_document_ref() -> None:
+    tools = _build_tools()
+    extraction = _lab_extraction()
+    with (
+        patch(
+            "copilot.tools.extraction.vlm_extract_document",
+            _vlm_success(extraction),
+        ),
+        patch(
+            "copilot.tools.extraction.match_extraction_to_bboxes",
+            _bboxes_passthrough(),
+        ),
+    ):
+        result = await tools["extract_document"].ainvoke(
+            {
+                "patient_id": "patient-1",
+                "document_id": "doc-1",
+                "doc_type": "lab_pdf",
+            }
+        )
+
+    assert result["document_ref"] == "DocumentReference/doc-1"

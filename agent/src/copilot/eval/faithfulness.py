@@ -43,7 +43,7 @@ _log = logging.getLogger(__name__)
 # Smart quotes are intentional (LLMs occasionally emit them); same pattern
 # lives in evaluators.py.
 _CITE_PATTERN = re.compile(
-    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]\s*/?\s*>',  # noqa: RUF001
+    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’][^>]*/?\s*>',  # noqa: RUF001
     flags=re.IGNORECASE,
 )
 

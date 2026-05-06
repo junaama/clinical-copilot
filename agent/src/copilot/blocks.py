@@ -42,7 +42,7 @@ from .api.schemas import (
 _log = logging.getLogger(__name__)
 
 _CITE_PATTERN = re.compile(
-    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]\s*/?\s*>',
+    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’][^>]*/?\s*>',
     flags=re.IGNORECASE,
 )
 

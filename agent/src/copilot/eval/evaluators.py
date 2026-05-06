@@ -19,7 +19,7 @@ from .case import Case
 # the form ``<cite ref="ResourceType/id"/>``. Both space-before-slash and
 # no-space variants are accepted; quotes can be straight or curly.
 _CITE_PATTERN = re.compile(
-    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]\s*/?\s*>',
+    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’][^>]*/?\s*>',
     flags=re.IGNORECASE,
 )
 

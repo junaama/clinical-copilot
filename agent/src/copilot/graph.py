@@ -33,9 +33,19 @@ from .blocks import (
 from .care_team import AuthDecision
 from .checkpointer import build_memory_checkpointer
 from .config import Settings, get_settings
+from .cost_tracking import (
+    CallCost,
+    aggregate_turn_cost,
+    estimate_call_cost,
+)
 from .llm import build_chat_model
 from .prompts import CLARIFY_SYSTEM, CLASSIFIER_SYSTEM, build_system_prompt
 from .state import CoPilotState
+from .supervisor.graph import build_supervisor_node, route_after_supervisor
+from .supervisor.workers import (
+    build_evidence_retriever_node,
+    build_intake_extractor_node,
+)
 from .tools import (
     make_tools,
     set_active_registry,
@@ -69,6 +79,9 @@ class WorkflowDecision(BaseModel):
     )
 
 
+_SUPERVISOR_WORKFLOWS: frozenset[str] = frozenset({"W-DOC", "W-EVD"})
+
+
 def _route_after_classifier(
     *,
     workflow_id: str,
@@ -76,7 +89,8 @@ def _route_after_classifier(
     patient_id: str | None,
     focus_pid: str | None,
 ) -> str:
-    """Decide whether the post-classifier edge goes to ``agent`` or ``clarify``.
+    """Decide whether the post-classifier edge goes to ``agent``, ``clarify``,
+    or the new ``supervisor`` (issue 009 W-DOC / W-EVD routes).
 
     The classifier sees only the latest user message — it does not know
     whether ``patient_id`` (from session_context, e.g. EHR-launch) or
@@ -85,13 +99,17 @@ def _route_after_classifier(
     overnight?" the classifier reasonably emits ``unclear`` / low confidence,
     which used to route every such turn into ``clarify_node`` (issue 018).
 
-    Whenever a patient is already bound, short-circuit to ``agent``: the
-    agent's system prompt + tool surface can disambiguate intent itself,
-    and ``clarify_node``'s "tell me which patient" question is useless
-    when the patient is already named in the request context. Empty
-    strings (the panel-spanning UC-1 / UC-10 shape, where the eval runner
-    intentionally passes ``patient_id=""``) are treated as unbound.
+    Routing rules:
+    1. Document / evidence intents (W-DOC, W-EVD) ALWAYS go to the
+       supervisor regardless of patient binding — the supervisor owns
+       the document + retrieval workers.
+    2. Whenever a patient is already bound, short-circuit to ``agent``.
+    3. Otherwise, if the classifier is unclear or below threshold, fall
+       back to ``clarify``.
+    4. Otherwise, ``agent``.
     """
+    if workflow_id in _SUPERVISOR_WORKFLOWS:
+        return "supervisor"
     if (patient_id or "").strip() or (focus_pid or "").strip():
         return "agent"
     if workflow_id == "unclear" or confidence < CLASSIFIER_CONFIDENCE_THRESHOLD:
@@ -99,8 +117,14 @@ def _route_after_classifier(
     return "agent"
 
 
+# Match ``<cite ref="X"/>`` and ``<cite ref="X" extra="..."/>``. Issue 009
+# extends the citation form with extra attributes (``page``, ``field``,
+# ``value``, ``source``, ``section``) for DocumentReference and guideline
+# refs; the verifier must capture only the ``ref`` value regardless of
+# trailing attributes, otherwise valid document/guideline citations fall
+# through as ``unresolved`` and trip the verifier's regen loop.
 _CITE_PATTERN = re.compile(
-    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]\s*/?\s*>',
+    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’][^>]*/?\s*>',
     flags=re.IGNORECASE,
 )
 _FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
@@ -206,6 +230,67 @@ def _resolved_patients_from_tool_message(
     return out
 
 
+def _per_call_costs(state: CoPilotState, settings: Settings) -> list[CallCost]:
+    """One ``CallCost`` per AIMessage with usage metadata, in order.
+
+    LangChain populates ``AIMessage.usage_metadata`` with
+    ``input_tokens`` / ``output_tokens`` / ``total_tokens`` (best effort —
+    not every provider does). When the metadata is missing the message is
+    skipped rather than counted as zero, so a partial answer doesn't
+    silently inflate the per-turn rate-known total.
+
+    The model name on each AIMessage is preferred when present (LangChain
+    stores it under ``response_metadata.model_name`` / ``model``); we fall
+    back to ``settings.llm_model`` so the audit row still names something
+    when the provider didn't echo back.
+    """
+    out: list[CallCost] = []
+    for msg in state.get("messages", []) or []:
+        if not isinstance(msg, AIMessage):
+            continue
+        usage = getattr(msg, "usage_metadata", None) or {}
+        in_tok = int(usage.get("input_tokens") or 0)
+        out_tok = int(usage.get("output_tokens") or 0)
+        if in_tok == 0 and out_tok == 0:
+            continue
+        rmeta = getattr(msg, "response_metadata", None) or {}
+        model = (
+            rmeta.get("model_name")
+            or rmeta.get("model")
+            or settings.llm_model
+        )
+        out.append(
+            estimate_call_cost(
+                str(model),
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+            )
+        )
+    return out
+
+
+def _tool_sequence(state: CoPilotState) -> list[str]:
+    """Ordered list of tool names invoked this turn (duplicates kept).
+
+    ``tool_results`` is the canonical record because ``agent_node`` already
+    extracts ``{"name", "args", "id"}`` from each AIMessage's tool_calls.
+    Falls back to scanning AIMessage.tool_calls directly when the state
+    field is empty (e.g., refusal turns where no tool ran but the LLM
+    still emitted a malformed tool_call).
+    """
+    tool_results = state.get("tool_results") or []
+    if tool_results:
+        return [str(tc.get("name") or "") for tc in tool_results if tc.get("name")]
+    seq: list[str] = []
+    for msg in state.get("messages", []) or []:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                if name:
+                    seq.append(str(name))
+    return seq
+
+
 def _audit(
     state: CoPilotState,
     settings: Settings,
@@ -221,13 +306,45 @@ def _audit(
     The audit log carries only structural/decision metadata.
 
     ``extra.gate_decisions`` and ``extra.denied_count`` carry the per-turn
-    gate-decision summary called out in issue 003.
+    gate-decision summary called out in issue 003. ``extra.tool_sequence``,
+    ``extra.cost_estimate_usd``, and ``extra.cost_by_model`` carry the
+    per-encounter trace data called out in issue 012.
     """
     tool_results = state.get("tool_results") or []
     fetched_refs = state.get("fetched_refs") or []
     user_messages = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
     gate_decisions = list(state.get("gate_decisions") or [])
     denied_count = sum(1 for d in gate_decisions if d in _DENIED_DECISIONS)
+
+    call_costs = _per_call_costs(state, settings)
+    turn_cost = aggregate_turn_cost(call_costs)
+    prompt_tokens = sum(c.input_tokens for c in call_costs)
+    completion_tokens = sum(c.output_tokens for c in call_costs)
+    tool_sequence = _tool_sequence(state)
+
+    extra: dict[str, Any] = {
+        "final_response_chars": len(final_text) if final_text else 0,
+        "gate_decisions": gate_decisions,
+        "denied_count": denied_count,
+        "tool_sequence": tool_sequence,
+        "cost_estimate_usd": turn_cost.total_usd,
+    }
+    if turn_cost.by_model:
+        extra["cost_by_model"] = turn_cost.by_model
+    if turn_cost.rate_unknown_models:
+        extra["cost_rate_unknown_models"] = turn_cost.rate_unknown_models
+
+    # Issue 009 — when the supervisor sub-graph ran, surface its action
+    # and reasoning plus the handoff trail so a reviewer can reconstruct
+    # the dispatch path without re-running the pipeline. Absent for W1
+    # turns by design.
+    supervisor_action = state.get("supervisor_action")
+    if supervisor_action:
+        extra["supervisor_action"] = supervisor_action
+        extra["supervisor_reasoning"] = state.get("supervisor_reasoning") or ""
+    handoff_events = state.get("handoff_events") or []
+    if handoff_events:
+        extra["handoff_events"] = list(handoff_events)
 
     event = AuditEvent(
         ts=now_iso(),
@@ -242,16 +359,12 @@ def _audit(
         tool_call_count=len(tool_results),
         fetched_ref_count=len(fetched_refs),
         latency_ms=0,  # The graph doesn't track end-to-end latency yet; eval runner does.
-        prompt_tokens=0,
-        completion_tokens=0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
         model_provider=settings.llm_provider,
         model_name=settings.llm_model,
         escalation_reason=escalation_reason,
-        extra={
-            "final_response_chars": len(final_text) if final_text else 0,
-            "gate_decisions": gate_decisions,
-            "denied_count": denied_count,
-        },
+        extra=extra,
     )
     write_audit_event(event, settings)
 
@@ -510,14 +623,46 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             update={"regen_count": regen + 1, "verifier_feedback": feedback},
         )
 
+    # Issue 009: supervisor sub-graph for W-DOC / W-EVD intents. The
+    # workers' tool surfaces are subsets of ``tools`` filtered by name,
+    # so they're cheap to build at compile time and run with the same
+    # CareTeam-gated client wiring as the main agent.
+    supervisor_node = build_supervisor_node(chat_model)
+    intake_extractor_node = build_intake_extractor_node(chat_model, tools)
+    evidence_retriever_node = build_evidence_retriever_node(chat_model, tools)
+
     builder = StateGraph(CoPilotState)
-    builder.add_node("classifier", classifier_node, ends=["agent", "clarify"])
+    builder.add_node(
+        "classifier",
+        classifier_node,
+        ends=["agent", "clarify", "supervisor"],
+    )
     builder.add_node("clarify", clarify_node)
     builder.add_node("agent", agent_node)
+    builder.add_node("supervisor", supervisor_node)
+    builder.add_node("intake_extractor", intake_extractor_node)
+    builder.add_node("evidence_retriever", evidence_retriever_node)
     builder.add_node("verifier", verifier_node, ends=["agent", END])
     builder.add_edge(START, "classifier")
     builder.add_edge("clarify", END)
     builder.add_edge("agent", "verifier")
+    # After the supervisor decides, dispatch to the worker, the verifier
+    # (synthesize), or the clarify node — same conditional pattern as
+    # the classifier above.
+    builder.add_conditional_edges(
+        "supervisor",
+        route_after_supervisor,
+        {
+            "intake_extractor": "intake_extractor",
+            "evidence_retriever": "evidence_retriever",
+            "verifier": "verifier",
+            "clarify": "clarify",
+        },
+    )
+    # Workers loop back to the supervisor so it can synthesize once
+    # results are in. The synthesize action then routes to the verifier.
+    builder.add_edge("intake_extractor", "supervisor")
+    builder.add_edge("evidence_retriever", "supervisor")
     return builder.compile(checkpointer=checkpointer)
 
 

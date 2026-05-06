@@ -143,6 +143,34 @@ async def test_successful_retrieval_returns_serializable_chunks() -> None:
     assert citation["field_or_chunk_id"] == "chunk-0"
 
 
+async def test_each_chunk_carries_guideline_ref_for_supervisor_worker() -> None:
+    """Issue 009: the supervisor's evidence-retriever worker scrapes
+    ``guideline_ref`` JSON keys out of tool messages and feeds them to
+    ``fetched_refs``, which the verifier then validates citations
+    against. The retrieval tool must emit ``guideline_ref`` on every
+    chunk in the canonical ``guideline:{chunk_id}`` form so a citation
+    like ``<cite ref="guideline:chunk-0"/>`` resolves cleanly.
+    """
+    set_active_user_id("practitioner-1")
+    candidates = [
+        _Candidate(
+            chunk_id="chunk-0",
+            guideline="JNC8",
+            section="Step 2",
+            page=4,
+            content="thiazide first-line",
+            rrf_score=0.9,
+        ),
+    ]
+    tool = _make_tool(_stub_retriever(candidates))
+
+    result = await tool.coroutine(query="hypertension", top_k=1)
+
+    assert result["chunks"][0]["guideline_ref"] == "guideline:chunk-0"
+    # ``rows`` mirrors ``chunks`` so legacy callers still see the ref.
+    assert result["rows"][0]["guideline_ref"] == "guideline:chunk-0"
+
+
 # ---------------------------------------------------------------------------
 # Failure isolation
 # ---------------------------------------------------------------------------
