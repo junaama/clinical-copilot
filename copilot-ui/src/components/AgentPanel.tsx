@@ -5,7 +5,7 @@
  * parent App owns toggle state, SMART context, and Tweaks values.
  */
 
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type JSX } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type JSX, type ReactNode } from 'react';
 import { sendChat } from '../api/client';
 import type { ChatResponse, Citation } from '../api/types';
 import { AgentMsg, AgentErrorBubble, type AgentMessage } from './AgentMsg';
@@ -62,6 +62,9 @@ export interface AgentPanelProps {
   /** Fires once per successful /chat response so the shell can react to
    *  patient-focus changes (issue 011: upload widget visibility). */
   readonly onResponse?: (response: ChatResponse) => void;
+  /** Optional element rendered just above the chat composer — used by the
+   *  shell to embed the document-upload affordance inside the chat window. */
+  readonly composerSlot?: ReactNode;
 }
 
 export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
@@ -83,6 +86,7 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     pendingUserMessage,
     onPendingMessageHandled,
     onResponse,
+    composerSlot,
   } = props;
 
   const [draft, setDraft] = useState<string>('');
@@ -261,6 +265,10 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
         })}
         {busy && <Thinking />}
       </div>
+
+      {composerSlot ? (
+        <div className="agent-composer-slot">{composerSlot}</div>
+      ) : null}
 
       <form className="agent-input" onSubmit={submit}>
         <input
