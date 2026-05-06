@@ -31,6 +31,52 @@ the upstream source for full text and current updates.
    indexes as `guideline = "jnc8-hypertension-2014"`).
 2. Re-run the indexer. Existing chunks are skipped on chunk_id match.
 3. Adding a new file does not require a DB migration.
+4. No agent restart needed — the retriever reads the table on every
+   request, so newly indexed chunks are reachable from the next turn.
+
+### Indexer one-liner
+
+The indexer needs `COHERE_API_KEY` for embeddings and `CHECKPOINTER_DSN`
+for the Postgres write. Pull them from Railway and point at the corpus:
+
+```bash
+COHERE_API_KEY=$(railway variables --service copilot-agent --kv | grep ^COHERE_API_KEY= | cut -d= -f2-) \
+CHECKPOINTER_DSN=$(railway variables --service Postgres --kv | grep ^DATABASE_PUBLIC_URL= | cut -d= -f2-) \
+uv run --extra retrieval --extra postgres python -m copilot.retrieval.indexer \
+  --corpus-dir ./data/guidelines
+```
+
+The CLI logs `N total / M new / K skipped` per file. Idempotent — only
+new chunk_ids are sent to Cohere, so re-runs are cheap.
+
+### Verifying the corpus
+
+```bash
+uv run python -c "
+import os, psycopg
+with psycopg.connect(os.environ['CHECKPOINTER_DSN']) as c, c.cursor() as cur:
+    cur.execute('SELECT guideline, count(*) FROM guideline_chunks GROUP BY guideline ORDER BY guideline')
+    for r in cur.fetchall(): print(r)
+"
+```
+
+### Where to source more guidelines
+
+All of these publish free PDFs that fit the indexer's PDF-first input.
+
+| Topic | Source | URL |
+|---|---|---|
+| Diabetes (ADA Standards of Care, annual) | `diabetesjournals.org/care` | https://diabetesjournals.org/care/issue |
+| Hypertension (ACC/AHA 2017, more current than JNC8) | `professional.heart.org` | https://professional.heart.org/en/guidelines-and-statements |
+| CKD / glomerular / BP-in-CKD / anemia | KDIGO | https://kdigo.org/guidelines/ |
+| Cholesterol (ACC/AHA) | `acc.org` | https://www.acc.org/Guidelines |
+| Heart failure (AHA/ACC/HFSA) | `professional.heart.org` | https://professional.heart.org/en/guidelines-and-statements |
+| Atrial fibrillation (AHA/ACC/HRS) | `professional.heart.org` | https://professional.heart.org/en/guidelines-and-statements |
+| Preventive screening (USPSTF) | `uspreventiveservicestaskforce.org` | https://www.uspreventiveservicestaskforce.org/uspstf/recommendation-topics |
+
+Long-form clinical guidelines (40–80 pages) typically yield 50–200
+chunks each with the default 512/64 token-window settings; the bundled
+fixtures are abridged and only produce ~5 chunks apiece.
 
 ## Regenerating the fixture PDFs
 
