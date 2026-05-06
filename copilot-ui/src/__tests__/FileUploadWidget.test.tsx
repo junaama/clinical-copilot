@@ -19,15 +19,17 @@ const SAMPLE_RESPONSE: ExtractionResponse = {
 };
 
 describe('FileUploadWidget', () => {
-  it('renders nothing when patientId is empty', () => {
-    const { container } = render(
+  it('renders disabled with a hint when patientId is empty', () => {
+    const { getByTestId, getByText } = render(
       <FileUploadWidget
         patientId=""
         patientName="—"
         onUploaded={() => {}}
       />,
     );
-    expect(container.firstChild).toBeNull();
+    expect(getByTestId('upload-widget')).toBeDefined();
+    expect(getByText('select a patient first')).toBeDefined();
+    expect(getByText('Select a patient to enable upload')).toBeDefined();
   });
 
   it('uploads a valid file via the file picker and calls onUploaded', async () => {

@@ -5,8 +5,8 @@
  * client-side before sending. POSTs multipart/form-data to /upload and emits
  * the resulting extraction up to the parent via `onUploaded`.
  *
- * The widget renders nothing when `patientId` is empty — the spec is "visible
- * only when a patient is active." The parent owns that gating.
+ * Always rendered. When `patientId` is empty, the widget shows but disables
+ * upload with a hint to pick a patient first.
  */
 
 import { useCallback, useRef, useState, type ChangeEvent, type DragEvent, type JSX } from 'react';
@@ -100,15 +100,19 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
     setDragActive(false);
   }, []);
 
-  if (!patientId) return null;
-
+  const hasPatient = Boolean(patientId);
   const busy = state.kind === 'uploading';
+  const disabled = busy || !hasPatient;
 
   return (
     <div className="upload-widget" data-testid="upload-widget">
       <div className="upload-widget__header">
         <span className="upload-widget__title">Upload document</span>
-        <span className="upload-widget__patient">for {patientName}</span>
+        {hasPatient ? (
+          <span className="upload-widget__patient">for {patientName}</span>
+        ) : (
+          <span className="upload-widget__patient">select a patient first</span>
+        )}
       </div>
 
       <div className="upload-widget__doctype">
@@ -119,7 +123,7 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
             value="lab_pdf"
             checked={docType === 'lab_pdf'}
             onChange={() => setDocType('lab_pdf')}
-            disabled={busy}
+            disabled={disabled}
           />
           Lab PDF
         </label>
@@ -130,7 +134,7 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
             value="intake_form"
             checked={docType === 'intake_form'}
             onChange={() => setDocType('intake_form')}
-            disabled={busy}
+            disabled={disabled}
           />
           Intake form
         </label>
@@ -139,14 +143,18 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
       <div
         className={`upload-widget__drop${dragActive ? ' upload-widget__drop--active' : ''}`}
         role="button"
-        tabIndex={0}
+        tabIndex={hasPatient ? 0 : -1}
+        aria-disabled={!hasPatient}
         aria-label="drop file or click to choose"
-        onClick={() => inputRef.current?.click()}
+        onClick={() => {
+          if (hasPatient) inputRef.current?.click();
+        }}
         onKeyDown={(e) => {
+          if (!hasPatient) return;
           if (e.key === 'Enter' || e.key === ' ') inputRef.current?.click();
         }}
-        onDrop={onDrop}
-        onDragOver={onDragOver}
+        onDrop={hasPatient ? onDrop : (e) => e.preventDefault()}
+        onDragOver={hasPatient ? onDragOver : (e) => e.preventDefault()}
         onDragLeave={onDragLeave}
       >
         <input
@@ -156,11 +164,15 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
           onChange={onPick}
           className="upload-widget__input"
           aria-label="choose document"
-          disabled={busy}
+          disabled={disabled}
         />
         {busy ? (
           <span className="upload-widget__hint">
             Uploading {state.fileName}…
+          </span>
+        ) : !hasPatient ? (
+          <span className="upload-widget__hint">
+            Select a patient to enable upload
           </span>
         ) : (
           <span className="upload-widget__hint">

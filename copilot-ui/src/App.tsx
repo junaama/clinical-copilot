@@ -339,20 +339,22 @@ function StandaloneApp(): JSX.Element {
             }}
             onCite={() => {}}
           />
-          {focusPatient !== null ? (
-            <div className="standalone-aside">
-              <FileUploadWidget
-                patientId={focusPatient.id}
-                patientName={focusPatient.name || `Patient/${focusPatient.id}`}
-                conversationId={conversationId}
-                onUploaded={handleUploaded}
-              />
-              <ExtractionResultsPanel
-                extraction={extraction}
-                onDismiss={() => setExtraction(null)}
-              />
-            </div>
-          ) : null}
+          <div className="standalone-aside">
+            <FileUploadWidget
+              patientId={focusPatient?.id ?? ''}
+              patientName={
+                focusPatient
+                  ? focusPatient.name || `Patient/${focusPatient.id}`
+                  : ''
+              }
+              conversationId={conversationId}
+              onUploaded={handleUploaded}
+            />
+            <ExtractionResultsPanel
+              extraction={extraction}
+              onDismiss={() => setExtraction(null)}
+            />
+          </div>
         </div>
       </div>
     </AppShell>
