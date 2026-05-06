@@ -25,6 +25,7 @@ from .helpers import (
     set_active_smart_token,
     set_active_user_id,
 )
+from .retrieval import make_retrieval_tools
 
 __all__ = [
     "get_active_registry",
@@ -44,5 +45,6 @@ def make_tools(settings: Settings) -> list[StructuredTool]:
 
     granular_tools, callables = make_granular_tools(settings, client, gate)
     composite_tools = make_composite_tools(gate, callables)
+    retrieval_tools = make_retrieval_tools(settings)
 
-    return granular_tools + composite_tools
+    return granular_tools + composite_tools + retrieval_tools

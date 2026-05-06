@@ -170,6 +170,47 @@ class FhirClient:
             return False, None, f"http_{response.status_code}", latency
         return True, response.json(), None, latency
 
+    async def update_patient(
+        self, patient_id: str, body: dict[str, Any]
+    ) -> tuple[bool, dict[str, Any] | None, str | None, int]:
+        """PUT a Patient resource. The one FHIR write OpenEMR supports.
+
+        Used by the intake-extraction persistence path to update
+        demographics. Returns ``(ok, resource, error, latency_ms)``.
+
+        Fixture mode is a no-op success — the in-memory bundle is
+        read-only; the call records its intent without mutating state.
+        """
+        started = time.monotonic()
+        if self._use_fixture():
+            return True, body, None, int((time.monotonic() - started) * 1000)
+
+        token = self._resolve_token()
+        if not token:
+            return False, None, "no_token", int((time.monotonic() - started) * 1000)
+
+        url = f"{self._settings.openemr_fhir_base.rstrip('/')}/Patient/{patient_id}"
+        headers = {
+            "Accept": "application/fhir+json",
+            "Content-Type": "application/fhir+json",
+            "Authorization": f"Bearer {token}",
+        }
+        try:
+            response = await self._client.put(url, headers=headers, json=body)
+        except httpx.HTTPError as exc:
+            return False, None, f"transport: {exc.__class__.__name__}", int(
+                (time.monotonic() - started) * 1000
+            )
+
+        latency = int((time.monotonic() - started) * 1000)
+        if response.status_code not in (200, 201):
+            return False, None, f"http_{response.status_code}", latency
+        try:
+            resource = response.json()
+        except ValueError:
+            resource = None
+        return True, resource, None, latency
+
 
 def _fixture_search(resource_type: str, params: dict[str, Any]) -> list[dict[str, Any]]:
     entries = FIXTURE_BUNDLE.get(resource_type, [])

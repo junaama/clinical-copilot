@@ -28,6 +28,11 @@ class Settings(BaseSettings):
 
     openai_api_key: SecretStr = Field(default=SecretStr(""), alias="OPENAI_API_KEY")
     anthropic_api_key: SecretStr = Field(default=SecretStr(""), alias="ANTHROPIC_API_KEY")
+    # Cohere is used by the hybrid retriever (issue 008) for query embeddings
+    # (``embed-english-v3.0``) and reranking (``rerank-english-v3.0``). Empty
+    # = retriever runs in mock-only mode and ``retrieve_evidence`` returns a
+    # ``no_cohere_key`` error rather than crashing at import time.
+    cohere_api_key: SecretStr = Field(default=SecretStr(""), alias="COHERE_API_KEY")
 
     openemr_base_url: str = Field(
         default="https://openemr-production-c5b4.up.railway.app",
@@ -191,6 +196,19 @@ class Settings(BaseSettings):
     # runner skips the dimension and the scoreboard column simply doesn't
     # appear, useful when running in environments without ANTHROPIC_API_KEY.
     eval_judge_model: str = Field(default="claude-haiku-4-5", alias="EVAL_JUDGE_MODEL")
+
+    # Cohere API key — used by the Week 2 retrieval pipeline (issues 007 +
+    # 008) for embeddings (``embed-english-v3.0``) and reranking
+    # (``rerank-english-v3.0``). Empty string disables the retrieval path
+    # cleanly so the agent boots in environments without Cohere; the
+    # hybrid retriever will fall back to RRF-only and the indexer refuses
+    # to populate vectors.
+    cohere_api_key: SecretStr = Field(default=SecretStr(""), alias="COHERE_API_KEY")
+
+    # Vision-capable Anthropic model for VLM extraction (issue 004). Kept
+    # separate from ``llm_model`` so the agent's chat model can be a cheaper
+    # text-only model while extraction runs on Sonnet vision.
+    vlm_model: str = Field(default="claude-sonnet-4-6", alias="VLM_MODEL")
 
     @property
     def langfuse_enabled(self) -> bool:

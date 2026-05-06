@@ -1153,6 +1153,7 @@ async def upload(
     patient_id: str = Form(default=""),
     doc_type: str = Form(default=""),
     conversation_id: str | None = Form(default=None),
+    copilot_session: str | None = Cookie(default=None),
 ) -> UploadResponse:
     """Upload a clinical document, run VLM extraction, return the result.
 
@@ -1194,6 +1195,28 @@ async def upload(
     # ensure the upload's patient matches the launched patient.
     if conversation_id:
         _assert_patient_context_matches(conversation_id, patient_id)
+
+    # Resolve a SMART access token for OpenEMR. /chat threads it through
+    # the graph state; /upload calls DocumentClient + VLM directly so we
+    # bind it to the contextvar DocumentClient._resolve_token() reads
+    # from. Without this the upload fails with "no_token".
+    settings = app.state.settings
+    stores = get_default_stores()
+    bundle = stores.get_token(conversation_id) if conversation_id else None
+    smart_access_token: str = bundle.access_token if bundle else ""
+    if not smart_access_token and copilot_session:
+        try:
+            gateway: SessionGateway = app.state.session_gateway
+            fresh = await _resolve_fresh_standalone_bundle(
+                copilot_session, gateway, settings
+            )
+        except RuntimeError as exc:
+            _log.warning("upload: standalone token refresh failed: %s", exc)
+            fresh = None
+        if fresh is not None:
+            smart_access_token = fresh.access_token
+
+    set_active_smart_token(smart_access_token or None)
 
     document_client = _resolve_upload_document_client(app)
     filename = file.filename or "upload.bin"

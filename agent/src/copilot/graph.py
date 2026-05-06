@@ -385,7 +385,8 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         checkpointer = build_memory_checkpointer()
 
     async def classifier_node(state: CoPilotState) -> Command:
-        user_messages = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
+        all_messages = state.get("messages", [])
+        user_messages = [m for m in all_messages if isinstance(m, HumanMessage)]
         if not user_messages:
             return Command(
                 goto="agent",
@@ -394,12 +395,28 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         latest = user_messages[-1].content
         latest = latest if isinstance(latest, str) else str(latest)
 
+        # The upload endpoint injects a ``[system] Document uploaded: …``
+        # sentinel as a SystemMessage so the classifier prompt can route
+        # to W-DOC (prompts.py:55). Surface the most-recent such sentinel
+        # alongside the user's text so the classifier sees the context.
+        upload_sentinel: str | None = None
+        for msg in reversed(all_messages):
+            if isinstance(msg, SystemMessage):
+                content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                if content.startswith("[system] Document uploaded:"):
+                    upload_sentinel = content
+                    break
+
+        classifier_input = (
+            f"{upload_sentinel}\n\n{latest}" if upload_sentinel else latest
+        )
+
         patient_id = state.get("patient_id")
         focus_pid = state.get("focus_pid")
 
         try:
             decision = await classifier_model.ainvoke(
-                [SystemMessage(content=CLASSIFIER_SYSTEM), HumanMessage(content=latest)]
+                [SystemMessage(content=CLASSIFIER_SYSTEM), HumanMessage(content=classifier_input)]
             )
         except Exception as exc:  # noqa: BLE001 — classifier failure must not crash the turn
             _log.warning(
@@ -419,7 +436,16 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             )
             return Command(
                 goto=fallback,
-                update={"workflow_id": "unclear", "classifier_confidence": 0.0},
+                update={
+                    "workflow_id": "unclear",
+                    "classifier_confidence": 0.0,
+                    # Reset per-turn supervisor state so the hard guard
+                    # in supervisor_node doesn't see iterations/refs
+                    # from prior turns and force-synthesize without
+                    # dispatching a worker (verifier then sees the
+                    # user's HumanMessage as last and refuses).
+                    "supervisor_iterations": 0,
+                },
             )
 
         workflow_id = decision.workflow_id
@@ -433,7 +459,13 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         )
         return Command(
             goto=goto,
-            update={"workflow_id": workflow_id, "classifier_confidence": confidence},
+            update={
+                "workflow_id": workflow_id,
+                "classifier_confidence": confidence,
+                # Reset per-turn supervisor state — see classifier
+                # failure path above for the rationale.
+                "supervisor_iterations": 0,
+            },
         )
 
     async def clarify_node(state: CoPilotState) -> dict[str, Any]:
