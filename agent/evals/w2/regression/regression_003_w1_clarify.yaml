@@ -1,0 +1,14 @@
+id: w2-regression-003
+category: regression_w1
+description: >
+  Week 1 clarify branch — agent asks for disambiguation rather than
+  guessing. No clinical claim is asserted, so citation_present should
+  not over-fire.
+fixture_response: |
+  Could you tell me which Hayes you mean — the one born in 1965 or the one born in 1972? Let me know and I'll brief.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

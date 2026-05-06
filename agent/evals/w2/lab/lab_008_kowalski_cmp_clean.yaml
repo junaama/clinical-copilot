@@ -1,0 +1,16 @@
+id: w2-lab-008
+category: lab_extraction
+description: >
+  Kowalski CMP — clean extraction with cited values. Positive sample for
+  every rubric, exercises the multi-row CMP shape (5 results) so the gate
+  is not biased toward 4-row lipid panels.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_kowalski_cmp.json
+fixture_response: |
+  Kowalski's CMP from 2026-04-20 shows potassium 5.2 mmol/L <cite ref="DocumentReference/lab-kowalski-cmp" page="1" field="results[1]" value="5.2"/> and creatinine 1.8 mg/dL <cite ref="DocumentReference/lab-kowalski-cmp" page="1" field="results[2]" value="1.8"/>, both elevated. BUN 32 mg/dL <cite ref="DocumentReference/lab-kowalski-cmp" page="1" field="results[3]" value="32"/> is also high.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

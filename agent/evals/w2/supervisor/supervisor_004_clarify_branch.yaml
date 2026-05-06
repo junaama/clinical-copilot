@@ -1,0 +1,14 @@
+id: w2-supervisor-004
+category: supervisor_routing
+description: >
+  Ambiguous request — supervisor returns ``clarify`` action. Response is
+  a clarifying question, no clinical claim. Tests that the citation
+  rubric is not over-eager.
+fixture_response: |
+  Could you tell me whether you want me to extract the document or ground a recommendation against the guidelines? Let me know which path to take.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

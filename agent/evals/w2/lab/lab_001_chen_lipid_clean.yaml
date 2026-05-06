@@ -1,0 +1,16 @@
+id: w2-lab-001
+category: lab_extraction
+description: >
+  Chen lipid panel — clean extraction with cited values. Positive sample
+  for every rubric: schema_valid against LabExtraction, citation_present
+  on every claim, factually_consistent against the source extraction.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_chen_lipid.json
+fixture_response: |
+  Chen's most recent lipid panel from 2026-04-15 shows total cholesterol 220 mg/dL <cite ref="DocumentReference/lab-chen-lipid" page="1" field="results[0]" value="220"/>, LDL 140 mg/dL <cite ref="DocumentReference/lab-chen-lipid" page="1" field="results[1]" value="140"/>, and triglycerides 180 mg/dL <cite ref="DocumentReference/lab-chen-lipid" page="1" field="results[3]" value="180"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

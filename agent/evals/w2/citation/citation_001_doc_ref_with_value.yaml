@@ -1,0 +1,15 @@
+id: w2-citation-001
+category: citation_contract
+description: >
+  Document-extraction citation carries field + literal value. Positive
+  sample — factually_consistent matches the value to the source row.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_chen_lipid.json
+fixture_response: |
+  HDL 55 mg/dL <cite ref="DocumentReference/lab-chen-lipid" page="1" field="results[2]" value="55"/> is normal.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

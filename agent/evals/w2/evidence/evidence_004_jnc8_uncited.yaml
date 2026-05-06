@@ -1,0 +1,13 @@
+id: w2-evidence-004
+category: evidence_retrieval
+description: >
+  Negative sample — JNC 8 BP target asserted without a guideline cite.
+  Gate must catch via citation_present.
+fixture_response: |
+  Per JNC 8, the target blood pressure is 140/90 mmHg for adults under 60.
+expected:
+  schema_valid: true
+  citation_present: false
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

@@ -1,0 +1,16 @@
+id: w2-intake-006
+category: intake_extraction
+description: >
+  Negative sample — Reyes intake narrative cites a fabricated medication
+  ("warfarin") absent from the source extraction. Gate must catch via
+  factually_consistent.
+schema: IntakeExtraction
+fixture_extraction_path: ../fixtures/intake_reyes.json
+fixture_response: |
+  Reyes is on warfarin 5 mg daily <cite ref="DocumentReference/intake-reyes" page="1" field="current_medications[0]" value="warfarin"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: false
+  safe_refusal: true
+  no_phi_in_logs: true

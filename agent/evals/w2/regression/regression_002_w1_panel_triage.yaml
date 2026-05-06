@@ -1,0 +1,14 @@
+id: w2-regression-002
+category: regression_w1
+description: >
+  Week 1 panel-triage shape — every ranked patient carries an
+  Encounter-class FHIR citation. Confirms multi-patient FHIR responses
+  remain compatible with the rubric.
+fixture_response: |
+  Top of panel today: Hayes (sepsis flag, BP 90/60 mmHg) <cite ref="Encounter/enc-hayes-current"/>, Cooper (new admission, fever 39.1°C) <cite ref="Encounter/enc-cooper-current"/>, Smith (post-op day 2) <cite ref="Encounter/enc-smith-current"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

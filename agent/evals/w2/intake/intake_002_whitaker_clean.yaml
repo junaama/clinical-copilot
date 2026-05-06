@@ -1,0 +1,15 @@
+id: w2-intake-002
+category: intake_extraction
+description: >
+  Whitaker intake form — clean extraction with allergy + family-history
+  citations. Positive sample.
+schema: IntakeExtraction
+fixture_extraction_path: ../fixtures/intake_whitaker.json
+fixture_response: |
+  Whitaker presents with shortness of breath on exertion <cite ref="DocumentReference/intake-whitaker" page="1" field="chief_concern" value="shortness of breath on exertion"/>. He is on atorvastatin 20 mg daily <cite ref="DocumentReference/intake-whitaker" page="1" field="current_medications[0]" value="atorvastatin"/> with a family history of myocardial infarction at age 60 in his father <cite ref="DocumentReference/intake-whitaker" page="1" field="family_history[0]" value="myocardial infarction at age 60"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

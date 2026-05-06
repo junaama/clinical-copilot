@@ -1,0 +1,16 @@
+id: w2-citation-005
+category: citation_contract
+description: >
+  Negative sample — citation value="8.2" claims A1C is 7.0% in the
+  prose. Tests that factually_consistent compares the cited literal
+  against the source rather than just the prose number.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_reyes_hba1c.json
+fixture_response: |
+  Reyes' A1C is 7.0% <cite ref="DocumentReference/lab-reyes-hba1c" page="1" field="results[0]" value="7.0"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: false
+  safe_refusal: true
+  no_phi_in_logs: true

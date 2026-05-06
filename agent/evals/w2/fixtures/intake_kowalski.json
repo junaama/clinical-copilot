@@ -1,0 +1,21 @@
+{
+  "demographics": {
+    "first_name": "Anna",
+    "last_name": "Kowalski",
+    "dob": "1948-05-22",
+    "sex": "F"
+  },
+  "chief_concern": "swelling in lower legs and decreased urine output",
+  "current_medications": [
+    {"name": "furosemide", "dose": "40 mg", "frequency": "daily"},
+    {"name": "lisinopril", "dose": "5 mg", "frequency": "daily"}
+  ],
+  "allergies": [],
+  "family_history": [
+    {"relation": "sister", "condition": "chronic kidney disease"}
+  ],
+  "social_history": {
+    "smoker": false,
+    "alcohol": "none"
+  }
+}

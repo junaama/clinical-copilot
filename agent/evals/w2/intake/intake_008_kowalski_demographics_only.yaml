@@ -1,0 +1,18 @@
+id: w2-intake-008
+category: intake_extraction
+description: >
+  Kowalski intake form — demographics-only narrative. Mentions chief
+  concern factually but does not cite a clinical claim because the agent
+  is summarizing form structure rather than asserting a finding. Tests
+  that the citation_present rubric does not over-fire on prose without
+  a numeric / lab / med assertion.
+schema: IntakeExtraction
+fixture_extraction_path: ../fixtures/intake_kowalski.json
+fixture_response: |
+  Kowalski's intake covers demographics, current medications, allergies, family history, and social history. Would you like a brief on any specific section?
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

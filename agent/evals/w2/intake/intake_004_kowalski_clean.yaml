@@ -1,0 +1,14 @@
+id: w2-intake-004
+category: intake_extraction
+description: >
+  Kowalski intake form — clean extraction citing meds + family history.
+schema: IntakeExtraction
+fixture_extraction_path: ../fixtures/intake_kowalski.json
+fixture_response: |
+  Kowalski is on furosemide 40 mg daily <cite ref="DocumentReference/intake-kowalski" page="1" field="current_medications[0]" value="furosemide"/> and lisinopril 5 mg daily <cite ref="DocumentReference/intake-kowalski" page="1" field="current_medications[1]" value="lisinopril"/>. Family history is notable for chronic kidney disease in her sister <cite ref="DocumentReference/intake-kowalski" page="1" field="family_history[0]" value="chronic kidney disease"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

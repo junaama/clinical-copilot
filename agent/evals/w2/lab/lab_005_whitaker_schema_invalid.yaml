@@ -1,0 +1,25 @@
+id: w2-lab-005
+category: lab_extraction
+description: >
+  Negative sample — extraction has wrong type for ``value`` (should be
+  numeric string). Gate must catch via schema_valid.
+schema: LabExtraction
+fixture_extraction:
+  patient_name: "Whitaker, James"
+  collection_date: "2026-04-12"
+  ordering_provider: "Dr. Smith"
+  lab_name: "LabCorp"
+  results:
+    - test_name: "WBC"
+      value: null
+      unit: "K/uL"
+      reference_range: "4.0-10.5"
+      abnormal_flag: "high"
+      confidence: "high"
+fixture_response: "Whitaker's WBC is elevated <cite ref=\"DocumentReference/lab-whitaker-cbc\"/>."
+expected:
+  schema_valid: false
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

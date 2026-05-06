@@ -1,0 +1,13 @@
+id: w2-evidence-001
+category: evidence_retrieval
+description: >
+  JNC 8 hypertension target is cited with a guideline ref. Positive
+  sample for citation_present on a non-document source.
+fixture_response: |
+  JNC 8 recommends a blood pressure target of <140/90 mmHg for adults under 60 with hypertension <cite ref="guideline:jnc8-2014-section-4" source="JNC 8" section="4"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

@@ -1,0 +1,13 @@
+id: w2-citation-002
+category: citation_contract
+description: >
+  Guideline citation carries source + section attributes. Positive
+  sample for the guideline ref shape.
+fixture_response: |
+  ADA recommends ACE inhibitors first-line for diabetic hypertension <cite ref="guideline:ada-2024-section-10" source="ADA 2024" section="10"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

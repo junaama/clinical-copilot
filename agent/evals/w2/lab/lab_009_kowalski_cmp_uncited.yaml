@@ -1,0 +1,15 @@
+id: w2-lab-009
+category: lab_extraction
+description: >
+  Negative sample — Kowalski CMP narrative leaves the BUN claim uncited.
+  Gate must catch via citation_present.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_kowalski_cmp.json
+fixture_response: |
+  Kowalski's CMP from 2026-04-20 shows potassium 5.2 mmol/L <cite ref="DocumentReference/lab-kowalski-cmp" page="1" field="results[1]" value="5.2"/>. BUN 32 mg/dL is also high.
+expected:
+  schema_valid: true
+  citation_present: false
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

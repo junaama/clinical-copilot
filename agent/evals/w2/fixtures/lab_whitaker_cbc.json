@@ -1,0 +1,32 @@
+{
+  "patient_name": "Whitaker, James",
+  "collection_date": "2026-04-12",
+  "ordering_provider": "Dr. Smith",
+  "lab_name": "LabCorp",
+  "results": [
+    {
+      "test_name": "WBC",
+      "value": "11.2",
+      "unit": "K/uL",
+      "reference_range": "4.0-10.5",
+      "abnormal_flag": "high",
+      "confidence": "high"
+    },
+    {
+      "test_name": "Hemoglobin",
+      "value": "10.4",
+      "unit": "g/dL",
+      "reference_range": "13.5-17.5",
+      "abnormal_flag": "low",
+      "confidence": "high"
+    },
+    {
+      "test_name": "Platelets",
+      "value": "175",
+      "unit": "K/uL",
+      "reference_range": "150-400",
+      "abnormal_flag": "normal",
+      "confidence": "high"
+    }
+  ]
+}

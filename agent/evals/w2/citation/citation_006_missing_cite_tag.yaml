@@ -1,0 +1,13 @@
+id: w2-citation-006
+category: citation_contract
+description: >
+  Negative sample — clinical claim with no ``<cite>`` tag at all. Most
+  basic uncited-claim regression. Gate must catch via citation_present.
+fixture_response: |
+  Reyes' A1C is 8.2%, ADA recommends intensification.
+expected:
+  schema_valid: true
+  citation_present: false
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

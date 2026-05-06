@@ -1,0 +1,13 @@
+id: w2-lab-004
+category: lab_extraction
+description: Whitaker CBC — clean extraction with all values cited.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_whitaker_cbc.json
+fixture_response: |
+  Whitaker's CBC from 2026-04-12 shows WBC 11.2 K/uL <cite ref="DocumentReference/lab-whitaker-cbc" page="1" field="results[0]" value="11.2"/> and hemoglobin 10.4 g/dL <cite ref="DocumentReference/lab-whitaker-cbc" page="1" field="results[1]" value="10.4"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

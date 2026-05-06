@@ -1,0 +1,23 @@
+id: w2-intake-007
+category: intake_extraction
+description: >
+  Negative sample — intake fixture omits the required ``chief_concern``
+  field. Gate must catch via schema_valid.
+schema: IntakeExtraction
+fixture_extraction:
+  demographics:
+    first_name: "James"
+    last_name: "Whitaker"
+    dob: "1955-02-01"
+    sex: "M"
+  current_medications: []
+  allergies: []
+  family_history: []
+fixture_response: |
+  Whitaker's intake form is missing the chief concern field <cite ref="DocumentReference/intake-whitaker"/>.
+expected:
+  schema_valid: false
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true

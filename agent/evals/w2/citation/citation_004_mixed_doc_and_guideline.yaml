@@ -1,0 +1,15 @@
+id: w2-citation-004
+category: citation_contract
+description: >
+  Mixed citation paragraph: document ref + guideline ref in the same
+  sentence. Tests that the rubric accepts both shapes.
+schema: LabExtraction
+fixture_extraction_path: ../fixtures/lab_reyes_hba1c.json
+fixture_response: |
+  Reyes' A1C is 8.2% <cite ref="DocumentReference/lab-reyes-hba1c" page="1" field="results[0]" value="8.2"/>; ADA recommends intensification at this level <cite ref="guideline:ada-2024-section-9" source="ADA 2024" section="9"/>.
+expected:
+  schema_valid: true
+  citation_present: true
+  factually_consistent: true
+  safe_refusal: true
+  no_phi_in_logs: true
