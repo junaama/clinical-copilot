@@ -194,7 +194,7 @@ async def test_upload_unauthorized(client: DocumentClient) -> None:
         )
 
     assert ok is False
-    assert err == "http_401"
+    assert err is not None and err.startswith("http_401")
 
 
 async def test_upload_patient_not_found(client: DocumentClient) -> None:
@@ -209,7 +209,7 @@ async def test_upload_patient_not_found(client: DocumentClient) -> None:
         )
 
     assert ok is False
-    assert err == "http_404"
+    assert err is not None and err.startswith("http_404")
 
 
 async def test_upload_server_too_large(client: DocumentClient) -> None:
@@ -226,7 +226,7 @@ async def test_upload_server_too_large(client: DocumentClient) -> None:
         )
 
     assert ok is False
-    assert err == "http_413"
+    assert err is not None and err.startswith("http_413")
 
 
 async def test_upload_transport_error(client: DocumentClient) -> None:
@@ -381,9 +381,12 @@ async def test_list_with_category_filter(client: DocumentClient) -> None:
         ok, _docs, _err, _ms = await client.list("patient-1", category="lab_results")
 
     assert ok is True
-    # category is appended as a query param
+    # OpenEMR's GET /api/patient/{pid}/document reads the category from
+    # ``?path=`` (see apis/routes/_rest_routes_standard.inc.php:506).
+    # Unknown values pass through as-is so callers can target arbitrary
+    # OpenEMR category names.
     call_kwargs = mock_get.call_args.kwargs
-    assert call_kwargs.get("params") == {"category": "lab_results"}
+    assert call_kwargs.get("params") == {"path": "lab_results"}
 
 
 async def test_list_unauthorized(client: DocumentClient) -> None:

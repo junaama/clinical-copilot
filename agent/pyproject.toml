@@ -10,6 +10,9 @@ dependencies = [
     "langchain-openai>=0.2.0",
     "langchain-core>=0.3.0",
     "fastapi>=0.115.0",
+    # Required by FastAPI for multipart/form-data parsing — File()/UploadFile
+    # parameters depend on it (issue 011 POST /upload endpoint).
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.32.0",
     "httpx>=0.27.0",
     "pydantic>=2.9.0",
@@ -25,12 +28,24 @@ dependencies = [
     # AES-GCM for token-bundle encryption at rest (issue 009). Required
     # at agent backend startup whenever CHECKPOINTER_DSN is set.
     "cryptography>=43.0.0",
+    # PyMuPDF: PDF text extraction with word-level geometry, used by the
+    # bbox matcher (issue 005) to locate VLM-extracted values inside the
+    # source PDF.
+    "pymupdf>=1.24.0",
 ]
 
 [project.optional-dependencies]
 postgres = [
     "langgraph-checkpoint-postgres>=2.0.0",
     "psycopg[binary,pool]>=3.2.0",
+]
+# Hybrid retrieval over the clinical guideline corpus (issues 007 + 008).
+# Kept in an extra so the base agent image stays slim; the deploy issue
+# (012) wires this in alongside COHERE_API_KEY. Requires the ``postgres``
+# extra to actually run (pgvector pushes vectors over psycopg).
+retrieval = [
+    "pgvector>=0.3.5",
+    "cohere>=5.13.0",
 ]
 dev = [
     "pytest>=8.3.0",
@@ -71,4 +86,9 @@ markers = [
     "golden: golden tier eval cases (nightly + on-demand)",
     "adversarial: adversarial tier eval cases (pre-release, weekly)",
     "drift: drift tier eval cases (on every model bump)",
+    "live: end-to-end tests that hit real LLM / Cohere / VLM / OpenEMR. Costs real money per run (~$0.05–$0.20). Opt-in via `pytest -m live`. Skipped by default and by the pre-push gate.",
 ]
+# ``live`` tests are opt-in — they need real API keys and run for tens of
+# seconds. Default discovery excludes them so the unit + graph-integration
+# layers stay sub-second.
+addopts = "-m 'not live'"
