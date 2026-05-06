@@ -52,10 +52,15 @@ fi
 
 # Files that should trigger the gate. Anything under these paths means
 # agent behavior or eval data changed.
+#
+# ``^agent/tests/`` is included to fire the graph-integration suite
+# (issue 021) on test-only edits — the unit-level w2_runner cannot catch
+# graph-wiring regressions and the integration tests are the canonical
+# layer for them.
 TRIGGER_PATTERNS=(
     "^agent/src/"
     "^agent/evals/"
-    "^agent/tests/test_w2"
+    "^agent/tests/"
     "^data/guidelines/"
     "^\.eval_baseline\.json$"
 )
@@ -79,10 +84,7 @@ fi
 
 echo "[w2-eval-gate] running fixture eval gate..."
 cd agent
-if uv run --quiet python -m copilot.eval.w2_baseline_cli check; then
-    echo "[w2-eval-gate] PASSED"
-    exit 0
-else
+if ! uv run --quiet python -m copilot.eval.w2_baseline_cli check; then
     echo "[w2-eval-gate] FAILED — push blocked. Re-run locally to debug:"
     echo "    cd agent && uv run python -m copilot.eval.w2_baseline_cli check"
     echo
@@ -90,3 +92,17 @@ else
     echo "rerun with --write to refresh .eval_baseline.json."
     exit 1
 fi
+
+# Issue 021 — graph integration tests. Sub-second; catch graph-wiring
+# regressions (worker contextvars, supervisor re-dispatch, classifier
+# upload sentinel, worker-on-ToolMessage) that the node-isolated
+# w2_runner cannot see.
+echo "[w2-eval-gate] running graph integration tests..."
+if ! uv run --quiet pytest -q tests/test_graph_integration.py; then
+    echo "[w2-eval-gate] FAILED — graph integration regression. Re-run locally:"
+    echo "    cd agent && uv run pytest -q tests/test_graph_integration.py"
+    exit 1
+fi
+
+echo "[w2-eval-gate] PASSED"
+exit 0
