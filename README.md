@@ -22,6 +22,39 @@ Week 2 extends the Week 1 agent with **document ingestion + VLM extraction**, **
 | **Dual write client** | `FhirClient.update_patient` for the one FHIR write that works on this build, plus `StandardApiClient` for document upload, allergy, medication, medical_problem. CareTeam gate enforced before any write. | [`agent/src/copilot/standard_api_client.py`](agent/src/copilot/standard_api_client.py) |
 | **W2 eval gate** | 50 fixture-based cases across 8 categories, scored on 5 boolean rubrics, gated by [`.eval_baseline.json`](.eval_baseline.json) with a >5% per-category regression threshold. Fires from a pre-push hook only when `agent/src/`, `agent/evals/`, or `data/guidelines/` change. Deterministic, no live VLM, sub-second wall time. | [`agent/src/copilot/eval/w2_*`](agent/src/copilot/eval/) |
 
+### Using the W2 capabilities
+
+Once logged in to the [live demo](https://copilot-agent-production-3776.up.railway.app/), the standalone surface exposes both W2 paths.
+
+#### Ask a guideline-grounded question (RAG)
+
+Type a clinical question in the chat. The classifier routes it to the `evidence_retriever` worker, which calls `retrieve_evidence` → Cohere embeds the query → Postgres hybrid search (`tsvector` BM25 + `pgvector` cosine, fused by RRF) → Cohere reranks → top-5 chunks fed to the synthesizer with `<cite ref="guideline:{chunk_id}" .../>` tags on every clinical claim.
+
+Example questions that map to the indexed corpus:
+
+| Ask | Pulls from |
+|---|---|
+| *"What does ADA recommend as an A1c target for a 65-year-old with T2D?"* | `ada-diabetes-glycemic-2024` |
+| *"Per JNC 8, what's the BP target for an adult with stage 2 hypertension?"* | `jnc8-hypertension-2014` |
+| *"When do KDIGO guidelines start ACE/ARB therapy in CKD?"* | `kdigo-ckd-2024` |
+| *"What's the threshold for diagnosing diabetes by fasting glucose?"* | `ada-diabetes-glycemic-2024` |
+| *"Per KDIGO, when should we screen for albuminuria in a diabetic patient?"* | `kdigo-ckd-2024` |
+
+Each clinical claim in the answer carries a `guideline:<chunk_id>` citation so you can trace it back to the source chunk. To add more guidelines, drop PDFs into `data/guidelines/` and re-run the indexer — the workflow is documented in [`data/guidelines/README.md`](data/guidelines/README.md).
+
+#### Upload a document (lab PDF or intake form)
+
+1. **Pick a patient.** Click a patient card in the panel on the left, or chat *"open Eduardo Perez"*. The agent's `resolve_patient` tool resolves the name to a FHIR `Patient/{id}` and arms the upload widget on the right with that `patient_id`. Until a patient is focused, the widget shows but the drop zone is disabled with the hint *"Select a patient to enable upload"*.
+2. **Drop a PDF / PNG / JPEG** (≤20 MB) into the upload widget, or click to file-pick. Pick the document type (lab PDF or intake form).
+3. **What happens next** — the agent:
+   - uploads the bytes to OpenEMR via `DocumentReference` (Standard API)
+   - runs Claude Sonnet 4 vision on each page against the right Pydantic schema (`LabExtraction` / `IntakeExtraction`)
+   - matches every extracted value to PyMuPDF OCR spans to compute per-field bounding boxes (no VLM-hallucinated coordinates)
+   - persists the structured extraction in `document_extractions` (citation row), and for intake forms also writes the demographics / allergy / medication / medical_problem records via Standard API
+   - injects a synthetic chat turn so the agent immediately summarizes what it just read with `<cite ref="DocumentReference/{id}" page="{n}" field="{path}" value="{literal}"/>` tags
+
+The 8 PDFs in [`example-documents/`](example-documents/) (Chen lipid panel, Whitaker CBC, Reyes A1c, Kowalski CMP, plus 4 intake forms) are the same fixtures the eval suite runs against, so behavior on these is well-tested.
+
 ### Week 2 eval results — 2026-05-06
 
 ```
