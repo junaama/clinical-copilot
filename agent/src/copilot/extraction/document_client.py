@@ -31,8 +31,8 @@ Defensive validation done before any HTTP call:
 
 from __future__ import annotations
 
-import hashlib
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -65,6 +65,9 @@ _DOC_TYPE_TO_CATEGORY_PATH: dict[str, str] = {
 # through.
 _HTTPX_RETRY_TRANSPORT = httpx.AsyncHTTPTransport(retries=3)
 
+_RECOVERY_WINDOW_SECONDS = 60.0
+UPLOAD_LANDED_ID_LOST = "upload_landed_id_lost"
+
 
 def _is_supported_document(file_data: bytes) -> bool:
     """Return True iff ``file_data`` starts with a PDF/PNG/JPEG magic-byte sequence."""
@@ -75,6 +78,88 @@ def _is_supported_document(file_data: bytes) -> bool:
     if file_data.startswith(_JPEG_MAGIC):
         return True
     return False
+
+
+def _is_bool_given_upload_serializer_failure(response: httpx.Response) -> bool:
+    body_text = response.text or ""
+    return (
+        response.status_code == 500
+        and "bool given" in body_text
+        and "getResponseForPayload" in body_text
+    )
+
+
+def _document_filename(document: dict[str, Any]) -> str:
+    raw = (
+        document.get("name")
+        or document.get("filename")
+        or document.get("document_name")
+        or document.get("file_name")
+        or ""
+    )
+    return str(raw)
+
+
+def _document_id(document: dict[str, Any]) -> str:
+    raw = (
+        document.get("id")
+        or document.get("document_id")
+        or document.get("uuid")
+        or document.get("pid")
+        or ""
+    )
+    return str(raw)
+
+
+def _parse_document_timestamp(document: dict[str, Any]) -> datetime | None:
+    raw = (
+        document.get("date")
+        or document.get("created_at")
+        or document.get("create_date")
+        or document.get("created")
+        or document.get("modified")
+        or document.get("updated_at")
+        or document.get("upload_date")
+    )
+    if raw is None:
+        return None
+    if isinstance(raw, int | float):
+        return datetime.fromtimestamp(float(raw), tz=UTC)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    value = raw.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _find_recent_filename_match(
+    documents: list[dict[str, Any]],
+    filename: str,
+    attempted_at: datetime,
+) -> str | None:
+    matches: list[tuple[datetime, str]] = []
+    attempted_at = attempted_at.astimezone(UTC)
+    for document in documents:
+        if _document_filename(document) != filename:
+            continue
+        doc_id = _document_id(document)
+        if not doc_id:
+            continue
+        timestamp = _parse_document_timestamp(document)
+        if timestamp is None:
+            continue
+        if abs((timestamp - attempted_at).total_seconds()) > _RECOVERY_WINDOW_SECONDS:
+            continue
+        matches.append((timestamp, doc_id))
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item[0], reverse=True)
+    return matches[0][1]
 
 
 class DocumentClient:
@@ -121,10 +206,13 @@ class DocumentClient:
         * ``invalid_file_type`` — magic bytes don't match PDF/PNG/JPEG
         * ``file_too_large``   — payload exceeds ``MAX_DOCUMENT_BYTES``
         * ``no_token``         — neither SMART context nor static token set
+        * ``upload_landed_id_lost`` — OpenEMR saved the file but the real id
+          could not be recovered from a same-category list call
         * ``http_<status>``    — server returned a non-2xx status
         * ``transport: <Exc>`` — httpx raised at the transport layer
         """
         started = time.monotonic()
+        attempted_at = datetime.now(UTC)
 
         if len(file_data) > MAX_DOCUMENT_BYTES:
             return False, None, "file_too_large", int((time.monotonic() - started) * 1000)
@@ -163,23 +251,21 @@ class DocumentClient:
             # ``RestControllerHelper::getResponseForPayload`` that
             # doesn't accept bool — even when the upload itself
             # succeeded (``Document::createDocument`` returned empty).
-            # Our fork has the fix (``is_bool($payload)`` on
-            # ``RestControllerHelper.php:554``) but the deployed image
-            # predates it. When the response body matches that exact
-            # signature we treat the call as success and synthesize a
-            # stable doc id so downstream code has something to cite.
-            if (
-                response.status_code == 500
-                and "bool given" in body_text
-                and "getResponseForPayload" in body_text
-            ):
-                synthetic_id = (
-                    "openemr-upload-"
-                    + hashlib.sha256(
-                        f"{patient_id}|{filename}|{started}".encode()
-                    ).hexdigest()[:16]
+            # When the response body matches that exact signature, recover
+            # the real OpenEMR document id from a same-category list call.
+            if _is_bool_given_upload_serializer_failure(response):
+                ok, documents, _err, _list_latency = await self.list(
+                    patient_id, category=category
                 )
-                return True, synthetic_id, None, latency
+                recovered_id = (
+                    _find_recent_filename_match(documents, filename, attempted_at)
+                    if ok
+                    else None
+                )
+                total_latency = int((time.monotonic() - started) * 1000)
+                if recovered_id:
+                    return True, recovered_id, None, total_latency
+                return False, None, UPLOAD_LANDED_ID_LOST, total_latency
             # Surface a snippet of the response body so 500s aren't a
             # black box. Truncate to keep the audit log line bounded.
             snippet = body_text[:200].replace("\n", " ").strip()

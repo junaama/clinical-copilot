@@ -11,6 +11,7 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -74,6 +75,28 @@ async def test_upload_accepts_pdf(client: DocumentClient) -> None:
     assert ok is True
     assert doc_id == "doc-pdf"
     assert err is None
+
+
+async def test_upload_happy_path_does_not_list_for_recovery(
+    client: DocumentClient,
+) -> None:
+    response = httpx.Response(
+        201,
+        json={"id": "doc-direct"},
+        request=httpx.Request("POST", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=response),
+        patch.object(client._client, "get", new_callable=AsyncMock) as mock_get,
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "lab.pdf", "lab_pdf"
+        )
+
+    assert ok is True
+    assert doc_id == "doc-direct"
+    assert err is None
+    mock_get.assert_not_called()
 
 
 async def test_upload_accepts_png(client: DocumentClient) -> None:
@@ -217,6 +240,111 @@ async def test_upload_transport_error(client: DocumentClient) -> None:
 
     assert ok is False
     assert err == "transport: ConnectError"
+
+
+async def test_upload_recovers_id_after_bool_given_500_with_recent_filename_match(
+    client: DocumentClient,
+) -> None:
+    upload_response = httpx.Response(
+        500,
+        text=(
+            "TypeError: RestControllerHelper::getResponseForPayload(): "
+            "Argument #1 ($payload) must be of type array, bool given"
+        ),
+        request=httpx.Request("POST", "http://test/"),
+    )
+    stale = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
+    recent = datetime.now(UTC).isoformat()
+    list_response = httpx.Response(
+        200,
+        json=[
+            {"id": "old-doc", "name": "lab.pdf", "date": stale},
+            {"id": "wrong-file", "name": "other.pdf", "date": recent},
+            {"id": "real-doc-42", "name": "lab.pdf", "date": recent},
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(
+            client._client,
+            "get",
+            new_callable=AsyncMock,
+            return_value=list_response,
+        ) as mock_get,
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "lab.pdf", "lab_pdf"
+        )
+
+    assert ok is True
+    assert doc_id == "real-doc-42"
+    assert err is None
+    call_kwargs = mock_get.call_args.kwargs
+    assert call_kwargs.get("params") == {"path": "Lab Report"}
+
+
+async def test_upload_bool_given_500_returns_stable_error_when_recovery_list_5xx(
+    client: DocumentClient,
+) -> None:
+    upload_response = httpx.Response(
+        500,
+        text="bool given in getResponseForPayload",
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        503,
+        text="unavailable",
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "lab.pdf", "lab_pdf"
+        )
+
+    assert ok is False
+    assert doc_id is None
+    assert err == "upload_landed_id_lost"
+
+
+async def test_upload_bool_given_500_returns_stable_error_when_no_recent_match(
+    client: DocumentClient,
+) -> None:
+    upload_response = httpx.Response(
+        500,
+        text="bool given in getResponseForPayload",
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        200,
+        json=[
+            {
+                "id": "too-old",
+                "name": "lab.pdf",
+                "date": (datetime.now(UTC) - timedelta(minutes=5)).isoformat(),
+            },
+            {
+                "id": "wrong-name",
+                "name": "other.pdf",
+                "date": datetime.now(UTC).isoformat(),
+            },
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "lab.pdf", "lab_pdf"
+        )
+
+    assert ok is False
+    assert doc_id is None
+    assert err == "upload_landed_id_lost"
 
 
 # ---------------------------------------------------------------------------

@@ -52,7 +52,7 @@ from .conversations import (
     InMemoryConversationStore,
     open_conversation_store,
 )
-from .extraction.document_client import DocumentClient
+from .extraction.document_client import UPLOAD_LANDED_ID_LOST, DocumentClient
 from .extraction.schemas import IntakeExtraction, LabExtraction
 from .extraction.vlm import extract_document as _vlm_extract_document
 from .fhir import FhirClient
@@ -870,11 +870,14 @@ async def panel(
         bundle = await _resolve_fresh_standalone_bundle(
             copilot_session, gateway, settings
         )
-    except RuntimeError:
+    except RuntimeError as exc:
         # Refresh failure (revoked refresh token, etc.). Surface as 401 so
         # the UI prompts re-login rather than silently returning an empty
         # panel that looks like "you're on no care team."
-        raise HTTPException(status_code=401, detail="session token refresh failed")
+        raise HTTPException(
+            status_code=401,
+            detail="session token refresh failed",
+        ) from exc
 
     _, practitioner_id = parse_fhir_user(session.fhir_user)
     gate = CareTeamGate(
@@ -1228,6 +1231,14 @@ async def upload(
         doc_type,
     )
     if not ok or not document_id:
+        if err == UPLOAD_LANDED_ID_LOST:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "upload landed but the document id couldn't be confirmed; "
+                    "please re-attach"
+                ),
+            )
         raise HTTPException(
             status_code=502,
             detail=f"upload_failed: {err or 'unknown'}",

@@ -331,6 +331,28 @@ def test_upload_propagates_document_client_failure(upload_client: TestClient) ->
     assert "openemr_unauthorized" in response.json()["detail"]
 
 
+def test_upload_maps_landed_id_lost_to_reattach_message(
+    upload_client: TestClient,
+) -> None:
+    """A landed upload with no confirmed id tells the clinician to re-attach."""
+
+    stub: _StubDocumentClient = upload_client.stub_doc  # type: ignore[attr-defined]
+    stub.ok = False
+    stub.error = "upload_landed_id_lost"
+
+    response = upload_client.post(
+        "/upload",
+        files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4\n"), "application/pdf")},
+        data={"patient_id": "p-1", "doc_type": "lab_pdf"},
+    )
+
+    assert response.status_code == 502
+    detail = response.json()["detail"]
+    assert "upload landed" in detail
+    assert "document id couldn't be confirmed" in detail
+    assert "please re-attach" in detail
+
+
 def test_upload_propagates_extraction_failure(upload_client: TestClient) -> None:
     """When VLM extraction fails, the endpoint returns 502 with the error."""
 
