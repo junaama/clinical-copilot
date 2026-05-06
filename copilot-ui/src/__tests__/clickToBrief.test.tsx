@@ -105,7 +105,7 @@ describe('click-to-brief', () => {
     expect(body.message).toBe('Give me a brief on Robert Hayes.');
   });
 
-  it('hides the empty-state panel once a click triggers the first turn', async () => {
+  it('keeps the care-team sidebar visible after a click triggers the first turn', async () => {
     render(<App />);
 
     const row = await screen.findByRole('button', { name: /Hayes, Robert/i });
@@ -113,10 +113,10 @@ describe('click-to-brief', () => {
 
     await userEvent.click(row);
 
-    // Panel disappears as soon as the conversation has at least one turn.
-    await waitFor(() => {
-      expect(screen.queryByText(/Your patients/i)).not.toBeInTheDocument();
-    });
+    // Care-team panel lives in the right sidebar — it stays mounted so the
+    // clinician can switch patients mid-conversation.
+    await screen.findByText(/Give me a brief on Robert Hayes\./);
+    expect(screen.getByText(/Your patients/i)).toBeInTheDocument();
   });
 
   it('fires /chat exactly once per click (id-dedupe in AgentPanel)', async () => {

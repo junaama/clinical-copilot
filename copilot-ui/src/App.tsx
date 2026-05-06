@@ -315,9 +315,6 @@ function StandaloneApp(): JSX.Element {
           onCreate={handleCreateConversation}
         />
         <div className="standalone-main">
-          {messages.length === 0 && pendingMessage === null ? (
-            <PanelView onPatientClick={handlePatientClickWithFocus} />
-          ) : null}
           <AgentPanel
             open={true}
             surface="panel"
@@ -351,21 +348,13 @@ function StandaloneApp(): JSX.Element {
               />
             }
           />
+          <ExtractionResultsPanel
+            extraction={extraction}
+            onDismiss={() => setExtraction(null)}
+          />
         </div>
-        <aside className="standalone-aside" aria-label="extraction results">
-          <header className="standalone-aside__header">
-            <h2 className="standalone-aside__title">Extracted</h2>
-          </header>
-          {extraction ? (
-            <ExtractionResultsPanel
-              extraction={extraction}
-              onDismiss={() => setExtraction(null)}
-            />
-          ) : (
-            <p className="standalone-aside__empty">
-              Upload a lab PDF or intake form to see extracted values here.
-            </p>
-          )}
+        <aside className="standalone-aside" aria-label="care team panel">
+          <PanelView onPatientClick={handlePatientClickWithFocus} />
         </aside>
       </div>
     </AppShell>
