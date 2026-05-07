@@ -17,6 +17,13 @@ agent. Tracks the W2 PRD acceptance criteria for issue 012:
 > (`extra.cost_estimate_usd`, `extra.tool_sequence`, etc.) makes the
 > backfill mechanical.
 
+> **Operational measurement procedure.** The four-flow Langfuse smoke
+> that backfills this report's "actual numbers" section is documented
+> at `runbook/002-deployed-langfuse-measurement.md`. That runbook owns
+> demo account, fixture documents, prompts, trace-field checklist,
+> and the PHI safety check. This file owns the projection math and
+> rate table.
+
 ---
 
 ## 1. Observability surface (where the numbers come from)
