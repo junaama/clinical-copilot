@@ -119,3 +119,21 @@ def test_extract_refs_combines_all_three_types() -> None:
     )
     refs = _extract_refs(msg)
     assert set(refs) == {"Patient/p1", "DocumentReference/d1", "guideline:g1"}
+
+
+def test_extract_refs_drops_synthetic_upload_document_refs() -> None:
+    """Issue 026: synthetic ``openemr-upload-<hex>`` document ids are
+    legacy fallback identifiers (pre-issue-022) and are not real
+    OpenEMR DocumentReference resources. They must not enter
+    ``fetched_refs`` so the verifier cannot mistake a cite against one
+    for a real EHR document.
+    """
+    msg = ToolMessage(
+        content=(
+            '{"ok": true, "document_ref": "DocumentReference/openemr-upload-abc123"}'
+            ' {"document_ref": "DocumentReference/real-42"}'
+        ),
+        tool_call_id="t-synthetic",
+    )
+    refs = _extract_refs(msg)
+    assert refs == ["DocumentReference/real-42"]

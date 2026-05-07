@@ -283,6 +283,19 @@ _FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
 _DOCUMENT_REF_PATTERN = re.compile(r'"document_ref"\s*:\s*"([^"]+)"')
 _GUIDELINE_REF_PATTERN = re.compile(r'"guideline_ref"\s*:\s*"([^"]+)"')
 
+# Issue 026: legacy uploads under the bool-given OpenEMR 500 path used to
+# emit synthesized DocumentReference ids of the form
+# ``openemr-upload-<sha-hex>``. Issue 022 stopped producing them, but
+# checkpointer-stored state from earlier turns may still carry them in
+# tool-message payloads. They are not real OpenEMR DocumentReference
+# resources, so cited claims against them must not pass verification —
+# scrub them before they enter ``fetched_refs``.
+_SYNTHETIC_DOC_REF_PREFIX = "DocumentReference/openemr-upload-"
+
+
+def _is_synthetic_doc_ref(ref: str) -> bool:
+    return ref.startswith(_SYNTHETIC_DOC_REF_PREFIX)
+
 
 def _extract_refs_for_summary(messages: list) -> list[str]:
     """Best-effort: collect refs across every ToolMessage in ``messages``.
@@ -320,6 +333,10 @@ def _extract_refs(msg: ToolMessage) -> list[str]:
     content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
     refs: list[str] = []
     refs.extend(_FHIR_REF_PATTERN.findall(content))
-    refs.extend(_DOCUMENT_REF_PATTERN.findall(content))
+    refs.extend(
+        ref
+        for ref in _DOCUMENT_REF_PATTERN.findall(content)
+        if not _is_synthetic_doc_ref(ref)
+    )
     refs.extend(_GUIDELINE_REF_PATTERN.findall(content))
     return refs
