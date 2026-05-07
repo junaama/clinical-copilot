@@ -377,6 +377,99 @@ describe('AgentMsg route badge (issue 039)', () => {
   });
 });
 
+describe('AgentMsg guideline failure UI (issue 041)', () => {
+  // The backend produces a corpus-bound refusal whenever the guideline
+  // retrieval call failed or the synthesizer leaked internal markers
+  // (worker names, raw error tokens, HTTP statuses). The frontend
+  // contract: render that refusal cleanly with a refusal route badge,
+  // no source chips, and no leaked technical text.
+  const refusalLead =
+    "I couldn't reach the clinical guideline corpus this turn, " +
+    "so I won't offer a recommendation. The answer would not be " +
+    "grounded in retrieved guideline evidence. Please retry in a " +
+    "moment, or consult the guideline directly.";
+
+  const refusalBlock = {
+    kind: 'plain' as const,
+    lead: refusalLead,
+    citations: [] as readonly Citation[],
+    followups: [] as readonly string[],
+  };
+
+  type Citation = {
+    card: 'guideline';
+    label: string;
+    fhir_ref: string;
+  };
+
+  it('renders the refusal route badge for a failed guideline turn', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: refusalBlock,
+      streaming: false,
+      route: { kind: 'refusal', label: 'Cannot ground this answer' },
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const badge = screen.getByRole('status');
+    expect(badge).toHaveAttribute('data-route-kind', 'refusal');
+    expect(badge.textContent).toContain('Cannot ground this answer');
+  });
+
+  it('renders the corpus-bound lead and no Sources section', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: refusalBlock,
+      streaming: false,
+      route: { kind: 'refusal', label: 'Cannot ground this answer' },
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/clinical guideline corpus/)).toBeInTheDocument();
+    // No source chip section when there are zero citations.
+    expect(screen.queryByText('Sources')).not.toBeInTheDocument();
+  });
+
+  it('does not surface internal technical markers in any rendered text', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: refusalBlock,
+      streaming: false,
+      route: { kind: 'refusal', label: 'Cannot ground this answer' },
+    };
+    const { container } = render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const visible = container.textContent ?? '';
+    // Clinical answer must read in product language, not debug language.
+    expect(visible).not.toMatch(/no_active_user/);
+    expect(visible).not.toMatch(/retrieval_failed/);
+    expect(visible).not.toMatch(/evidence_retriever/);
+    expect(visible).not.toMatch(/HTTP 4\d\d/);
+    expect(visible).not.toMatch(/HTTP 5\d\d/);
+  });
+});
+
 describe('AgentErrorBubble', () => {
   it('renders an HTTP status and detail', () => {
     render(<AgentErrorBubble status={502} detail="upstream FHIR timeout" />);

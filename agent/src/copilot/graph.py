@@ -136,7 +136,33 @@ _CITE_PATTERN = re.compile(
 _FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
 _TOOL_ERROR_PATTERN = re.compile(r'"error"\s*:\s*"([^"]+)"')
 _TOOL_OK_PATTERN = re.compile(r'"ok"\s*:\s*(true|false)')
+_TOOL_OK_FALSE_PATTERN = re.compile(r'"ok"\s*:\s*false', re.IGNORECASE)
 _TOOL_STATUS_PATTERN = re.compile(r'"status"\s*:\s*"([^"]+)"')
+
+# Issue 041: internal-leak markers that must never reach the clinician on
+# a guideline failure. The verifier scans the final AIMessage on W-EVD
+# turns for these tokens and replaces the answer with a clean
+# corpus-bound refusal when any are present. Worker names, raw tool
+# error tokens, and HTTP-status fragments are debug surface — they
+# belong in traces, not in the chat. Stored lowercase so the scan can
+# fold-case the answer once.
+_GUIDELINE_INTERNAL_LEAK_MARKERS: tuple[str, ...] = (
+    "evidence_retriever",
+    "intake_extractor",
+    "retrieve_evidence",
+    "no_active_user",
+    "no_active_patient",
+    "retrieval_failed",
+    "tool_failure",
+    "http_404",
+    "http_401",
+    "http_403",
+    "http_500",
+    "http 401",
+    "http 403",
+    "http 404",
+    "http 500",
+)
 # Issue 030: cache-hit signal emitted by the extraction tool's cache-served
 # envelope (tools/extraction.py). Used by ``_cache_keys_from_tool_message``
 # to surface a per-turn ``cache_hits`` field on the /chat response so the
@@ -220,6 +246,41 @@ def _is_evidence_path(state: CoPilotState) -> bool:
     if (state.get("supervisor_action") or "") == "retrieve_evidence":
         return True
     return False
+
+
+def _evidence_retrieval_failed(state: CoPilotState) -> bool:
+    """True if a ``retrieve_evidence`` ToolMessage on this turn returned ``ok: false``.
+
+    Issue 041: a failed retrieval call (connection error, no active user,
+    empty query, etc.) means the corpus genuinely could not be consulted.
+    Any clinical answer downstream of that — including the LLM's own
+    paraphrase of the failure — must be replaced with a clean
+    corpus-bound refusal so the clinician never sees a recommendation
+    grounded in nothing.
+    """
+    for msg in state.get("messages", []) or []:
+        if not isinstance(msg, ToolMessage):
+            continue
+        if (msg.name or "") != "retrieve_evidence":
+            continue
+        content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+        if _TOOL_OK_FALSE_PATTERN.search(content):
+            return True
+    return False
+
+
+def _has_internal_leak(text: str) -> bool:
+    """True if ``text`` contains any marker that should never reach the clinician.
+
+    Issue 041 acceptance: "Raw internal messages such as missing active
+    user context, worker names, or HTTP statuses are hidden from the
+    main answer." The verifier uses this to decide whether to rewrite
+    the W-EVD path's final AIMessage.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    return any(marker in lowered for marker in _GUIDELINE_INTERNAL_LEAK_MARKERS)
 
 
 def _is_document_path(state: CoPilotState) -> bool:
@@ -758,6 +819,38 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         # id forward via the checkpointer.
         fetched = _scrub_synthetic_doc_refs(set(state.get("fetched_refs") or []))
         unresolved = [c for c in citations if c not in fetched]
+
+        # Issue 041: fail-closed when guideline retrieval itself failed
+        # OR when the synthesizer leaked internal markers (worker names,
+        # raw error tokens, HTTP statuses) into the user-facing answer.
+        # Either condition makes the corpus-bound contract impossible to
+        # honor honestly, so we replace the answer with a clean
+        # limitation message regardless of what the LLM wrote.
+        if _is_evidence_path(state) and (
+            _evidence_retrieval_failed(state) or _has_internal_leak(text)
+        ):
+            refusal_text = (
+                "I couldn't reach the clinical guideline corpus this turn, "
+                "so I won't offer a recommendation. The answer would not "
+                "be grounded in retrieved guideline evidence. Please retry "
+                "in a moment, or consult the guideline directly."
+            )
+            refusal = AIMessage(content=refusal_text)
+            refusal_block = refusal_plain_block(refusal_text)
+            _audit(
+                state,
+                settings,
+                decision="refused_unsourced",
+                escalation_reason="evidence_retrieval_failed",
+            )
+            return Command(
+                goto=END,
+                update={
+                    "messages": [refusal],
+                    "decision": "refused_unsourced",
+                    "block": refusal_block.model_dump(by_alias=True),
+                },
+            )
 
         # Issue 028: fail-closed for W-EVD answers that assert clinical
         # recommendations without a ratified guideline citation. We check

@@ -278,15 +278,22 @@ async def _run_worker(
     if last_ai_message is not None:
         final = last_ai_message
     elif sub_messages:
+        # Issue 041: never leak the worker name into user-facing text. The
+        # fallback synthesis is a placeholder shown to the clinician when
+        # the inner agent stopped without emitting an AIMessage; word it
+        # in product language and let the verifier reason about provenance
+        # via fetched_refs / citations rather than worker identity.
         ref_summary = ", ".join(_extract_refs_for_summary(sub_messages)) or "no refs"
         final = AIMessage(
             content=(
-                f"{from_node} retrieved {len(sub_messages)} sub-message(s) "
-                f"but did not emit a synthesis. Refs collected: {ref_summary}."
+                f"I gathered source material for this question but did not "
+                f"finish the synthesis. Refs collected: {ref_summary}."
             )
         )
     else:
-        final = AIMessage(content=f"{from_node} produced no output.")
+        final = AIMessage(
+            content="I could not produce an answer for this question."
+        )
 
     # Worker → supervisor handoff event so the audit log shows the round
     # trip even when the supervisor would re-dispatch.
