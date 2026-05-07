@@ -36,13 +36,25 @@ export function ExtractionResultsPanel(
 ): JSX.Element | null {
   const { extraction, onDismiss } = props;
   if (extraction === null) return null;
+  // Issue 025: a non-ok canonical outcome must never render as an empty
+  // successful extraction. The app shell already gates ``setExtraction``
+  // on ``status === 'ok'``; this is defense-in-depth so a stale or
+  // out-of-band failure outcome can't paint over a real one.
+  if (extraction.status !== 'ok' || extraction.discussable !== true) {
+    return null;
+  }
+  // The panel layout is keyed off the *effective* type — what the
+  // extractor actually produced — not the requested type. Falls back to
+  // ``doc_type`` for older fixtures.
+  const effectiveType: import('../api/extraction').DocType =
+    extraction.effective_type ?? extraction.doc_type;
 
   return (
     <aside className="extraction-panel" aria-label="extraction results">
       <header className="extraction-panel__header">
         <div>
           <h3 className="extraction-panel__title">
-            {extraction.doc_type === 'lab_pdf' ? 'Lab results' : 'Intake form'}
+            {effectiveType === 'lab_pdf' ? 'Lab results' : 'Intake form'}
           </h3>
           <span className="extraction-panel__filename">
             {extraction.filename}
@@ -60,20 +72,20 @@ export function ExtractionResultsPanel(
         ) : null}
       </header>
 
-      {extraction.doc_type === 'lab_pdf' && extraction.lab ? (
+      {effectiveType === 'lab_pdf' && extraction.lab ? (
         <LabPanel lab={extraction.lab} />
       ) : null}
 
-      {extraction.doc_type === 'intake_form' && extraction.intake ? (
+      {effectiveType === 'intake_form' && extraction.intake ? (
         <IntakePanel intake={extraction.intake} />
       ) : null}
 
-      {extraction.doc_type === 'lab_pdf' && extraction.lab === null ? (
+      {effectiveType === 'lab_pdf' && extraction.lab === null ? (
         <p className="extraction-panel__empty">
           No lab values were extracted from this document.
         </p>
       ) : null}
-      {extraction.doc_type === 'intake_form' && extraction.intake === null ? (
+      {effectiveType === 'intake_form' && extraction.intake === null ? (
         <p className="extraction-panel__empty">
           No intake form fields were extracted from this document.
         </p>

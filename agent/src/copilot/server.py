@@ -1056,20 +1056,33 @@ _MAX_UPLOAD_BYTES: int = 20 * 1024 * 1024
 
 
 class UploadResponse(BaseModel):
-    """Wire shape returned by ``POST /upload``.
+    """Canonical wire shape returned by ``POST /upload`` (issue 025).
 
-    Mirrors copilot-ui/src/api/extraction.ts ``ExtractionResponse``: one of
-    ``lab`` or ``intake`` is populated according to ``doc_type``; the other
-    is ``None``. Both Pydantic extraction shapes are dumped via
-    ``model_dump(mode="json")`` so the field set on the wire is determined
-    by the schema, not by hand-maintained DTO mirroring.
+    Single shape covers success and partial-failure outcomes so the panel
+    and chat handoff can derive their behavior from one source of truth.
+    The ``status`` field is the discriminant; ``discussable`` summarizes
+    whether the agent should be invited to talk about the document.
+
+    On success: ``status=='ok'``, ``discussable==True``, ``lab`` xor
+    ``intake`` populated, ``document_id`` and ``document_reference`` set.
+
+    On partial failure (upload landed but post-steps failed):
+    ``status`` carries the failure stage, ``discussable==False``,
+    extraction payloads are ``None``, ``failure_reason`` carries a
+    user-safe message (no raw exception text).
     """
 
-    document_id: str
-    doc_type: str
+    status: str = "ok"
+    requested_type: str
+    effective_type: str | None = None
+    document_id: str | None = None
+    document_reference: str | None = None
+    doc_type: str  # legacy mirror of effective_type for existing clients
     filename: str
+    discussable: bool = False
     lab: dict[str, Any] | None = None
     intake: dict[str, Any] | None = None
+    failure_reason: str | None = None
 
 
 def _resolve_upload_document_client(req_app: FastAPI) -> Any:
@@ -1222,6 +1235,61 @@ async def _inject_upload_system_message(
 _TRUTHY_FORM_VALUES: frozenset[str] = frozenset({"true", "1", "yes", "on"})
 
 
+# User-safe failure messages — keep raw exception details (`err`, VLM error
+# strings, file paths) out of the wire and out of the UI per issue 025.
+_FAILURE_REASONS: dict[str, str] = {
+    "upload_failed": (
+        "We couldn't save the document to the chart. Please retry or "
+        "re-attach the file."
+    ),
+    "doc_ref_failed": (
+        "The upload landed but we couldn't confirm the document id. "
+        "Please re-attach the file."
+    ),
+    "extraction_failed": (
+        "We couldn't extract structured data from this document. "
+        "Please retry or check the file."
+    ),
+    "unauthorized": (
+        "You don't have access to this patient's chart. "
+        "Re-launch the Co-Pilot from a chart you're assigned to."
+    ),
+}
+
+
+def _make_failure_response(
+    *,
+    status: str,
+    requested_type: str,
+    filename: str,
+    document_id: str | None = None,
+) -> UploadResponse:
+    """Build a canonical failure ``UploadResponse`` per issue 025.
+
+    Always sets ``discussable=False``, leaves ``lab``/``intake`` ``None``,
+    and supplies a user-safe ``failure_reason`` from ``_FAILURE_REASONS``.
+    The endpoint returns this body with HTTP 200 so the client always
+    parses the same shape — ``status`` is the discriminant.
+    """
+
+    reference: str | None = (
+        f"DocumentReference/{document_id}" if document_id else None
+    )
+    return UploadResponse(
+        status=status,
+        requested_type=requested_type,
+        effective_type=None,
+        document_id=document_id,
+        document_reference=reference,
+        doc_type=requested_type,
+        filename=filename,
+        discussable=False,
+        lab=None,
+        intake=None,
+        failure_reason=_FAILURE_REASONS.get(status),
+    )
+
+
 @app.post("/upload", response_model=UploadResponse)
 async def upload(
     file: UploadFile = File(...),  # noqa: B008 - FastAPI dependency injection idiom
@@ -1332,17 +1400,24 @@ async def upload(
         doc_type,
     )
     if not ok or not document_id:
-        if err == UPLOAD_LANDED_ID_LOST:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "upload landed but the document id couldn't be confirmed; "
-                    "please re-attach"
-                ),
-            )
-        raise HTTPException(
-            status_code=502,
-            detail=f"upload_failed: {err or 'unknown'}",
+        # Two failure modes carry different user remediation:
+        #   - UPLOAD_LANDED_ID_LOST: bytes stored but id unrecoverable; ask
+        #     the clinician to re-attach so the duplicate is harmless.
+        #   - Anything else: the upload itself failed; retry/re-attach.
+        # Both surface as a canonical 200 + status response so the panel
+        # and chat handoff can read one shape (issue 025).
+        _log.warning(
+            "upload failed: doc_client_error=%s landed_id_lost=%s",
+            err,
+            err == UPLOAD_LANDED_ID_LOST,
+        )
+        failure_status = (
+            "doc_ref_failed" if err == UPLOAD_LANDED_ID_LOST else "upload_failed"
+        )
+        return _make_failure_response(
+            status=failure_status,
+            requested_type=doc_type,
+            filename=filename,
         )
 
     vlm_model = _resolve_upload_vlm_model(app)
@@ -1355,9 +1430,12 @@ async def upload(
         model=vlm_model,
     )
     if not result.ok or result.extraction is None:
-        raise HTTPException(
-            status_code=502,
-            detail=f"extraction_failed: {result.error or 'no extraction'}",
+        _log.warning("upload extraction failed: %s", result.error)
+        return _make_failure_response(
+            status="extraction_failed",
+            requested_type=doc_type,
+            filename=filename,
+            document_id=document_id,
         )
 
     await _persist_upload_extraction_cache(
@@ -1391,11 +1469,17 @@ async def upload(
         intake_payload = extraction_dump
 
     return UploadResponse(
+        status="ok",
+        requested_type=doc_type,
+        effective_type=doc_type,
         document_id=document_id,
+        document_reference=f"DocumentReference/{document_id}",
         doc_type=doc_type,
         filename=filename,
+        discussable=True,
         lab=lab_payload,
         intake=intake_payload,
+        failure_reason=None,
     )
 
 

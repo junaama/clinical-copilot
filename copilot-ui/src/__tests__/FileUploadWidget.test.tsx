@@ -12,7 +12,13 @@ function makeFile(opts: { name?: string; type?: string; size?: number }): File {
 }
 
 const SAMPLE_RESPONSE: ExtractionResponse = {
+  status: 'ok',
+  requested_type: 'lab_pdf',
+  effective_type: 'lab_pdf',
+  discussable: true,
+  failure_reason: null,
   document_id: 'doc-1',
+  document_reference: 'DocumentReference/doc-1',
   doc_type: 'lab_pdf',
   filename: 'labs.pdf',
   lab: null,
@@ -83,6 +89,49 @@ describe('FileUploadWidget', () => {
       await screen.findByText(/Only PDF, PNG, and JPEG/i),
     ).toBeInTheDocument();
     expect(uploadFn).not.toHaveBeenCalled();
+    expect(onUploaded).not.toHaveBeenCalled();
+  });
+
+  it('renders user-safe failure_reason for canonical-failure outcome (issue 025)', async () => {
+    const uploadFn = vi.fn().mockResolvedValue({
+      ok: 'failed',
+      status: 200,
+      outcome: {
+        status: 'extraction_failed',
+        requested_type: 'lab_pdf',
+        effective_type: null,
+        discussable: false,
+        failure_reason:
+          "We couldn't extract structured data from this document. Please retry or check the file.",
+        document_id: 'doc-x',
+        document_reference: 'DocumentReference/doc-x',
+        doc_type: 'lab_pdf',
+        filename: 'broken.pdf',
+        lab: null,
+        intake: null,
+      },
+    });
+    const onUploaded = vi.fn();
+
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="—"
+        onUploaded={onUploaded}
+        uploadFn={uploadFn}
+      />,
+    );
+
+    await userEvent.upload(
+      screen.getByLabelText('choose document') as HTMLInputElement,
+      makeFile({ name: 'broken.pdf' }),
+    );
+
+    const failBlock = await screen.findByTestId('upload-widget-outcome-failed');
+    expect(failBlock).toHaveTextContent(/couldn't extract structured data/i);
+    expect(failBlock.getAttribute('data-outcome-status')).toBe(
+      'extraction_failed',
+    );
     expect(onUploaded).not.toHaveBeenCalled();
   });
 

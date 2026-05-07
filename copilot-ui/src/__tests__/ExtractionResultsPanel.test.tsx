@@ -6,7 +6,13 @@ import type { ExtractionResponse } from '../api/extraction';
 
 function labFixture(): ExtractionResponse {
   return {
+    status: 'ok',
+    requested_type: 'lab_pdf',
+    effective_type: 'lab_pdf',
+    discussable: true,
+    failure_reason: null,
     document_id: 'doc-1',
+    document_reference: 'DocumentReference/doc-1',
     doc_type: 'lab_pdf',
     filename: 'cbc.pdf',
     intake: null,
@@ -47,7 +53,13 @@ function labFixture(): ExtractionResponse {
 
 function intakeFixture(): ExtractionResponse {
   return {
+    status: 'ok',
+    requested_type: 'intake_form',
+    effective_type: 'intake_form',
+    discussable: true,
+    failure_reason: null,
     document_id: 'doc-2',
+    document_reference: 'DocumentReference/doc-2',
     doc_type: 'intake_form',
     filename: 'intake.pdf',
     lab: null,
@@ -175,7 +187,13 @@ describe('ExtractionResultsPanel', () => {
 
   it('shows an empty-state when doc_type is intake_form but intake is null', () => {
     const fixture: ExtractionResponse = {
+      status: 'ok',
+      requested_type: 'intake_form',
+      effective_type: 'intake_form',
+      discussable: true,
+      failure_reason: null,
       document_id: 'doc-x',
+      document_reference: 'DocumentReference/doc-x',
       doc_type: 'intake_form',
       filename: 'broken.pdf',
       lab: null,
@@ -185,5 +203,25 @@ describe('ExtractionResultsPanel', () => {
     expect(
       screen.getByText(/No intake form fields were extracted/i),
     ).toBeInTheDocument();
+  });
+
+  it('renders nothing when the canonical status is not ok (issue 025)', () => {
+    const fixture: ExtractionResponse = {
+      status: 'extraction_failed',
+      requested_type: 'lab_pdf',
+      effective_type: null,
+      discussable: false,
+      failure_reason: "We couldn't extract structured data from this document.",
+      document_id: 'doc-broken',
+      document_reference: 'DocumentReference/doc-broken',
+      doc_type: 'lab_pdf',
+      filename: 'broken.pdf',
+      lab: null,
+      intake: null,
+    };
+    const { container } = render(
+      <ExtractionResultsPanel extraction={fixture} />,
+    );
+    expect(container.firstChild).toBeNull();
   });
 });

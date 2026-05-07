@@ -31,6 +31,7 @@ import { PanelView } from './components/PanelView';
 import type { PanelPatient } from './api/panel';
 import { fetchConversationMessages } from './api/conversations';
 import type { ExtractionResponse } from './api/extraction';
+import { planUploadHandoff } from './api/uploadHandoff';
 import { TweaksPanel } from './components/Tweaks/TweaksPanel';
 import { TweakButton, TweakColor, TweakRadio, TweakSection, TweakToggle } from './components/Tweaks/controls';
 import { useTweaks, type TweakValues } from './components/Tweaks/useTweaks';
@@ -277,16 +278,21 @@ function StandaloneApp(): JSX.Element {
 
   const handleUploaded = useCallback(
     (response: ExtractionResponse): void => {
-      setExtraction(response);
-      // Inject a synthetic user turn so the agent reads the just-uploaded
-      // document and answers in the chat. Backend stores the actual system
-      // message; this keeps the UX coherent (chat responds to upload).
+      // Issue 025: ``planUploadHandoff`` is the single decision point for
+      // whether a successful extraction renders in the panel *and* whether
+      // the agent gets a synthetic chat turn to discuss it. Any failed or
+      // partial outcome short-circuits both — the widget owns the failure
+      // UI, the panel stays empty, and the chat is never asked about a
+      // document that can't be read.
+      const plan = planUploadHandoff(response);
+      if (plan.kind === 'suppress') {
+        setExtraction(null);
+        return;
+      }
+      setExtraction(plan.extraction);
       setPendingMessage({
-        id: `upload-${response.document_id}-${Date.now().toString(36)}`,
-        text:
-          response.doc_type === 'lab_pdf'
-            ? `I just uploaded ${response.filename}. Walk me through what's notable.`
-            : `I just uploaded ${response.filename}. Summarize the intake form.`,
+        id: `upload-${response.document_id ?? 'unknown'}-${Date.now().toString(36)}`,
+        text: plan.promptText,
       });
     },
     [],
