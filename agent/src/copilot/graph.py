@@ -236,6 +236,20 @@ def _refs_from_tool_message(msg: ToolMessage) -> set[str]:
     return set(_FHIR_REF_PATTERN.findall(content))
 
 
+# Issue 026: synthetic ``openemr-upload-<hex>`` document ids are legacy
+# fallback identifiers (pre-issue-022) and are not real OpenEMR
+# DocumentReference resources. Even when they sit in ``fetched_refs`` from
+# prior-turn checkpointer state, the verifier must treat a citation
+# against one as unresolved so a stale synthetic id cannot pass the
+# citation gate as a real EHR document.
+_SYNTHETIC_DOC_REF_PREFIX = "DocumentReference/openemr-upload-"
+
+
+def _scrub_synthetic_doc_refs(fetched: set[str]) -> set[str]:
+    """Drop synthetic upload ids from a fetched-refs set."""
+    return {ref for ref in fetched if not ref.startswith(_SYNTHETIC_DOC_REF_PREFIX)}
+
+
 # Tool source labels that disambiguate Observation rows by FHIR category.
 # Used to feed the citation-card mapper so cited Observation refs land on
 # the right OpenEMR chart card.
@@ -695,7 +709,11 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
 
         text = last.content if isinstance(last.content, str) else str(last.content)
         citations = _extract_citations(text)
-        fetched = set(state.get("fetched_refs") or [])
+        # Issue 026: scrub legacy synthetic upload ids before computing
+        # unresolved. A cite against ``DocumentReference/openemr-upload-<hex>``
+        # never counts as fetched, even when prior-turn state carried the
+        # id forward via the checkpointer.
+        fetched = _scrub_synthetic_doc_refs(set(state.get("fetched_refs") or []))
         unresolved = [c for c in citations if c not in fetched]
 
         # Issue 028: fail-closed for W-EVD answers that assert clinical
