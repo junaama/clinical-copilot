@@ -48,9 +48,17 @@ def _stub_lifespan_deps(monkeypatch: pytest.MonkeyPatch) -> None:
 
         yield _StubStore()
 
+    @asynccontextmanager
+    async def _no_turn_store(_dsn):
+        class _StubStore:
+            pass
+
+        yield _StubStore()
+
     monkeypatch.setattr(server_mod, "open_checkpointer", _no_checkpointer)
     monkeypatch.setattr(server_mod, "open_session_store", _no_session_store)
     monkeypatch.setattr(server_mod, "open_conversation_store", _no_conv_store)
+    monkeypatch.setattr(server_mod, "open_conversation_turn_store", _no_turn_store)
     monkeypatch.setattr(server_mod, "build_graph", lambda *_a, **_kw: None)
     # Strip any pre-existing app state from a previous test.
     for attr in (
@@ -71,7 +79,9 @@ def test_lifespan_fails_when_dsn_set_but_encryption_key_missing(
     monkeypatch.setenv("USE_FIXTURE_FHIR", "true")
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.delenv("COPILOT_TOKEN_ENC_KEY", raising=False)
+    # Explicit empty string overrides a value pydantic-settings would
+    # otherwise pick up from a local ``.env`` file (process env > .env).
+    monkeypatch.setenv("COPILOT_TOKEN_ENC_KEY", "")
 
     _stub_lifespan_deps(monkeypatch)
 
@@ -147,7 +157,7 @@ def test_lifespan_does_not_require_key_in_memory_mode(
     encryption key is intentionally not required, so dev and fixture
     flows keep working without operator setup."""
     monkeypatch.delenv("CHECKPOINTER_DSN", raising=False)
-    monkeypatch.delenv("COPILOT_TOKEN_ENC_KEY", raising=False)
+    monkeypatch.setenv("COPILOT_TOKEN_ENC_KEY", "")
     monkeypatch.setenv("USE_FIXTURE_FHIR", "true")
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
