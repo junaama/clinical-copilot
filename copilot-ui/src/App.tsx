@@ -132,6 +132,12 @@ function StandaloneApp(): JSX.Element {
     readonly name: string;
   } | null>(null);
   const [extraction, setExtraction] = useState<ExtractionResponse | null>(null);
+  // Browser-local file kept in memory so the source-grounding tab can
+  // render a preview without a new backend download endpoint (issue 032).
+  // Cleared on conversation switch and on extraction dismiss.
+  const [extractionSourceFile, setExtractionSourceFile] = useState<File | null>(
+    null,
+  );
 
   // Bump the sidebar refresh token whenever messages grow — the sidebar
   // refetches its list and the new conversation appears with its title.
@@ -236,6 +242,7 @@ function StandaloneApp(): JSX.Element {
       setMessages([]);
       setFocusPatient(null);
       setExtraction(null);
+      setExtractionSourceFile(null);
       navigateToConversation(id);
     },
     [conversationId],
@@ -246,6 +253,7 @@ function StandaloneApp(): JSX.Element {
     setMessages([]);
     setFocusPatient(null);
     setExtraction(null);
+    setExtractionSourceFile(null);
     navigateToConversation(id);
   }, []);
 
@@ -271,13 +279,14 @@ function StandaloneApp(): JSX.Element {
         name: `${patient.given_name} ${patient.family_name}`,
       });
       setExtraction(null);
+      setExtractionSourceFile(null);
       handlePatientClick(patient);
     },
     [handlePatientClick],
   );
 
   const handleUploaded = useCallback(
-    (response: ExtractionResponse): void => {
+    (response: ExtractionResponse, file: File): void => {
       // Issue 025: ``planUploadHandoff`` is the single decision point for
       // whether a successful extraction renders in the panel *and* whether
       // the agent gets a synthetic chat turn to discuss it. Any failed or
@@ -287,9 +296,14 @@ function StandaloneApp(): JSX.Element {
       const plan = planUploadHandoff(response);
       if (plan.kind === 'suppress') {
         setExtraction(null);
+        setExtractionSourceFile(null);
         return;
       }
       setExtraction(plan.extraction);
+      // Issue 032: keep the original browser-local file in memory so the
+      // panel's Source tab can render a preview without round-tripping
+      // through OpenEMR's authenticated document-download surface.
+      setExtractionSourceFile(file);
       setPendingMessage({
         id: `upload-${response.document_id ?? 'unknown'}-${Date.now().toString(36)}`,
         text: plan.promptText,
@@ -357,7 +371,11 @@ function StandaloneApp(): JSX.Element {
           />
           <ExtractionResultsPanel
             extraction={extraction}
-            onDismiss={() => setExtraction(null)}
+            sourceFile={extractionSourceFile}
+            onDismiss={() => {
+              setExtraction(null);
+              setExtractionSourceFile(null);
+            }}
           />
         </div>
         <aside className="standalone-aside" aria-label="care team panel">

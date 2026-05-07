@@ -36,7 +36,12 @@ export interface FileUploadWidgetProps {
   readonly patientId: string;
   readonly patientName: string;
   readonly conversationId?: string;
-  readonly onUploaded: (extraction: ExtractionResponse) => void;
+  /**
+   * Called after a successful upload. The second arg is the browser-local
+   * ``File`` so the parent can carry it forward to the source-grounding
+   * UI (issue 032). Callers that don't need the file can ignore it.
+   */
+  readonly onUploaded: (extraction: ExtractionResponse, file: File) => void;
   /** Test seam — overrides the network call. */
   readonly uploadFn?: typeof uploadDocument;
 }
@@ -94,7 +99,7 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
       });
       if (result.ok === true) {
         setState({ kind: 'idle' });
-        onUploaded(result.response);
+        onUploaded(result.response, file);
         return;
       }
       if (result.ok === 'mismatch') {
