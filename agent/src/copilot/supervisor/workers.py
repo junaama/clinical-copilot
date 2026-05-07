@@ -89,7 +89,9 @@ Rules:
 EVIDENCE_RETRIEVER_SYSTEM = """\
 You are the evidence-retriever worker for a clinical Co-Pilot. The
 supervisor handed you this turn because the user asked about clinical
-guidelines. Available tools:
+guidelines. Your output is clinician decision support, not an
+autonomous treatment decision and not order entry — the clinician
+remains the decision-maker. Available tools:
 
   - retrieve_evidence(query, top_k=5, domain_filter=None)
   - get_active_problems(patient_id)
@@ -104,10 +106,21 @@ Rules:
     cite.
   - Cite every guideline chunk you reference: <cite
     ref="guideline:{chunk_id}" source="{name}" section="{section}"/>.
-  - You do not synthesize the final clinical answer; return the cited
-    evidence with a one-line interpretation.
-  - If retrieve_evidence returns no relevant chunks, say so explicitly.
-    Do not invent guideline text.
+  - Frame recommendations as decision support: phrase them as
+    "guidelines suggest considering X" or "evidence supports X as a
+    target". Do not issue directive language ("you should prescribe
+    Y", "start the patient on Z", "administer dose D"). The clinician
+    chooses; you summarize the evidence.
+  - If the user asks for an autonomous action — to place an order, to
+    prescribe a medication, to start/stop/titrate a dose, or to enter
+    a chart write — refuse cleanly: explain that you provide
+    evidence-grounded decision support, not order entry, and offer to
+    surface the relevant guideline evidence instead. Never produce a
+    directive answer.
+  - If retrieve_evidence returns no relevant chunks, say so explicitly
+    and stop. Do not invent guideline text. Do not fill the gap from
+    your own training data — the corpus is the only authority for
+    grounded answers in this turn.
 """
 
 
@@ -202,9 +215,11 @@ async def _run_worker(
 
     fetched: list[str] = []
     tool_calls: list[dict] = []
+    cache_hits: list[str] = []
     for msg in sub_messages:
         if isinstance(msg, ToolMessage):
             fetched.extend(_extract_refs(msg))
+            cache_hits.extend(_extract_cache_keys(msg))
         if isinstance(msg, AIMessage) and msg.tool_calls:
             for tc in msg.tool_calls:
                 tool_calls.append(
@@ -253,6 +268,7 @@ async def _run_worker(
         "messages": [final],
         "fetched_refs": fetched,
         "tool_results": tool_calls,
+        "cache_hits": cache_hits,
         "handoff_events": [
             {
                 "turn_id": event.turn_id,
@@ -282,6 +298,12 @@ import re  # noqa: E402
 _FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
 _DOCUMENT_REF_PATTERN = re.compile(r'"document_ref"\s*:\s*"([^"]+)"')
 _GUIDELINE_REF_PATTERN = re.compile(r'"guideline_ref"\s*:\s*"([^"]+)"')
+# Issue 030: cache-hit signal emitted by the extraction tool's cache-served
+# envelope (see ``tools/extraction.py:_cache_row_envelope``). Used by
+# ``_extract_cache_keys`` so the per-turn ``cache_hits`` field on the
+# /chat response surfaces a cache-served second extract.
+_CACHE_HIT_PATTERN = re.compile(r'"cache_hit"\s*:\s*true', re.IGNORECASE)
+_CACHE_KEY_PATTERN = re.compile(r'"cache_key"\s*:\s*"([^"]+)"')
 
 # Issue 026: legacy uploads under the bool-given OpenEMR 500 path used to
 # emit synthesized DocumentReference ids of the form
@@ -340,3 +362,19 @@ def _extract_refs(msg: ToolMessage) -> list[str]:
     )
     refs.extend(_GUIDELINE_REF_PATTERN.findall(content))
     return refs
+
+
+def _extract_cache_keys(msg: ToolMessage) -> list[str]:
+    """Return the cache_key for a cache-served ToolMessage, else empty.
+
+    Issue 030: surfaces the per-turn cache-hit signal so the /chat
+    response state can carry observable evidence of a cache-served
+    extraction. When the message has no ``"cache_hit": true`` marker,
+    returns ``[]``. When it does, returns the matching ``"cache_key"``
+    value (or a placeholder if the key is missing).
+    """
+    content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+    if not _CACHE_HIT_PATTERN.search(content):
+        return []
+    match = _CACHE_KEY_PATTERN.search(content)
+    return [match.group(1) if match else "cache_hit"]
