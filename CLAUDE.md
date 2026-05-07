@@ -94,6 +94,18 @@ VIRTUAL_ENV=$PWD/.venv uv pip install -e ".[dev]"
 Do not use `uv run pytest`, `uv sync`, `.venv/bin/pytest`, or
 `.venv/bin/pip` — see the runbook for why each one re-breaks the venv.
 
+### Deployed Langfuse measurement smoke
+
+For the Week 2 cost / latency report (`agentforge-docs/W2-COST-LATENCY-REPORT.md`),
+the operational measurement step is a manual smoke against the deployed
+agent that produces the four reference Langfuse traces (lab upload, intake
+upload, evidence retrieval, W1 brief regression). The procedure — including
+demo account, fixture documents, prompts, trace-field checklist, and PHI
+safety check — lives at
+[runbook/002-deployed-langfuse-measurement.md](runbook/002-deployed-langfuse-measurement.md).
+Run it manually before refreshing the cost/latency numbers; no production
+code change is required.
+
 ### Data providers: mark as `@codeCoverageIgnore`
 
 PHPUnit data provider methods execute *before* coverage instrumentation
