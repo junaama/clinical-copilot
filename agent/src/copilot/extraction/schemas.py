@@ -115,6 +115,46 @@ class FieldWithBBox(_StrictForbid):
     )
 
 
+class DrawableFieldBBox(_StrictForbid):
+    """``FieldWithBBox`` narrowed to records the source-overlay can draw.
+
+    Same shape as ``FieldWithBBox`` but ``bbox`` is non-null by construction.
+    The upload response uses this type so the frontend never has to branch
+    on ``bbox === null`` when rendering the source-grounding overlay —
+    records without geometry are filtered at the response boundary.
+    """
+
+    field_path: str = Field(min_length=1, description="Dotted path into the extraction object.")
+    extracted_value: str
+    matched_text: str
+    bbox: BoundingBox
+    match_confidence: float = Field(ge=0.0, le=1.0)
+
+
+def filter_drawable_bboxes(
+    bboxes: list[FieldWithBBox],
+) -> list[DrawableFieldBBox]:
+    """Keep only records the source-grounding overlay can actually draw.
+
+    The bbox matcher emits one ``FieldWithBBox`` per string-leaf in an
+    extraction; entries whose value the matcher could not locate in the
+    source carry ``bbox=None``. The upload endpoint filters those out so
+    the response only carries records the UI can render.
+    """
+
+    return [
+        DrawableFieldBBox(
+            field_path=b.field_path,
+            extracted_value=b.extracted_value,
+            matched_text=b.matched_text,
+            bbox=b.bbox,
+            match_confidence=b.match_confidence,
+        )
+        for b in bboxes
+        if b.bbox is not None
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Lab extraction
 # ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ function labFixture(): ExtractionResponse {
     doc_type: 'lab_pdf',
     filename: 'cbc.pdf',
     intake: null,
+    bboxes: [],
     lab: {
       patient_name: 'Eduardo Perez',
       collection_date: '2026-04-30',
@@ -63,6 +64,7 @@ function intakeFixture(): ExtractionResponse {
     doc_type: 'intake_form',
     filename: 'intake.pdf',
     lab: null,
+    bboxes: [],
     intake: {
       demographics: {
         name: 'Maria Chen',
@@ -198,6 +200,7 @@ describe('ExtractionResultsPanel', () => {
       filename: 'broken.pdf',
       lab: null,
       intake: null,
+      bboxes: [],
     };
     render(<ExtractionResultsPanel extraction={fixture} />);
     expect(
@@ -218,6 +221,7 @@ describe('ExtractionResultsPanel', () => {
       filename: 'broken.pdf',
       lab: null,
       intake: null,
+      bboxes: [],
     };
     const { container } = render(
       <ExtractionResultsPanel extraction={fixture} />,

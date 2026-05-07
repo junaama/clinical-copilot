@@ -25,6 +25,7 @@ from pydantic import ValidationError
 
 from copilot.extraction.schemas import (
     BoundingBox,
+    DrawableFieldBBox,
     EvidenceChunk,
     FamilyHistoryEntry,
     FieldWithBBox,
@@ -36,6 +37,7 @@ from copilot.extraction.schemas import (
     LabResult,
     SocialHistory,
     SourceCitation,
+    filter_drawable_bboxes,
 )
 
 # ---------------------------------------------------------------------------
@@ -572,3 +574,84 @@ def test_evidence_chunk_round_trip() -> None:
     ec = EvidenceChunk(**_valid_evidence_chunk_payload())
     again = EvidenceChunk.model_validate(ec.model_dump())
     assert again == ec
+
+
+# ---------------------------------------------------------------------------
+# DrawableFieldBBox + filter_drawable_bboxes (issue 031)
+# ---------------------------------------------------------------------------
+
+
+def _drawable_payload() -> dict[str, Any]:
+    return {
+        "field_path": "results[0].value",
+        "extracted_value": "7.4",
+        "matched_text": "7.4",
+        "bbox": {"page": 1, "x": 0.1, "y": 0.2, "width": 0.05, "height": 0.02},
+        "match_confidence": 0.95,
+    }
+
+
+def test_drawable_field_bbox_requires_non_null_bbox() -> None:
+    payload = _drawable_payload()
+    record = DrawableFieldBBox(**payload)
+    assert record.bbox.page == 1
+    assert 0.0 < record.bbox.width <= 1.0
+
+
+def test_drawable_field_bbox_rejects_null_bbox() -> None:
+    payload = _drawable_payload()
+    payload["bbox"] = None
+    with pytest.raises(ValidationError):
+        DrawableFieldBBox(**payload)
+
+
+def test_drawable_field_bbox_rejects_extra() -> None:
+    payload = _drawable_payload()
+    payload["unexpected"] = "x"
+    with pytest.raises(ValidationError):
+        DrawableFieldBBox(**payload)
+
+
+def test_filter_drawable_bboxes_keeps_only_records_with_geometry() -> None:
+    drawable = FieldWithBBox(
+        field_path="patient_name",
+        extracted_value="Eduardo Perez",
+        matched_text="Eduardo Perez",
+        bbox=BoundingBox(page=1, x=0.1, y=0.2, width=0.3, height=0.05),
+        match_confidence=0.98,
+    )
+    not_drawable = FieldWithBBox(
+        field_path="lab_name",
+        extracted_value="LabCorp",
+        matched_text="",
+        bbox=None,
+        match_confidence=0.0,
+    )
+    out = filter_drawable_bboxes([drawable, not_drawable])
+    assert len(out) == 1
+    assert out[0].field_path == "patient_name"
+    assert out[0].bbox.page == 1
+    # Every returned record carries the full set of fields the source-overlay
+    # contract calls for: field path, extracted value, matched text, geometry
+    # (with page), and a match confidence in [0, 1].
+    assert out[0].extracted_value == "Eduardo Perez"
+    assert out[0].matched_text == "Eduardo Perez"
+    assert 0.0 <= out[0].match_confidence <= 1.0
+
+
+def test_filter_drawable_bboxes_empty_input_is_empty() -> None:
+    assert filter_drawable_bboxes([]) == []
+
+
+def test_filter_drawable_bboxes_all_non_drawable_returns_empty() -> None:
+    not_drawable = [
+        FieldWithBBox(
+            field_path=f"x{i}",
+            extracted_value="v",
+            matched_text="",
+            bbox=None,
+            match_confidence=0.0,
+        )
+        for i in range(3)
+    ]
+    assert filter_drawable_bboxes(not_drawable) == []
