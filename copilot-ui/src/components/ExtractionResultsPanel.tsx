@@ -1,5 +1,6 @@
 /**
- * Extraction results panel (issue 011, source tabs issue 032).
+ * Extraction results panel (issue 011, source tabs issue 032, PDF viewer
+ * issue 033).
  *
  * Renders the structured output from POST /upload alongside the chat. The
  * panel exposes two tabs:
@@ -14,9 +15,10 @@
  *
  * The Source tab works directly off the browser-local ``File`` the parent
  * carried forward from the upload widget — no new backend download
- * endpoint is needed for the submission pass. PDFs are accepted but the
- * page-rendered preview is deferred to issue 033; this implementation
- * handles image uploads end-to-end.
+ * endpoint is needed. Image uploads render via an ``<img>`` element and
+ * a normalized-coordinate overlay; PDFs render via pdfjs-dist into a
+ * canvas, with the same normalized overlay model applied to the page
+ * the selected bbox lives on.
  *
  * Confidence badges:
  *   high   → green
@@ -28,7 +30,14 @@
  * the panel.
  */
 
-import { useEffect, useMemo, useState, type CSSProperties, type JSX } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type JSX,
+} from 'react';
 import type {
   AbnormalFlag,
   Confidence,
@@ -39,6 +48,7 @@ import type {
   LabResult,
   UploadBboxRecord,
 } from '../api/extraction';
+import { renderPdfPageToCanvas } from '../lib/pdfRenderer';
 
 export interface ExtractionResultsPanelProps {
   readonly extraction: ExtractionResponse | null;
@@ -624,6 +634,9 @@ function SourceTab({
   }
 
   const isImage = file.type.startsWith('image/');
+  const isPdf =
+    file.type === 'application/pdf' ||
+    file.name.toLowerCase().endsWith('.pdf');
 
   return (
     <div
@@ -632,25 +645,56 @@ function SourceTab({
       data-testid="source-tab-panel"
       className="extraction-panel__source"
     >
+      {isImage && objectUrl !== null ? (
+        <ImageStage
+          objectUrl={objectUrl}
+          pageBboxes={pageBboxes}
+          selectedFieldPath={selectedFieldPath}
+          visiblePage={visiblePage}
+          captionSuffix={
+            selectedBbox ? ` · highlighting ${selectedBbox.field_path}` : ''
+          }
+        />
+      ) : isPdf ? (
+        <PdfStage
+          file={file}
+          page={visiblePage}
+          pageBboxes={pageBboxes}
+          selectedFieldPath={selectedFieldPath}
+          selectedBbox={selectedBbox}
+        />
+      ) : (
+        <div className="extraction-panel__empty">
+          <p>This document type does not support a source preview yet.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ImageStageProps {
+  readonly objectUrl: string;
+  readonly pageBboxes: readonly UploadBboxRecord[];
+  readonly selectedFieldPath: string | null;
+  readonly visiblePage: number;
+  readonly captionSuffix: string;
+}
+
+function ImageStage({
+  objectUrl,
+  pageBboxes,
+  selectedFieldPath,
+  visiblePage,
+  captionSuffix,
+}: ImageStageProps): JSX.Element {
+  return (
+    <>
       <div className="extraction-panel__source-stage">
-        {isImage && objectUrl !== null ? (
-          <img
-            src={objectUrl}
-            alt="source preview"
-            className="extraction-panel__source-image"
-          />
-        ) : null}
-        {!isImage ? (
-          <div
-            className="extraction-panel__source-placeholder"
-            data-testid="source-pdf-placeholder"
-          >
-            <p>
-              PDF source viewer is being assembled — image previews are
-              available now and PDFs will join in a follow-up.
-            </p>
-          </div>
-        ) : null}
+        <img
+          src={objectUrl}
+          alt="source preview"
+          className="extraction-panel__source-image"
+        />
         <div
           className="extraction-panel__source-overlay"
           aria-hidden="true"
@@ -667,9 +711,98 @@ function SourceTab({
       </div>
       <p className="extraction-panel__source-caption">
         Page {visiblePage}
+        {captionSuffix}
+      </p>
+    </>
+  );
+}
+
+interface PdfStageProps {
+  readonly file: File;
+  readonly page: number;
+  readonly pageBboxes: readonly UploadBboxRecord[];
+  readonly selectedFieldPath: string | null;
+  readonly selectedBbox: UploadBboxRecord | null;
+}
+
+type PdfRenderState =
+  | { readonly kind: 'idle' }
+  | { readonly kind: 'rendering' }
+  | { readonly kind: 'ready'; readonly numPages: number; readonly renderedPage: number }
+  | { readonly kind: 'error' };
+
+function PdfStage({
+  file,
+  page,
+  pageBboxes,
+  selectedFieldPath,
+  selectedBbox,
+}: PdfStageProps): JSX.Element {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [state, setState] = useState<PdfRenderState>({ kind: 'idle' });
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas === null) return;
+    let cancelled = false;
+    setState({ kind: 'rendering' });
+    renderPdfPageToCanvas(file, page, canvas)
+      .then((result) => {
+        if (cancelled) return;
+        setState({
+          kind: 'ready',
+          numPages: result.numPages,
+          renderedPage: result.renderedPage,
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setState({ kind: 'error' });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [file, page]);
+
+  if (state.kind === 'error') {
+    return (
+      <div className="extraction-panel__empty">
+        <p>PDF preview unavailable — the file could not be rendered.</p>
+      </div>
+    );
+  }
+
+  const renderedPage = state.kind === 'ready' ? state.renderedPage : page;
+  const numPages = state.kind === 'ready' ? state.numPages : null;
+
+  return (
+    <>
+      <div className="extraction-panel__source-stage">
+        <canvas
+          ref={canvasRef}
+          data-testid="source-pdf-canvas"
+          className="extraction-panel__source-canvas"
+        />
+        <div
+          className="extraction-panel__source-overlay"
+          aria-hidden="true"
+          data-page={renderedPage}
+        >
+          {pageBboxes.map((record) => (
+            <BboxOverlay
+              key={record.field_path}
+              record={record}
+              selected={record.field_path === selectedFieldPath}
+            />
+          ))}
+        </div>
+      </div>
+      <p className="extraction-panel__source-caption">
+        Page {renderedPage}
+        {numPages !== null ? ` of ${numPages}` : ''}
         {selectedBbox ? ` · highlighting ${selectedBbox.field_path}` : ''}
       </p>
-    </div>
+    </>
   );
 }
 

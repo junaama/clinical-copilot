@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExtractionResultsPanel } from '../components/ExtractionResultsPanel';
@@ -6,6 +6,20 @@ import type {
   ExtractionResponse,
   UploadBboxRecord,
 } from '../api/extraction';
+
+// Mock the PDF renderer at the module boundary. The component contract
+// is "given a File, ask the renderer to paint page N onto a canvas, then
+// position the overlay accordingly." Real PDF rendering is exercised in
+// the build step; tests verify the component's plumbing only.
+vi.mock('../lib/pdfRenderer', () => ({
+  renderPdfPageToCanvas: vi.fn(async (_file, pageNumber: number) => ({
+    numPages: 3,
+    renderedPage: pageNumber,
+    width: 612,
+    height: 792,
+  })),
+}));
+import { renderPdfPageToCanvas } from '../lib/pdfRenderer';
 
 function makeFile(opts: { name?: string; type?: string; size?: number } = {}): File {
   const { name = 'lab.png', type = 'image/png', size = 1024 } = opts;
@@ -402,6 +416,204 @@ describe('ExtractionResultsPanel', () => {
       expect(
         screen.getByTestId('source-cta-chief_concern'),
       ).toBeInTheDocument();
+    });
+  });
+
+  describe('PDF source viewer (issue 033)', () => {
+    const objectUrl = 'blob:mock-pdf-source-url';
+    const renderMock = vi.mocked(renderPdfPageToCanvas);
+
+    beforeEach(() => {
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: vi.fn(() => objectUrl),
+      });
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        value: vi.fn(),
+      });
+      renderMock.mockClear();
+      renderMock.mockImplementation(async (_file, pageNumber: number) => ({
+        numPages: 3,
+        renderedPage: pageNumber,
+        width: 612,
+        height: 792,
+      }));
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('renders a canvas and invokes the renderer when source file is a PDF', async () => {
+      const fixture = labFixture();
+      const sourceFile = makeFile({
+        name: 'cbc.pdf',
+        type: 'application/pdf',
+      });
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [
+          bbox('results[0].value', {
+            bbox: { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+          }),
+        ],
+      };
+      render(
+        <ExtractionResultsPanel
+          extraction={withBboxes}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(screen.getByRole('tab', { name: /source/i }));
+      await waitFor(() => {
+        expect(renderMock).toHaveBeenCalled();
+      });
+      const lastCall = renderMock.mock.calls.at(-1);
+      expect(lastCall).toBeDefined();
+      // Renderer is invoked with (file, pageNumber, canvas).
+      expect(lastCall![0]).toBe(sourceFile);
+      expect(lastCall![1]).toBe(1);
+      expect(lastCall![2]).toBeInstanceOf(HTMLCanvasElement);
+
+      // Image fallback must not appear.
+      expect(screen.queryByAltText(/source preview/i)).not.toBeInTheDocument();
+      // The canvas is mounted into the source stage.
+      expect(screen.getByTestId('source-pdf-canvas')).toBeInTheDocument();
+    });
+
+    it('renders the page number in the page label after the renderer resolves', async () => {
+      const fixture = labFixture();
+      const sourceFile = makeFile({
+        name: 'cbc.pdf',
+        type: 'application/pdf',
+      });
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [
+          bbox('results[0].value', {
+            bbox: { page: 2, x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+          }),
+        ],
+      };
+      render(
+        <ExtractionResultsPanel
+          extraction={withBboxes}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(
+        screen.getByTestId('source-cta-results[0].value'),
+      );
+      await waitFor(() => {
+        expect(
+          screen.getByText(/Page 2 of 3/i),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it('faintly renders all bboxes for the rendered page and highlights the selected one', async () => {
+      const fixture = labFixture();
+      const sourceFile = makeFile({
+        name: 'cbc.pdf',
+        type: 'application/pdf',
+      });
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [
+          bbox('results[0].value', {
+            bbox: { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+          }),
+          bbox('results[1].value', {
+            bbox: { page: 1, x: 0.5, y: 0.4, width: 0.2, height: 0.05 },
+          }),
+          bbox('results[2].value', {
+            bbox: { page: 2, x: 0.5, y: 0.4, width: 0.2, height: 0.05 },
+          }),
+        ],
+      };
+      render(
+        <ExtractionResultsPanel
+          extraction={withBboxes}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(
+        screen.getByTestId('source-cta-results[0].value'),
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('source-bbox-selected')).toBeInTheDocument();
+      });
+
+      // Both page-1 boxes appear; the page-2 box is filtered out.
+      const selected = screen.getByTestId('source-bbox-selected');
+      expect(selected).toHaveAttribute(
+        'data-field-path',
+        'results[0].value',
+      );
+      const others = screen.queryAllByTestId(
+        'source-bbox-results[1].value',
+      );
+      expect(others).toHaveLength(1);
+      expect(others[0]).toHaveAttribute('data-selected', 'false');
+
+      // The page-2 box must not render on page 1.
+      expect(
+        screen.queryByTestId('source-bbox-results[2].value'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('asks the renderer for the page that holds the selected bbox', async () => {
+      const fixture = labFixture();
+      const sourceFile = makeFile({
+        name: 'cbc.pdf',
+        type: 'application/pdf',
+      });
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [
+          bbox('results[0].value', {
+            bbox: { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+          }),
+          bbox('results[1].value', {
+            bbox: { page: 2, x: 0.5, y: 0.4, width: 0.2, height: 0.05 },
+          }),
+        ],
+      };
+      render(
+        <ExtractionResultsPanel
+          extraction={withBboxes}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(
+        screen.getByTestId('source-cta-results[1].value'),
+      );
+      await waitFor(() => {
+        const pages = renderMock.mock.calls.map((c) => c[1]);
+        expect(pages).toContain(2);
+      });
+    });
+
+    it('renders an empty PDF source state when the renderer rejects', async () => {
+      const fixture = labFixture();
+      const sourceFile = makeFile({
+        name: 'cbc.pdf',
+        type: 'application/pdf',
+      });
+      renderMock.mockRejectedValueOnce(new Error('boom'));
+      render(
+        <ExtractionResultsPanel
+          extraction={fixture}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(screen.getByRole('tab', { name: /source/i }));
+      await waitFor(() => {
+        expect(
+          screen.getByText(/preview unavailable/i),
+        ).toBeInTheDocument();
+      });
     });
   });
 

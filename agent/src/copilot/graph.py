@@ -137,6 +137,12 @@ _FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
 _TOOL_ERROR_PATTERN = re.compile(r'"error"\s*:\s*"([^"]+)"')
 _TOOL_OK_PATTERN = re.compile(r'"ok"\s*:\s*(true|false)')
 _TOOL_STATUS_PATTERN = re.compile(r'"status"\s*:\s*"([^"]+)"')
+# Issue 030: cache-hit signal emitted by the extraction tool's cache-served
+# envelope (tools/extraction.py). Used by ``_cache_keys_from_tool_message``
+# to surface a per-turn ``cache_hits`` field on the /chat response so the
+# deployed e2e test can assert the second extraction was cache-served.
+_TOOL_CACHE_HIT_PATTERN = re.compile(r'"cache_hit"\s*:\s*true', re.IGNORECASE)
+_TOOL_CACHE_KEY_PATTERN = re.compile(r'"cache_key"\s*:\s*"([^"]+)"')
 
 
 def _extract_citations(text: str) -> list[str]:
@@ -216,6 +222,21 @@ def _is_evidence_path(state: CoPilotState) -> bool:
     return False
 
 
+def _is_document_path(state: CoPilotState) -> bool:
+    """True if this turn ran the intake_extractor worker.
+
+    Issue 035: the W-DOC turn's last AIMessage is what the verifier
+    inspects, and a document-sourced clinical claim must always carry
+    provenance. We accept either the classifier's ``W-DOC`` workflow id
+    or the supervisor's ``extract`` action as the path signal.
+    """
+    if (state.get("workflow_id") or "") == "W-DOC":
+        return True
+    if (state.get("supervisor_action") or "") == "extract":
+        return True
+    return False
+
+
 def _has_guideline_citation(citations: list[str]) -> bool:
     return any(c.startswith("guideline:") for c in citations)
 
@@ -234,6 +255,25 @@ def _has_evidence_gap_language(text: str) -> bool:
 def _refs_from_tool_message(msg: ToolMessage) -> set[str]:
     content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
     return set(_FHIR_REF_PATTERN.findall(content))
+
+
+def _cache_keys_from_tool_message(msg: ToolMessage) -> list[str]:
+    """Return the cache_key for a cache-served ToolMessage, else empty.
+
+    The extraction tool's cache-served envelope carries
+    ``"cache_hit": true`` and ``"cache_key": "<key>"`` (see
+    ``tools/extraction.py:_cache_row_envelope``). When the message has
+    no ``cache_hit`` marker, returns ``[]``. When it does, returns the
+    matching ``cache_key`` value (or a placeholder if the key is
+    missing) so the per-turn ``cache_hits`` field has one entry per
+    cache-served tool call.
+    """
+
+    content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+    if not _TOOL_CACHE_HIT_PATTERN.search(content):
+        return []
+    match = _TOOL_CACHE_KEY_PATTERN.search(content)
+    return [match.group(1) if match else "cache_hit"]
 
 
 # Issue 026: synthetic ``openemr-upload-<hex>`` document ids are legacy
@@ -635,6 +675,7 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
         tool_calls: list[dict] = []
         observation_categories: dict[str, str] = {}
         gate_decisions: list[str] = []
+        cache_hits: list[str] = []
         new_resolved: dict[str, dict[str, Any]] = {}
         for msg in sub_messages:
             if isinstance(msg, ToolMessage):
@@ -643,6 +684,7 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
                     _observation_categories_from_tool_message(msg)
                 )
                 gate_decisions.append(_gate_decision_for_tool_message(msg))
+                cache_hits.extend(_cache_keys_from_tool_message(msg))
                 new_resolved.update(_resolved_patients_from_tool_message(msg))
             if isinstance(msg, AIMessage) and msg.tool_calls:
                 for tc in msg.tool_calls:
@@ -665,6 +707,7 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             "tool_results": tool_calls,
             "observation_categories": observation_categories,
             "gate_decisions": gate_decisions,
+            "cache_hits": cache_hits,
             "verifier_feedback": "",
         }
         if new_resolved:
@@ -741,6 +784,43 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
                 settings,
                 decision="refused_unsourced",
                 escalation_reason="uncited_guideline_claim",
+            )
+            return Command(
+                goto=END,
+                update={
+                    "messages": [refusal],
+                    "decision": "refused_unsourced",
+                    "block": refusal_block.model_dump(by_alias=True),
+                },
+            )
+
+        # Issue 035: fail-closed for W-DOC answers that emit clinical
+        # claims with zero citations. A document-sourced value must
+        # always carry a ``DocumentReference/...`` cite — otherwise the
+        # synthesizer is presenting an extracted lab as chart truth
+        # without provenance. Mirrors the W-EVD pattern: immediate
+        # refuse when the text both makes a clinical claim and skips
+        # the evidence-gap admission language.
+        if (
+            _is_document_path(state)
+            and not citations
+            and _has_clinical_claim(text)
+            and not _has_evidence_gap_language(text)
+        ):
+            refusal_text = (
+                "I couldn't ground the document-derived clinical claim(s) "
+                "in this turn against any cited source. Without a "
+                "DocumentReference citation I won't assert an extracted "
+                "value as chart truth — please verify the value directly "
+                "in the source document or rephrase the question."
+            )
+            refusal = AIMessage(content=refusal_text)
+            refusal_block = refusal_plain_block(refusal_text)
+            _audit(
+                state,
+                settings,
+                decision="refused_unsourced",
+                escalation_reason="uncited_document_claim",
             )
             return Command(
                 goto=END,

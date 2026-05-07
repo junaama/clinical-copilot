@@ -67,6 +67,33 @@ Isolated tests run on the host without a database or Docker:
 composer phpunit-isolated        # Run all isolated tests
 ```
 
+### Agent (Python) tests — `agent/`
+
+Python pytest suite for the LangGraph Co-Pilot lives in `agent/tests/`.
+Run from `agent/`:
+
+```bash
+.venv/bin/python3.12 -m pytest tests/ -q
+```
+
+If `.venv/` is missing, broken, or running pytest fails with "no such file
+or directory" / "bad interpreter" / "Failed to spawn pytest" — the venv was
+likely created on a different machine (Linux container symlinks pointing at
+`/home/agent/...`). The recovery recipe is in
+[runbook/001-agent-pytest-broken-venv.md](runbook/001-agent-pytest-broken-venv.md).
+TL;DR:
+
+```bash
+cd agent
+rm -rf .venv
+uv venv --clear --python /Users/macbook/.local/share/uv/python/cpython-3.12-macos-aarch64-none/bin/python3.12
+VIRTUAL_ENV=$PWD/.venv uv pip install -e ".[dev]"
+.venv/bin/python3.12 -m pytest tests/ -q
+```
+
+Do not use `uv run pytest`, `uv sync`, `.venv/bin/pytest`, or
+`.venv/bin/pip` — see the runbook for why each one re-breaks the venv.
+
 ### Data providers: mark as `@codeCoverageIgnore`
 
 PHPUnit data provider methods execute *before* coverage instrumentation
