@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveAgentContext } from '../lib/agentContext';
+import { deriveAgentContext, derivePatientPromptPills } from '../lib/agentContext';
 
 describe('deriveAgentContext (issue 043)', () => {
   describe('no-patient (no patient id, no panel surface — EHR-launch fallback)', () => {
@@ -150,6 +150,129 @@ describe('deriveAgentContext (issue 043)', () => {
       // to "the patient's record".
       expect(ctx.welcomeSubcopy).toMatch(/the patient's record/);
       expect(ctx.welcomeSubcopy).not.toMatch(/^I read 's record/);
+    });
+  });
+
+  describe('patient-focused with synthetic Patient/<id> name (EHR-launch fallback)', () => {
+    const ctx = deriveAgentContext({
+      focusPatientId: 'pat-9',
+      focusPatientName: 'Patient/pat-9',
+      hasPanelSurface: false,
+    });
+
+    it('does not interpolate Patient/<id> as a clinical name in welcome copy', () => {
+      // The synthetic ``Patient/<id>`` label is not a clinician-facing name;
+      // the subcopy should fall back to neutral possessive rather than
+      // reading "I read Patient/pat-9's record".
+      expect(ctx.welcomeSubcopy).toMatch(/the patient's record/);
+      expect(ctx.welcomeSubcopy).not.toMatch(/Patient\/pat-9/);
+    });
+  });
+});
+
+describe('derivePatientPromptPills (issue 044)', () => {
+  describe('with a clinical patient name', () => {
+    const pills = derivePatientPromptPills('Robert Hayes');
+
+    it('returns three pills (brief, medications, overnight)', () => {
+      expect(pills).toHaveLength(3);
+      const ids = pills.map((p) => p.id);
+      expect(ids).toEqual(['brief', 'medications', 'overnight']);
+    });
+
+    it('interpolates the patient name into each pill label', () => {
+      expect(pills[0]?.label).toBe('Get brief on Robert Hayes');
+      expect(pills[1]?.label).toBe('Get medications on Robert Hayes');
+      expect(pills[2]?.label).toBe('Overnight trends for Robert Hayes');
+    });
+
+    it('interpolates the patient name into each pill promptText', () => {
+      expect(pills[0]?.promptText).toBe('Give me a brief on Robert Hayes.');
+      expect(pills[1]?.promptText).toBe(
+        'What medications is Robert Hayes on?',
+      );
+      expect(pills[2]?.promptText).toBe(
+        'What happened overnight for Robert Hayes?',
+      );
+    });
+  });
+
+  describe('without a patient name (or empty string)', () => {
+    it('falls back to generic labels and prompt texts', () => {
+      const pills = derivePatientPromptPills(undefined);
+      expect(pills.map((p) => p.label)).toEqual([
+        'Get brief on patient',
+        'Get medications on patient',
+        'Overnight trends',
+      ]);
+      // Prompt text stays meaningful — the agent receives a clear user-
+      // visible question even when the name hasn't resolved yet.
+      expect(pills[0]?.promptText).toBe('Give me a brief on this patient.');
+      expect(pills[1]?.promptText).toBe(
+        'What medications is this patient on?',
+      );
+      expect(pills[2]?.promptText).toBe(
+        'What happened overnight for this patient?',
+      );
+    });
+
+    it('treats empty string the same as undefined', () => {
+      const pills = derivePatientPromptPills('');
+      expect(pills[0]?.label).toBe('Get brief on patient');
+    });
+
+    it('treats whitespace-only as no name', () => {
+      const pills = derivePatientPromptPills('   ');
+      expect(pills[0]?.label).toBe('Get brief on patient');
+    });
+  });
+
+  describe('synthetic Patient/<id> name', () => {
+    it('does not interpolate the synthetic id into pill copy', () => {
+      // The EHR-launch shell pre-resolution uses ``Patient/<id>`` as a
+      // display label. Pills must not surface that into clinician-facing
+      // prompt text — the conversation title would otherwise read
+      // "Give me a brief on Patient/pat-9.".
+      const pills = derivePatientPromptPills('Patient/pat-9');
+      pills.forEach((p) => {
+        expect(p.label).not.toMatch(/Patient\/pat-9/);
+        expect(p.promptText).not.toMatch(/Patient\/pat-9/);
+      });
+      expect(pills[0]?.label).toBe('Get brief on patient');
+    });
+  });
+
+  describe('agent context decision exposes the pills', () => {
+    it('patient-focused context includes name-interpolated pills', () => {
+      const ctx = deriveAgentContext({
+        focusPatientId: 'pat-1',
+        focusPatientName: 'Eduardo Perez',
+        hasPanelSurface: true,
+      });
+      expect(ctx.patientPromptPills).toHaveLength(3);
+      expect(ctx.patientPromptPills[0]?.label).toBe(
+        'Get brief on Eduardo Perez',
+      );
+    });
+
+    it('no-patient context still exposes the pill list (rendered as disabled)', () => {
+      const ctx = deriveAgentContext({
+        focusPatientId: '',
+        hasPanelSurface: false,
+      });
+      expect(ctx.patientPromptPills).toHaveLength(3);
+      expect(ctx.patientPromptPills[0]?.label).toBe('Get brief on patient');
+      expect(ctx.patientPromptsEnabled).toBe(false);
+    });
+
+    it('panel-capable context exposes the pill list (disabled with reason)', () => {
+      const ctx = deriveAgentContext({
+        focusPatientId: '',
+        hasPanelSurface: true,
+      });
+      expect(ctx.patientPromptPills).toHaveLength(3);
+      expect(ctx.patientPromptsEnabled).toBe(false);
+      expect(ctx.patientPromptDisabledReason).toMatch(/select a patient/i);
     });
   });
 });
