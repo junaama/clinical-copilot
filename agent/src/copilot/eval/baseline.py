@@ -81,7 +81,9 @@ def write_baseline(path: Path, rates: dict[str, float], notes: str = "") -> None
     an optional ``notes`` string. Tests assert this shape so changes to the
     persistence format are intentional.
     """
-    payload: dict[str, Any] = {"rubrics": {name: float(rates.get(name, 0.0)) for name in RUBRIC_NAMES}}
+    payload: dict[str, Any] = {
+        "rubrics": {name: float(rates.get(name, 0.0)) for name in RUBRIC_NAMES},
+    }
     if notes:
         payload["notes"] = notes
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

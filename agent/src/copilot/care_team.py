@@ -142,7 +142,7 @@ class CareTeamGate:
         running them sequentially over Railway's internal network takes
         ~30s and trips Chrome's 45s CDP timeout when the panel boots in the
         browser. Running them concurrently with ``asyncio.gather`` drops
-        wall-clock to ~1–2s.
+        wall-clock to ~1-2s.
         """
         import asyncio
 

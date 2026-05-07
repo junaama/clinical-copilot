@@ -22,6 +22,7 @@ from langchain_core.tools import StructuredTool
 
 from copilot.supervisor.workers import (
     WORKER_TOOL_ALLOWLIST,
+    _extract_cache_keys,
     _extract_refs,
     _filter_tools,
 )
@@ -83,7 +84,10 @@ def test_filter_tools_tolerates_missing_tools() -> None:
 
 def test_extract_refs_finds_fhir_refs() -> None:
     msg = ToolMessage(
-        content='{"ok": true, "rows": [{"fhir_ref": "Patient/abc"}, {"fhir_ref": "Observation/1"}]}',
+        content=(
+            '{"ok": true, "rows": ['
+            '{"fhir_ref": "Patient/abc"}, {"fhir_ref": "Observation/1"}]}'
+        ),
         tool_call_id="t1",
     )
     refs = _extract_refs(msg)
@@ -137,3 +141,40 @@ def test_extract_refs_drops_synthetic_upload_document_refs() -> None:
     )
     refs = _extract_refs(msg)
     assert refs == ["DocumentReference/real-42"]
+
+
+def test_extract_cache_keys_returns_key_when_cache_hit_true() -> None:
+    """Issue 030: a ToolMessage carrying a cache-served extraction
+    envelope returns its ``cache_key`` so the per-turn ``cache_hits``
+    field on the /chat response can prove the second extraction was
+    cache-served."""
+    msg = ToolMessage(
+        content=(
+            '{"ok": true, "cache_hit": true, "cache_key": "document_id:abc-42",'
+            ' "document_ref": "DocumentReference/abc-42"}'
+        ),
+        tool_call_id="tc-1",
+    )
+    assert _extract_cache_keys(msg) == ["document_id:abc-42"]
+
+
+def test_extract_cache_keys_empty_when_no_cache_hit_marker() -> None:
+    """A ToolMessage without ``"cache_hit": true`` returns no entries —
+    the field stays empty so the chat response surfaces a fresh
+    extraction (cold path) as ``cache_hits == []``."""
+    msg = ToolMessage(
+        content='{"ok": true, "document_ref": "DocumentReference/abc-42"}',
+        tool_call_id="tc-2",
+    )
+    assert _extract_cache_keys(msg) == []
+
+
+def test_extract_cache_keys_empty_when_cache_hit_false() -> None:
+    """``"cache_hit": false`` is the cold-path marker emitted by
+    ``_emit_cache_observability``; it must not produce a cache_hits
+    entry. (The marker is informational, not a hit.)"""
+    msg = ToolMessage(
+        content='{"ok": true, "cache_hit": false, "document_ref": "DocumentReference/abc-42"}',
+        tool_call_id="tc-3",
+    )
+    assert _extract_cache_keys(msg) == []

@@ -136,7 +136,7 @@ def build_supervisor_node(chat_model: BaseChatModel):
                         HumanMessage(content=prefix + latest_str),
                     ]
                 )
-            except Exception as exc:  # noqa: BLE001 — supervisor failure must not crash the turn
+            except Exception as exc:
                 _log.warning(
                     "supervisor_failed err=%s: %s",
                     exc.__class__.__name__,

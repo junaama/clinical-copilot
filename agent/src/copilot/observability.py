@@ -75,7 +75,7 @@ def get_callback_handler(settings: Settings | None = None) -> Any | None:
     except ImportError:
         _log.warning("langfuse package not installed; runtime traces disabled")
         return None
-    except Exception as exc:  # noqa: BLE001 — observability never breaks the agent
+    except Exception as exc:
         _log.warning("langfuse runtime handler init failed: %s", exc)
         return None
 

@@ -7,7 +7,8 @@ Implements the SMART App Launch flow (HL7 spec) for the EHR-launch shape:
                              │ generate PKCE verifier + challenge
                              │ stash launch_state[state] = {iss, verifier, launch}
                              ▼
-    302 redirect to authorize_endpoint?response_type=code&client_id=…&launch=…&aud=…&state=…&code_challenge=…
+    302 redirect to authorize_endpoint
+        ?response_type=code&client_id=…&launch=…&aud=…&state=…&code_challenge=…
 
     EHR ──(code, state)─────▶  /smart/callback
                              │ pop launch_state[state]
@@ -116,7 +117,7 @@ def get_default_stores() -> SmartStores:
 # ----- PKCE helpers (RFC 7636) -----
 
 def generate_code_verifier() -> str:
-    """43–128 chars of URL-safe base64 entropy. We use 64 bytes → 86 chars."""
+    """43-128 chars of URL-safe base64 entropy. We use 64 bytes -> 86 chars."""
     return secrets.token_urlsafe(64)
 
 
