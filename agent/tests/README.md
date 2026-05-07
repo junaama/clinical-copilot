@@ -93,6 +93,54 @@ guideline corpus indexed), `OPENEMR_FHIR_TOKEN`,
 `COPILOT_ADMIN_USER_IDS`. Optional: `E2E_PATIENT_UUID` if the default
 admin uuid isn't a real patient on your OpenEMR instance.
 
+## HTTP-level e2e against the deployed agent (`test_http_e2e_deployed.py`, marker: `live_http`)
+
+A second live tier that talks to the **deployed** agent over HTTPS using a
+session cookie captured from a manual browser login. This sidesteps the
+in-process `live` suite's blockers (no local Postgres, no static
+`OPENEMR_FHIR_TOKEN` — the deployed agent uses dynamic SMART tokens) and
+verifies the post-issue-022 (id recovery) and post-issue-023 (cache-first
+extraction) fixes hold in production.
+
+One case:
+
+| Test | What it exercises end-to-end |
+|---|---|
+| `test_deployed_upload_then_chat_then_cached_chat` | `POST /conversations` → `POST /upload` (lab PDF, real VLM call) → `POST /chat` (notable-findings walk-through cites the canonical `DocumentReference/<id>`) → `POST /chat` (second turn surfaces non-empty `state.cache_hits`, proving the second extract was cache-served) |
+
+Cost: ~$0.10 per run — exactly one VLM call (the upload's first
+extraction); both chat turns sit on the cache after that. Wall-clock:
+30-90 s.
+
+The suite is **opt-in**. Default `addopts` in `pyproject.toml` filters
+out `-m live_http`. To run:
+
+```bash
+cd agent
+COPILOT_SESSION_COOKIE=<value-from-browser> \
+  uv run pytest -m live_http -v tests/test_http_e2e_deployed.py
+```
+
+A missing cookie causes `skip`, never `fail`.
+
+### Required env
+
+| Var | Purpose |
+|---|---|
+| `COPILOT_SESSION_COOKIE` | value of the `copilot_session` cookie from a successful manual login. The `COPILOT_TEST_SESSION_TOKEN` alias is also accepted. |
+| `COPILOT_AGENT_BASE_URL` | deployed agent base URL. Defaults to the Railway prod URL. |
+| `E2E_PATIENT_UUID` | optional override for the upload patient. The `E2E_LIVE_HTTP_PATIENT_UUID` alias is accepted to disambiguate from the in-process `live` suite. Falls back to the first patient on the session's `/panel` roster. |
+
+### Reverting the underlying fixes
+
+The case is also a regression detector. Revert
+[022](../../issues/done/022-doc-id-recovery-in-upload-flow.md) and the
+upload assertion fails (synthetic `openemr-upload-` prefix back in the
+response). Revert
+[023](../../issues/done/023-extraction-cache-first-and-regression-coverage.md)
+and the second-chat-turn assertion fails (`cache_hits` stays empty
+because the second `extract_document` ran a fresh VLM extraction).
+
 ## When to add a test where
 
 | Question | Where it lives |
@@ -100,6 +148,7 @@ admin uuid isn't a real patient on your OpenEMR instance.
 | **What** a single node decides given specific inputs | unit test (`tests/test_<module>.py`) or `w2_runner` fixture case (`evals/`) |
 | **How** the graph hands data between nodes (state→contextvar, message-stream contract, post-worker re-dispatch, citation-subset invariant on the terminal AIMessage) | `tests/test_graph_integration.py` |
 | End-to-end with real models, real Cohere, real OpenEMR — verifying the wiring against actual cognition | `tests/test_graph_e2e_live.py` (mark `live`) |
+| End-to-end against the **deployed** agent over HTTPS, using a captured browser session — verifying the production behaviour of upload + chat + cache-first re-read | `tests/test_http_e2e_deployed.py` (mark `live_http`) |
 | LLM behaviour quality on real prompts (faithfulness, refusal phrasing, citation discipline at scale) | eval harness (`make eval-full`), not pytest |
 
 Don't merge the suites. The fixture eval gate is deliberately
