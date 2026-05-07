@@ -287,7 +287,7 @@ function parseTimelineEvent(raw: unknown, field: string): TimelineEvent {
   };
 }
 
-function parseBlock(raw: unknown): Block {
+export function parseBlock(raw: unknown): Block {
   const obj = asObject(raw, 'block');
   const kind = obj.kind;
   if (kind === 'triage') {
@@ -326,7 +326,7 @@ function parseBlock(raw: unknown): Block {
   throw new Error(`Invalid ChatResponse: unknown block.kind ${String(kind)}`);
 }
 
-function parseRoute(raw: unknown, field: string): ChatRoute {
+export function parseRoute(raw: unknown, field: string): ChatRoute {
   const obj = asObject(raw, field);
   return {
     kind: asRouteKind(obj.kind, `${field}.kind`),
@@ -343,7 +343,7 @@ function asDiagnosticString(value: unknown, field: string): string {
   return value;
 }
 
-function parseDiagnostics(raw: unknown, field: string): ChatDiagnostics {
+export function parseDiagnostics(raw: unknown, field: string): ChatDiagnostics {
   const obj = asObject(raw, field);
   return {
     decision: asDiagnosticString(obj.decision, `${field}.decision`),
