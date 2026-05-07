@@ -1,24 +1,25 @@
 /**
  * Initial welcome state — splits suggestion chips into patient-specific and
- * panel-wide groups (issue 043, story 17–21). The agent context decides
- * which copy and which chips to render or disable; this component is the
- * single rendering surface for the welcome state.
+ * panel-wide groups (issue 043, story 17–21).
+ *
+ * Issue 044 evolves the patient-specific group into three contextual prompt
+ * pills (brief, medications, overnight-trends) sourced from
+ * ``context.patientPromptPills``. The patient-focused context interpolates
+ * the resolved patient name into each pill; no-patient and panel-capable
+ * contexts render the same pills as disabled affordances with a reason, so
+ * the affordance is consistently visible.
  */
 
 import type { JSX } from 'react';
-import type { AgentContextDecision } from '../lib/agentContext';
+import type { AgentContextDecision, PromptPill } from '../lib/agentContext';
 
 export interface SuggestionChip {
   readonly id: string;
   readonly label: string;
   readonly icon: string;
+  /** Optional text sent on click. Defaults to ``label`` when absent. */
+  readonly promptText?: string;
 }
-
-/** Chart / patient-context prompts. Disabled with a reason in the
- *  no-patient and panel-capable contexts. */
-export const PATIENT_SUGGESTIONS: readonly SuggestionChip[] = [
-  { id: 'overnight', label: 'What happened overnight?', icon: '☾' },
-];
 
 /** Panel-wide prompts that the W-1 panel route can answer without a
  *  selected patient. Disabled when the surrounding shell does not mount
@@ -29,7 +30,9 @@ export const PANEL_SUGGESTIONS: readonly SuggestionChip[] = [
 
 interface WelcomeProps {
   readonly context: AgentContextDecision;
-  readonly onPick: (label: string) => void;
+  /** Receives the prompt text sent to /chat. For patient pills this is the
+   *  pill's ``promptText``; for panel chips it's the chip ``label``. */
+  readonly onPick: (promptText: string) => void;
 }
 
 export function Welcome({ context, onPick }: WelcomeProps): JSX.Element {
@@ -49,10 +52,15 @@ export function Welcome({ context, onPick }: WelcomeProps): JSX.Element {
             onPick={onPick}
           />
         ))}
-        {PATIENT_SUGGESTIONS.map((s) => (
+        {context.patientPromptPills.map((pill: PromptPill) => (
           <SuggestionButton
-            key={s.id}
-            chip={s}
+            key={pill.id}
+            chip={{
+              id: pill.id,
+              label: pill.label,
+              icon: pill.icon,
+              promptText: pill.promptText,
+            }}
             enabled={context.patientPromptsEnabled}
             disabledReason={context.patientPromptDisabledReason}
             kind="patient"
@@ -70,7 +78,7 @@ interface SuggestionButtonProps {
   readonly enabled: boolean;
   readonly disabledReason: string | null;
   readonly kind: 'patient' | 'panel';
-  readonly onPick: (label: string) => void;
+  readonly onPick: (promptText: string) => void;
 }
 
 function SuggestionButton({
@@ -88,7 +96,7 @@ function SuggestionButton({
       data-suggestion-kind={kind}
       data-suggestion-id={chip.id}
       onClick={() => {
-        if (enabled) onPick(chip.label);
+        if (enabled) onPick(chip.promptText ?? chip.label);
       }}
       disabled={!enabled}
       aria-disabled={!enabled}

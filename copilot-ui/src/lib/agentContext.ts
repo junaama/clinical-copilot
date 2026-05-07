@@ -42,6 +42,24 @@ export interface AgentContextInputs {
   readonly focusPatientName?: string;
 }
 
+/**
+ * Issue 044: a contextual prompt pill rendered in the Welcome card. Pills
+ * carry a separate display ``label`` and a ``promptText`` because the
+ * rendered chip text ("Get brief on Robert Hayes") and the user-visible
+ * prompt sent on click ("Give me a brief on Robert Hayes.") are not
+ * always identical.
+ */
+export interface PromptPill {
+  readonly id: string;
+  readonly icon: string;
+  /** Chip-rendered text. */
+  readonly label: string;
+  /** Prompt sent to /chat when the chip is clicked. The pill click is
+   *  the explicit user action; this text appears in the transcript as a
+   *  normal user turn (not auto-asked). */
+  readonly promptText: string;
+}
+
 export interface AgentContextDecision {
   readonly kind: AgentContextKind;
   /** Composer ``<input>`` placeholder. Reflects the active context so
@@ -52,6 +70,14 @@ export interface AgentContextDecision {
    *  contexts. */
   readonly patientPromptsEnabled: boolean;
   readonly patientPromptDisabledReason: string | null;
+  /** Patient-focused prompt pills (issue 044). Includes brief,
+   *  medications, and overnight-trends pills, each scoped to the
+   *  resolved patient when available. Always returned non-empty so the
+   *  Welcome card can render the affordance even in no-patient /
+   *  panel-capable contexts (where the chips read as disabled). The
+   *  patient-focused context interpolates ``focusPatientName`` into
+   *  each label / prompt; other contexts use generic copy. */
+  readonly patientPromptPills: readonly PromptPill[];
   /** Panel-wide welcome / suggestion prompts (cohort triage). Enabled
    *  only when the panel surface is mounted; disabled with a reason in
    *  the EHR-launch no-patient context. */
@@ -80,20 +106,85 @@ const PATIENT_DISABLED_REASON =
 const PANEL_DISABLED_REASON =
   'Open a panel to use cohort prompts.';
 
+/**
+ * Issue 044: derive the three patient-focused pills (brief, medications,
+ * overnight) from the resolved patient name. When no clinical name is
+ * available we fall back to generic copy so the Welcome card can still
+ * render the affordance (disabled with a reason) in no-patient and
+ * panel-capable contexts.
+ *
+ * A name beginning with ``Patient/`` is the EHR-launch synthetic display
+ * label (no server-side name resolution yet); we treat it the same as no
+ * name so the prompt does not read "Give me a brief on Patient/123."
+ */
+export function derivePatientPromptPills(
+  patientName: string | undefined,
+): readonly PromptPill[] {
+  const trimmed = patientName?.trim() ?? '';
+  const hasClinicalName = trimmed.length > 0 && !trimmed.startsWith('Patient/');
+  if (hasClinicalName) {
+    return [
+      {
+        id: 'brief',
+        icon: '📋',
+        label: `Get brief on ${trimmed}`,
+        promptText: `Give me a brief on ${trimmed}.`,
+      },
+      {
+        id: 'medications',
+        icon: '💊',
+        label: `Get medications on ${trimmed}`,
+        promptText: `What medications is ${trimmed} on?`,
+      },
+      {
+        id: 'overnight',
+        icon: '☾',
+        label: `Overnight trends for ${trimmed}`,
+        promptText: `What happened overnight for ${trimmed}?`,
+      },
+    ];
+  }
+  return [
+    {
+      id: 'brief',
+      icon: '📋',
+      label: 'Get brief on patient',
+      promptText: 'Give me a brief on this patient.',
+    },
+    {
+      id: 'medications',
+      icon: '💊',
+      label: 'Get medications on patient',
+      promptText: 'What medications is this patient on?',
+    },
+    {
+      id: 'overnight',
+      icon: '☾',
+      label: 'Overnight trends',
+      promptText: 'What happened overnight for this patient?',
+    },
+  ];
+}
+
 export function deriveAgentContext(
   inputs: AgentContextInputs,
 ): AgentContextDecision {
   const hasPatient = inputs.focusPatientId.trim().length > 0;
   const hasPanel = inputs.hasPanelSurface;
+  const patientPromptPills = derivePatientPromptPills(
+    hasPatient ? inputs.focusPatientName : undefined,
+  );
 
   if (hasPatient) {
     const name = inputs.focusPatientName?.trim();
-    const subjectPossessive = name && name.length > 0 ? `${name}'s` : "the patient's";
+    const hasClinicalName = !!name && name.length > 0 && !name.startsWith('Patient/');
+    const subjectPossessive = hasClinicalName ? `${name}'s` : "the patient's";
     return {
       kind: 'patient-focused',
       composerPlaceholder: PATIENT_FOCUSED_PLACEHOLDER,
       patientPromptsEnabled: true,
       patientPromptDisabledReason: null,
+      patientPromptPills,
       panelPromptsEnabled: hasPanel,
       panelPromptDisabledReason: hasPanel ? null : PANEL_DISABLED_REASON,
       welcomeHeadline: 'How can I help with this chart?',
@@ -110,6 +201,7 @@ export function deriveAgentContext(
       composerPlaceholder: PANEL_CAPABLE_PLACEHOLDER,
       patientPromptsEnabled: false,
       patientPromptDisabledReason: PATIENT_DISABLED_REASON,
+      patientPromptPills,
       panelPromptsEnabled: true,
       panelPromptDisabledReason: null,
       welcomeHeadline: 'How can I help today?',
@@ -126,6 +218,7 @@ export function deriveAgentContext(
     composerPlaceholder: NO_PATIENT_PLACEHOLDER,
     patientPromptsEnabled: false,
     patientPromptDisabledReason: PATIENT_DISABLED_REASON,
+    patientPromptPills,
     panelPromptsEnabled: false,
     panelPromptDisabledReason: PANEL_DISABLED_REASON,
     welcomeHeadline: 'Select a patient to begin',

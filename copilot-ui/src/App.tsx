@@ -210,24 +210,25 @@ function StandaloneApp(): JSX.Element {
     };
   }, [conversationId, session.state, nextLocalMessageId]);
 
-  // Click-to-brief (issue 005). Each click injects a synthetic
-  //   "Give me a brief on <given> <family>."
-  // user turn. If the current conversation already has turns we mint a
-  // fresh thread first so the click-injected message lands as the first
-  // turn of a new conversation rather than appending to an unrelated one.
+  // Issue 044: selecting a panel patient focuses that patient WITHOUT
+  // inserting an automatic chart brief into the transcript. The
+  // ``handlePatientClickWithFocus`` wrapper sets the focus patient so
+  // the Welcome card switches to the patient-focused context and
+  // surfaces the explicit prompt pills (brief / medications / overnight
+  // trends). The clinician's pill click is the explicit user action
+  // that ships a request — no synthetic auto-brief.
+  //
+  // If the active thread already has turns we still mint a fresh
+  // conversation so the new chart's questions land in their own thread
+  // rather than appending to an unrelated one.
   const handlePatientClick = useCallback(
-    (patient: PanelPatient): void => {
-      const text = `Give me a brief on ${patient.given_name} ${patient.family_name}.`;
+    (_patient: PanelPatient): void => {
       if (messages.length > 0) {
         const fresh = makeConversationId();
         setConversationId(fresh);
         setMessages([]);
         navigateToConversation(fresh);
       }
-      setPendingMessage({
-        id: `click-${patient.patient_id}-${Date.now().toString(36)}`,
-        text,
-      });
     },
     [messages.length],
   );

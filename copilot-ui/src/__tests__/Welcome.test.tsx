@@ -20,15 +20,13 @@ describe('Welcome (issue 043, no-patient gating)', () => {
       expect(visible).not.toMatch(/this patient's/i);
     });
 
-    it('renders the patient suggestion as disabled with a clear reason (AC2)', () => {
+    it('renders the patient pills as disabled with a clear reason (AC2)', () => {
       render(<Welcome context={context} onPick={vi.fn()} />);
-      const overnight = screen
-        .getByText('What happened overnight?')
-        .closest('button');
-      expect(overnight).not.toBeNull();
-      expect(overnight).toBeDisabled();
-      expect(overnight).toHaveAttribute('aria-disabled', 'true');
-      expect(overnight?.title).toMatch(/select a patient/i);
+      const brief = screen.getByText('Get brief on patient').closest('button');
+      expect(brief).not.toBeNull();
+      expect(brief).toBeDisabled();
+      expect(brief).toHaveAttribute('aria-disabled', 'true');
+      expect(brief?.title).toMatch(/select a patient/i);
     });
 
     it('renders the panel suggestion as disabled when no panel surface (AC3)', () => {
@@ -40,12 +38,12 @@ describe('Welcome (issue 043, no-patient gating)', () => {
       expect(attention).toBeDisabled();
     });
 
-    it('disabled patient suggestion does not invoke onPick when clicked', async () => {
+    it('disabled patient pill does not invoke onPick when clicked', async () => {
       const onPick = vi.fn();
       const user = userEvent.setup();
       render(<Welcome context={context} onPick={onPick} />);
-      const overnight = screen.getByText('What happened overnight?');
-      await user.click(overnight);
+      const brief = screen.getByText('Get brief on patient');
+      await user.click(brief);
       expect(onPick).not.toHaveBeenCalled();
     });
   });
@@ -66,13 +64,11 @@ describe('Welcome (issue 043, no-patient gating)', () => {
       expect(attention).toHaveAttribute('aria-disabled', 'false');
     });
 
-    it('keeps the patient suggestion disabled with a reason (AC2)', () => {
+    it('keeps the patient pills disabled with a reason (AC2)', () => {
       render(<Welcome context={context} onPick={vi.fn()} />);
-      const overnight = screen
-        .getByText('What happened overnight?')
-        .closest('button');
-      expect(overnight).toBeDisabled();
-      expect(overnight?.title).toMatch(/select a patient/i);
+      const brief = screen.getByText('Get brief on patient').closest('button');
+      expect(brief).toBeDisabled();
+      expect(brief?.title).toMatch(/select a patient/i);
     });
 
     it('forwards the panel suggestion label on click', async () => {
@@ -101,27 +97,96 @@ describe('Welcome (issue 043, no-patient gating)', () => {
 
     it('enables both the patient and panel suggestions', () => {
       render(<Welcome context={context} onPick={vi.fn()} />);
-      const overnight = screen
-        .getByText('What happened overnight?')
+      const brief = screen
+        .getByText('Get brief on Robert Hayes')
         .closest('button');
       const attention = screen
         .getByText('Who needs attention first?')
         .closest('button');
-      expect(overnight).not.toBeDisabled();
+      expect(brief).not.toBeDisabled();
       expect(attention).not.toBeDisabled();
     });
 
-    it('forwards the patient suggestion label on click', async () => {
+    it("forwards the brief pill's promptText on click (issue 044)", async () => {
       const onPick = vi.fn();
       const user = userEvent.setup();
       render(<Welcome context={context} onPick={onPick} />);
-      await user.click(screen.getByText('What happened overnight?'));
-      expect(onPick).toHaveBeenCalledWith('What happened overnight?');
+      await user.click(screen.getByText('Get brief on Robert Hayes'));
+      expect(onPick).toHaveBeenCalledWith('Give me a brief on Robert Hayes.');
     });
 
     it("renders the resolved patient name in the welcome subcopy", () => {
       render(<Welcome context={context} onPick={vi.fn()} />);
       expect(screen.getByText(/Robert Hayes's record/)).toBeInTheDocument();
     });
+  });
+});
+
+describe('Welcome patient prompt pills (issue 044)', () => {
+  const context = deriveAgentContext({
+    focusPatientId: 'pat-1',
+    focusPatientName: 'Robert Hayes',
+    hasPanelSurface: true,
+  });
+
+  it('renders all three patient pills (brief, medications, overnight)', () => {
+    render(<Welcome context={context} onPick={vi.fn()} />);
+    expect(
+      screen.getByText('Get brief on Robert Hayes'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Get medications on Robert Hayes'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Overnight trends for Robert Hayes'),
+    ).toBeInTheDocument();
+  });
+
+  it("forwards the medications pill's promptText on click", async () => {
+    const onPick = vi.fn();
+    const user = userEvent.setup();
+    render(<Welcome context={context} onPick={onPick} />);
+    await user.click(screen.getByText('Get medications on Robert Hayes'));
+    expect(onPick).toHaveBeenCalledWith(
+      'What medications is Robert Hayes on?',
+    );
+  });
+
+  it("forwards the overnight-trends pill's promptText on click", async () => {
+    const onPick = vi.fn();
+    const user = userEvent.setup();
+    render(<Welcome context={context} onPick={onPick} />);
+    await user.click(screen.getByText('Overnight trends for Robert Hayes'));
+    expect(onPick).toHaveBeenCalledWith(
+      'What happened overnight for Robert Hayes?',
+    );
+  });
+
+  it("scopes pill labels to the focused patient (story 22)", () => {
+    render(<Welcome context={context} onPick={vi.fn()} />);
+    // Each pill mentions the patient by name.
+    const buttons = screen
+      .getAllByRole('button')
+      .filter((b) => b.getAttribute('data-suggestion-kind') === 'patient');
+    expect(buttons).toHaveLength(3);
+    buttons.forEach((b) => {
+      expect(b.textContent ?? '').toMatch(/Robert Hayes/);
+    });
+  });
+
+  it("falls back to nameless pills when the patient name is a synthetic Patient/<id>", () => {
+    // EHR-launch path uses ``Patient/<id>`` as the display label until a
+    // server-side name lookup happens. Pills should not embed that
+    // identifier in clinician-facing prompt text.
+    const ehrContext = deriveAgentContext({
+      focusPatientId: 'pat-9',
+      focusPatientName: 'Patient/pat-9',
+      hasPanelSurface: false,
+    });
+    render(<Welcome context={ehrContext} onPick={vi.fn()} />);
+    expect(screen.getByText('Get brief on patient')).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Get brief on Patient\/pat-9/),
+    ).not.toBeInTheDocument();
   });
 });

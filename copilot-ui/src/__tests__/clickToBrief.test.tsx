@@ -1,12 +1,21 @@
 /**
- * Click-to-brief integration test (issue 005).
+ * Patient-selection / prompt-pills integration test (issue 044, replaces
+ * the issue-005 click-to-brief flow).
  *
- * Walks through the StandaloneApp shell from the empty-state CareTeam panel
- * through the synthetic-message injection, the chat round-trip, and the
- * disappearance of the panel once the conversation has its first turn.
+ * Walks through the StandaloneApp shell from the empty-state CareTeam
+ * panel through patient focus, the appearance of the patient-focused
+ * prompt pills, and the pill-click chat round-trip.
  *
- * Mocks the boundary: GET /me, GET /panel, POST /chat. Everything else is
- * real React rendering — the AgentPanel <-> StandaloneApp wire is exercised.
+ * Mocks the boundary: GET /me, GET /panel, POST /chat. Everything else
+ * is real React rendering — the AgentPanel <-> StandaloneApp wire is
+ * exercised. The behavior under test is:
+ *
+ *  - Selecting a patient focuses that patient WITHOUT inserting an
+ *    automatic chart brief into the transcript (issue 044 AC1).
+ *  - Patient-focused prompt pills appear after selection (AC2/AC3).
+ *  - Clicking a pill sends a user-visible prompt (AC4).
+ *  - The transcript shows the pill's prompt as a normal user turn,
+ *    distinguishable from prior auto-generated brief behavior (AC5).
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -71,7 +80,7 @@ function installFetchMock(): FetchStub {
   };
 }
 
-describe('click-to-brief', () => {
+describe('patient selection focuses patient without auto-brief (issue 044)', () => {
   let stub: FetchStub;
 
   beforeEach(() => {
@@ -83,19 +92,58 @@ describe('click-to-brief', () => {
     stub.reset();
   });
 
-  it('clicking a panel patient injects the synthetic brief message and fires /chat', async () => {
+  it('clicking a panel patient does NOT inject a synthetic brief and does NOT fire /chat (AC1)', async () => {
     render(<App />);
 
     const row = await screen.findByRole('button', { name: /Hayes, Robert/i });
     await userEvent.click(row);
 
-    // The synthetic user message must be visibly rendered (AC: not hidden,
-    // not styled differently, not collapsed).
-    const userBubble = await screen.findByText(
-      /Give me a brief on Robert Hayes\./,
-    );
-    expect(userBubble).toBeInTheDocument();
-    // No "auto-asked" tag — click-to-brief is a normal user turn.
+    // No "Give me a brief on Robert Hayes." injected as a user message.
+    // Allow a short window for any stray effect to fire.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(
+      screen.queryByText(/Give me a brief on Robert Hayes/i),
+    ).not.toBeInTheDocument();
+    // No /chat round-trip either.
+    expect(stub.chatBodies.length).toBe(0);
+  });
+
+  it('focuses the patient — patient-focused welcome and pill labels render after selection (AC2)', async () => {
+    render(<App />);
+
+    const row = await screen.findByRole('button', { name: /Hayes, Robert/i });
+    await userEvent.click(row);
+
+    // Patient-focused welcome headline.
+    expect(
+      await screen.findByText('How can I help with this chart?'),
+    ).toBeInTheDocument();
+    // The three patient pills render with the selected patient's name.
+    expect(
+      screen.getByText('Get brief on Robert Hayes'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Get medications on Robert Hayes'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Overnight trends for Robert Hayes'),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking the brief pill sends the explicit user-visible prompt and fires /chat (AC4)', async () => {
+    render(<App />);
+
+    const row = await screen.findByRole('button', { name: /Hayes, Robert/i });
+    await userEvent.click(row);
+
+    // Click the brief pill — this is the explicit user action.
+    const briefPill = await screen.findByText('Get brief on Robert Hayes');
+    await userEvent.click(briefPill);
+
+    // The pill's prompt text appears as a user turn in the transcript.
+    await screen.findByText(/Give me a brief on Robert Hayes\./);
+    // No "auto-asked" tag — the pill click is a normal user turn, NOT an
+    // auto-generated brief (AC5: distinguishable from prior auto behavior).
     expect(screen.queryByText(/auto-asked/i)).not.toBeInTheDocument();
 
     await waitFor(() => expect(stub.chatBodies.length).toBeGreaterThanOrEqual(1));
@@ -105,7 +153,43 @@ describe('click-to-brief', () => {
     expect(body.message).toBe('Give me a brief on Robert Hayes.');
   });
 
-  it('keeps the care-team sidebar visible after a click triggers the first turn', async () => {
+  it('clicking the medications pill sends the medications prompt (AC3/AC4)', async () => {
+    render(<App />);
+
+    const row = await screen.findByRole('button', { name: /Hayes, Robert/i });
+    await userEvent.click(row);
+
+    const medsPill = await screen.findByText('Get medications on Robert Hayes');
+    await userEvent.click(medsPill);
+
+    await screen.findByText(/What medications is Robert Hayes on\?/);
+    await waitFor(() => expect(stub.chatBodies.length).toBeGreaterThanOrEqual(1));
+    const body = JSON.parse(stub.chatBodies[stub.chatBodies.length - 1] ?? '{}') as {
+      message?: string;
+    };
+    expect(body.message).toBe('What medications is Robert Hayes on?');
+  });
+
+  it('clicking the overnight pill sends the overnight-trends prompt (AC3/AC4)', async () => {
+    render(<App />);
+
+    const row = await screen.findByRole('button', { name: /Hayes, Robert/i });
+    await userEvent.click(row);
+
+    const overnightPill = await screen.findByText(
+      'Overnight trends for Robert Hayes',
+    );
+    await userEvent.click(overnightPill);
+
+    await screen.findByText(/What happened overnight for Robert Hayes\?/);
+    await waitFor(() => expect(stub.chatBodies.length).toBeGreaterThanOrEqual(1));
+    const body = JSON.parse(stub.chatBodies[stub.chatBodies.length - 1] ?? '{}') as {
+      message?: string;
+    };
+    expect(body.message).toBe('What happened overnight for Robert Hayes?');
+  });
+
+  it('keeps the care-team sidebar visible after selection so the clinician can switch patients', async () => {
     render(<App />);
 
     const row = await screen.findByRole('button', { name: /Hayes, Robert/i });
@@ -113,25 +197,26 @@ describe('click-to-brief', () => {
 
     await userEvent.click(row);
 
-    // Care-team panel lives in the right sidebar — it stays mounted so the
-    // clinician can switch patients mid-conversation.
-    await screen.findByText(/Give me a brief on Robert Hayes\./);
+    // Patient pills render in the welcome card; the care-team panel stays
+    // mounted in the right sidebar.
+    await screen.findByText('Get brief on Robert Hayes');
     expect(screen.getByText(/Your patients/i)).toBeInTheDocument();
   });
 
-  it('fires /chat exactly once per click (id-dedupe in AgentPanel)', async () => {
+  it('fires /chat exactly once per pill click (no duplicate fires from re-renders)', async () => {
     render(<App />);
 
     const row = await screen.findByRole('button', { name: /Hayes, Robert/i });
     await userEvent.click(row);
 
-    // Wait for the first chat call to complete + the agent message to land.
+    const briefPill = await screen.findByText('Get brief on Robert Hayes');
+    await userEvent.click(briefPill);
+
     await screen.findByText(/Give me a brief on Robert Hayes\./);
     await waitFor(() => expect(stub.chatBodies.length).toBe(1));
 
-    // Stable across re-renders — no duplicate fires from React effect re-runs.
+    // Stable across re-renders.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(stub.chatBodies.length).toBe(1);
   });
-
 });
