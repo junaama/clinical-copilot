@@ -346,7 +346,9 @@ function StandaloneApp(): JSX.Element {
             patientId=""
             userId=""
             smartAccessToken=""
-            patientName={DEFAULT_PATIENT_NAME}
+            patientName={focusPatient?.name ?? ''}
+            focusPatientId={focusPatient?.id ?? ''}
+            hasPanelSurface={true}
             messages={messages}
             setMessages={(updater) => setMessages((prev) => updater(prev))}
             pendingUserMessage={pendingMessage}
@@ -471,6 +473,8 @@ function EhrLaunchApp({ smart }: { readonly smart: SmartLaunchContext }): JSX.El
         userId={smart.userId ?? ''}
         smartAccessToken={smart.accessToken}
         patientName={patientName}
+        focusPatientId={smart.patientId ?? ''}
+        hasPanelSurface={false}
         messages={messages}
         setMessages={(updater) => setMessages((prev) => updater(prev))}
         onClose={() => setOpen(false)}

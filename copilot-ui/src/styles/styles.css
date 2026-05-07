@@ -555,6 +555,33 @@ body {
 }
 .agent-input button:disabled { background: oklch(0.88 0.02 280); cursor: default; }
 
+/* Issue 043: visible Send hint shown when the draft is empty. The text
+ * mirrors the Send button's title, so the disabled state is
+ * understandable from visible UI rather than only from the title
+ * tooltip. Hidden once the user starts typing. */
+.agent-input-hint {
+  padding: 4px 14px 8px;
+  background: #fff;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+/* Disabled suggestion chips (no-patient / panel-only contexts) — keep
+ * the chip visible so the clinician sees the affordance, but dim it
+ * and surface the reason as a small inline hint. */
+.agent-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: oklch(0.97 0.005 280);
+}
+.agent-chip-hint {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
 .agent-foot {
   padding: 6px 14px 10px; font-size: 10.5px;
   color: var(--ink-3); text-align: center; background: #fff;

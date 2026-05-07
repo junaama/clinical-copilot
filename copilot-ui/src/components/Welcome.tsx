@@ -1,9 +1,12 @@
 /**
- * Initial welcome state — two primary chips that send canonical questions to
- * the agent. Mirrors the prototype's `Welcome` component.
+ * Initial welcome state — splits suggestion chips into patient-specific and
+ * panel-wide groups (issue 043, story 17–21). The agent context decides
+ * which copy and which chips to render or disable; this component is the
+ * single rendering surface for the welcome state.
  */
 
 import type { JSX } from 'react';
+import type { AgentContextDecision } from '../lib/agentContext';
 
 export interface SuggestionChip {
   readonly id: string;
@@ -11,38 +14,96 @@ export interface SuggestionChip {
   readonly icon: string;
 }
 
-export const SUGGESTIONS: readonly SuggestionChip[] = [
-  { id: 'attention', label: 'Who needs attention first?', icon: '◐' },
+/** Chart / patient-context prompts. Disabled with a reason in the
+ *  no-patient and panel-capable contexts. */
+export const PATIENT_SUGGESTIONS: readonly SuggestionChip[] = [
   { id: 'overnight', label: 'What happened overnight?', icon: '☾' },
 ];
 
+/** Panel-wide prompts that the W-1 panel route can answer without a
+ *  selected patient. Disabled when the surrounding shell does not mount
+ *  a panel surface. */
+export const PANEL_SUGGESTIONS: readonly SuggestionChip[] = [
+  { id: 'attention', label: 'Who needs attention first?', icon: '◐' },
+];
+
 interface WelcomeProps {
-  readonly patientName: string;
+  readonly context: AgentContextDecision;
   readonly onPick: (label: string) => void;
 }
 
-export function Welcome({ patientName, onPick }: WelcomeProps): JSX.Element {
+export function Welcome({ context, onPick }: WelcomeProps): JSX.Element {
   return (
-    <div className="agent-welcome">
+    <div className="agent-welcome" data-context-kind={context.kind}>
       <div className="agent-welcome-eyebrow">Good morning</div>
-      <h3>How can I help with this chart?</h3>
-      <p>
-        I read {patientName}'s record over FHIR — I won't write orders or notes
-        without your confirmation.
-      </p>
+      <h3>{context.welcomeHeadline}</h3>
+      <p>{context.welcomeSubcopy}</p>
       <div className="agent-chips">
-        {SUGGESTIONS.map((s) => (
-          <button
+        {PANEL_SUGGESTIONS.map((s) => (
+          <SuggestionButton
             key={s.id}
-            className="agent-chip primary"
-            onClick={() => onPick(s.label)}
-          >
-            <span className="agent-chip-icon">{s.icon}</span>
-            <span>{s.label}</span>
-          </button>
+            chip={s}
+            enabled={context.panelPromptsEnabled}
+            disabledReason={context.panelPromptDisabledReason}
+            kind="panel"
+            onPick={onPick}
+          />
+        ))}
+        {PATIENT_SUGGESTIONS.map((s) => (
+          <SuggestionButton
+            key={s.id}
+            chip={s}
+            enabled={context.patientPromptsEnabled}
+            disabledReason={context.patientPromptDisabledReason}
+            kind="patient"
+            onPick={onPick}
+          />
         ))}
       </div>
       <div className="agent-welcome-meta">Last sync · just now</div>
     </div>
+  );
+}
+
+interface SuggestionButtonProps {
+  readonly chip: SuggestionChip;
+  readonly enabled: boolean;
+  readonly disabledReason: string | null;
+  readonly kind: 'patient' | 'panel';
+  readonly onPick: (label: string) => void;
+}
+
+function SuggestionButton({
+  chip,
+  enabled,
+  disabledReason,
+  kind,
+  onPick,
+}: SuggestionButtonProps): JSX.Element {
+  const reason = enabled ? null : disabledReason;
+  return (
+    <button
+      type="button"
+      className="agent-chip primary"
+      data-suggestion-kind={kind}
+      data-suggestion-id={chip.id}
+      onClick={() => {
+        if (enabled) onPick(chip.label);
+      }}
+      disabled={!enabled}
+      aria-disabled={!enabled}
+      title={reason ?? undefined}
+    >
+      <span className="agent-chip-icon" aria-hidden="true">{chip.icon}</span>
+      <span>{chip.label}</span>
+      {reason ? (
+        <span
+          className="agent-chip-hint"
+          data-testid={`suggestion-hint-${chip.id}`}
+        >
+          {reason}
+        </span>
+      ) : null}
+    </button>
   );
 }
