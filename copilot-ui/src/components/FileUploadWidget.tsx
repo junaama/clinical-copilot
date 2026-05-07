@@ -50,7 +50,14 @@ type UploadState =
       readonly file: File;
       readonly mismatch: DocTypeMismatch;
     }
-  | { readonly kind: 'error'; readonly status: number; readonly detail: string };
+  | { readonly kind: 'error'; readonly status: number; readonly detail: string }
+  /** Canonical 200 + failed-status response (issue 025). Carries the
+   * user-safe ``failure_reason`` from the wire envelope. */
+  | {
+      readonly kind: 'outcomeFailed';
+      readonly outcomeStatus: ExtractionResponse['status'];
+      readonly failureReason: string | null;
+    };
 
 const DOC_TYPE_LABEL: Record<DocType, string> = {
   lab_pdf: 'Lab PDF',
@@ -92,6 +99,14 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
       }
       if (result.ok === 'mismatch') {
         setState({ kind: 'mismatch', file, mismatch: result.mismatch });
+        return;
+      }
+      if (result.ok === 'failed') {
+        setState({
+          kind: 'outcomeFailed',
+          outcomeStatus: result.outcome.status,
+          failureReason: result.outcome.failure_reason,
+        });
         return;
       }
       setState({ kind: 'error', status: result.status, detail: result.detail });
@@ -253,6 +268,16 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
       {state.kind === 'error' && (
         <div className="upload-widget__error" role="alert">
           Upload failed{state.status ? ` (HTTP ${state.status})` : ''}: {state.detail}
+        </div>
+      )}
+      {state.kind === 'outcomeFailed' && (
+        <div
+          className="upload-widget__error"
+          data-testid="upload-widget-outcome-failed"
+          data-outcome-status={state.outcomeStatus}
+          role="alert"
+        >
+          {state.failureReason ?? 'Upload could not be completed.'}
         </div>
       )}
       {state.kind === 'mismatch' && (

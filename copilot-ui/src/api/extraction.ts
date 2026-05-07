@@ -86,10 +86,40 @@ export interface IntakeExtraction {
 
 export type DocType = 'lab_pdf' | 'intake_form';
 
+/**
+ * Canonical upload-outcome status (issue 025).
+ *
+ * `'ok'` is the only status where the panel may render lab/intake content
+ * and the app may inject a synthetic post-upload chat turn. Every other
+ * value carries a user-safe ``failure_reason``.
+ */
+export type UploadStatus =
+  | 'ok'
+  | 'upload_failed'
+  | 'doc_ref_failed'
+  | 'extraction_failed'
+  | 'unauthorized';
+
 export interface ExtractionResponse {
-  readonly document_id: string;
+  readonly status: UploadStatus;
+  readonly requested_type: DocType;
+  /** Effective doc type (what was actually extracted). null on failure. */
+  readonly effective_type: DocType | null;
+  readonly document_id: string | null;
+  /** Canonical "DocumentReference/<id>" form. null when no real id exists. */
+  readonly document_reference: string | null;
+  /**
+   * Legacy mirror of ``effective_type`` for callers that haven't switched
+   * to the canonical envelope yet. Same value as ``effective_type`` on
+   * success; on failure this falls back to ``requested_type`` so existing
+   * UI code reading ``doc_type`` keeps working.
+   */
   readonly doc_type: DocType;
   readonly filename: string;
+  /** True when the agent can be invited to discuss this upload. */
+  readonly discussable: boolean;
   readonly lab: LabExtraction | null;
   readonly intake: IntakeExtraction | null;
+  /** User-safe message — never raw exception text. null on success. */
+  readonly failure_reason: string | null;
 }

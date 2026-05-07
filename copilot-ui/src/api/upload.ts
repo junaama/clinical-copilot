@@ -28,6 +28,13 @@ export interface DocTypeMismatch {
 
 export type UploadResult =
   | { readonly ok: true; readonly response: ExtractionResponse }
+  /** Canonical upload outcome with a non-ok status — surfaced as a
+   * user-facing error in the widget; never injects a chat turn. */
+  | {
+      readonly ok: 'failed';
+      readonly status: number;
+      readonly outcome: ExtractionResponse;
+    }
   | { readonly ok: 'mismatch'; readonly status: 409; readonly mismatch: DocTypeMismatch }
   | { readonly ok: false; readonly status: number; readonly detail: string };
 
@@ -139,6 +146,12 @@ export async function uploadDocument(opts: UploadOptions): Promise<UploadResult>
   if (!isExtractionResponse(parsed)) {
     return { ok: false, status: resp.status, detail: 'unexpected response shape' };
   }
+  // Canonical envelope (issue 025): ``status`` discriminates success from
+  // every partial-failure mode. Only ``ok && discussable`` should drive
+  // panel rendering and synthetic chat injection at the call site.
+  if (parsed.status !== 'ok' || parsed.discussable !== true) {
+    return { ok: 'failed', status: resp.status, outcome: parsed };
+  }
   return { ok: true, response: parsed };
 }
 
@@ -197,8 +210,23 @@ function extractDetail(bodyText: string, status: number): string {
 function isExtractionResponse(x: unknown): x is ExtractionResponse {
   if (typeof x !== 'object' || x === null) return false;
   const obj = x as Record<string, unknown>;
+  const status = obj['status'];
+  const validStatus =
+    status === 'ok' ||
+    status === 'upload_failed' ||
+    status === 'doc_ref_failed' ||
+    status === 'extraction_failed' ||
+    status === 'unauthorized';
+  if (!validStatus) return false;
+  if (typeof obj['discussable'] !== 'boolean') return false;
+  if (
+    obj['requested_type'] !== 'lab_pdf' &&
+    obj['requested_type'] !== 'intake_form'
+  ) {
+    return false;
+  }
   return (
-    typeof obj['document_id'] === 'string' &&
+    (obj['document_id'] === null || typeof obj['document_id'] === 'string') &&
     (obj['doc_type'] === 'lab_pdf' || obj['doc_type'] === 'intake_form') &&
     typeof obj['filename'] === 'string'
   );

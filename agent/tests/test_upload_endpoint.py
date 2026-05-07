@@ -268,7 +268,13 @@ def test_upload_lab_pdf_returns_extraction_response(upload_client: TestClient) -
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["document_id"] == "doc-123"
+    assert body["document_reference"] == "DocumentReference/doc-123"
     assert body["doc_type"] == "lab_pdf"
+    assert body["status"] == "ok"
+    assert body["requested_type"] == "lab_pdf"
+    assert body["effective_type"] == "lab_pdf"
+    assert body["discussable"] is True
+    assert body["failure_reason"] is None
     assert body["filename"] == "hba1c.pdf"
     assert body["lab"] is not None
     assert body["intake"] is None
@@ -356,8 +362,15 @@ def test_upload_rejects_empty_patient_id(upload_client: TestClient) -> None:
     assert "patient_id" in response.json()["detail"]
 
 
-def test_upload_propagates_document_client_failure(upload_client: TestClient) -> None:
-    """When DocumentClient fails, the endpoint returns 502 with the error."""
+def test_upload_returns_canonical_upload_failed_outcome(
+    upload_client: TestClient,
+) -> None:
+    """DocumentClient failure surfaces a canonical 200 + status response (issue 025).
+
+    The body carries ``status='upload_failed'``, ``discussable=false``, no
+    extraction payload, and a user-safe ``failure_reason`` that is free of
+    raw exception details (no ``openemr_unauthorized`` token).
+    """
 
     stub: _StubDocumentClient = upload_client.stub_doc  # type: ignore[attr-defined]
     stub.ok = False
@@ -368,14 +381,31 @@ def test_upload_propagates_document_client_failure(upload_client: TestClient) ->
         files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4\n"), "application/pdf")},
         data={"patient_id": "p-1", "doc_type": "lab_pdf"},
     )
-    assert response.status_code == 502
-    assert "openemr_unauthorized" in response.json()["detail"]
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "upload_failed"
+    assert body["discussable"] is False
+    assert body["requested_type"] == "lab_pdf"
+    assert body["effective_type"] is None
+    assert body["document_id"] is None
+    assert body["document_reference"] is None
+    assert body["lab"] is None
+    assert body["intake"] is None
+    assert body["filename"] == "x.pdf"
+    assert isinstance(body["failure_reason"], str)
+    # No raw upstream details leak to the wire.
+    assert "openemr_unauthorized" not in body["failure_reason"]
+    # No upload-time extraction-cache row is written for failed uploads.
+    assert upload_client.stub_store.lab_saves == []  # type: ignore[attr-defined]
+    # No system message either — the synthetic chat would have nothing real
+    # to discuss.
+    assert upload_client.system_messages == []  # type: ignore[attr-defined]
 
 
-def test_upload_maps_landed_id_lost_to_reattach_message(
+def test_upload_returns_canonical_doc_ref_failed_outcome(
     upload_client: TestClient,
 ) -> None:
-    """A landed upload with no confirmed id tells the clinician to re-attach."""
+    """A landed upload with no confirmed id surfaces ``status='doc_ref_failed'``."""
 
     stub: _StubDocumentClient = upload_client.stub_doc  # type: ignore[attr-defined]
     stub.ok = False
@@ -384,28 +414,54 @@ def test_upload_maps_landed_id_lost_to_reattach_message(
     response = upload_client.post(
         "/upload",
         files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4\n"), "application/pdf")},
-        data={"patient_id": "p-1", "doc_type": "lab_pdf"},
+        data={
+            "patient_id": "p-1",
+            "doc_type": "lab_pdf",
+            "conversation_id": "conv-1",
+        },
     )
 
-    assert response.status_code == 502
-    detail = response.json()["detail"]
-    assert "upload landed" in detail
-    assert "document id couldn't be confirmed" in detail
-    assert "please re-attach" in detail
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "doc_ref_failed"
+    assert body["discussable"] is False
+    assert body["lab"] is None
+    assert body["intake"] is None
+    assert "re-attach" in (body["failure_reason"] or "")
+    # No synthetic chat handoff for partial failure (issue 025 acceptance).
+    assert upload_client.system_messages == []  # type: ignore[attr-defined]
 
 
-def test_upload_propagates_extraction_failure(upload_client: TestClient) -> None:
-    """When VLM extraction fails, the endpoint returns 502 with the error."""
+def test_upload_returns_canonical_extraction_failed_outcome(
+    upload_client: TestClient,
+) -> None:
+    """When VLM extraction fails, the endpoint returns canonical 200 envelope."""
 
     upload_client.extraction_holder["force_error"] = True  # type: ignore[attr-defined]
 
     response = upload_client.post(
         "/upload",
         files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4\n"), "application/pdf")},
-        data={"patient_id": "p-1", "doc_type": "lab_pdf"},
+        data={
+            "patient_id": "p-1",
+            "doc_type": "lab_pdf",
+            "conversation_id": "conv-2",
+        },
     )
-    assert response.status_code == 502
-    assert "extraction" in response.json()["detail"].lower()
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "extraction_failed"
+    assert body["discussable"] is False
+    assert body["lab"] is None
+    assert body["intake"] is None
+    # The doc id is preserved so the UI can correlate panel + chat history.
+    assert body["document_id"] == "doc-123"
+    assert body["document_reference"] == "DocumentReference/doc-123"
+    # Raw VLM error string ("forced") never leaks to the user.
+    assert "forced" not in (body["failure_reason"] or "")
+    # No chat handoff and no extraction-cache row for failed extraction.
+    assert upload_client.system_messages == []  # type: ignore[attr-defined]
+    assert upload_client.stub_store.lab_saves == []  # type: ignore[attr-defined]
 
 
 def test_upload_injects_system_message_when_conversation_id_present(

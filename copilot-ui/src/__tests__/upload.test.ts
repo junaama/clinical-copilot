@@ -63,7 +63,13 @@ describe('uploadDocument', () => {
       status: 200,
       text: async () =>
         JSON.stringify({
+          status: 'ok',
+          requested_type: 'lab_pdf',
+          effective_type: 'lab_pdf',
+          discussable: true,
+          failure_reason: null,
           document_id: 'doc-123',
+          document_reference: 'DocumentReference/doc-123',
           doc_type: 'lab_pdf',
           filename: 'labs.pdf',
           lab: null,
@@ -182,7 +188,13 @@ describe('uploadDocument', () => {
       status: 200,
       text: async () =>
         JSON.stringify({
+          status: 'ok',
+          requested_type: 'lab_pdf',
+          effective_type: 'lab_pdf',
+          discussable: true,
+          failure_reason: null,
           document_id: 'doc-9',
+          document_reference: 'DocumentReference/doc-9',
           doc_type: 'lab_pdf',
           filename: 'x.pdf',
           lab: null,
@@ -223,6 +235,75 @@ describe('uploadDocument', () => {
       expect(result.status).toBe(409);
       expect(result.detail).toBe('something else');
     }
+  });
+
+  it('returns ok:"failed" with canonical outcome on extraction_failed (issue 025)', async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          status: 'extraction_failed',
+          requested_type: 'lab_pdf',
+          effective_type: null,
+          discussable: false,
+          failure_reason:
+            "We couldn't extract structured data from this document. Please retry or check the file.",
+          document_id: 'doc-7',
+          document_reference: 'DocumentReference/doc-7',
+          doc_type: 'lab_pdf',
+          filename: 'broken.pdf',
+          lab: null,
+          intake: null,
+        }),
+    } as Response);
+
+    const result = await uploadDocument({
+      file: makeFile({}),
+      patientId: 'pat-1',
+      docType: 'lab_pdf',
+      fetcher: fetcher as unknown as typeof fetch,
+      baseUrl: 'http://test',
+    });
+
+    expect(result.ok).toBe('failed');
+    if (result.ok === 'failed') {
+      expect(result.outcome.status).toBe('extraction_failed');
+      expect(result.outcome.discussable).toBe(false);
+      expect(result.outcome.failure_reason).toContain("couldn't extract");
+    }
+  });
+
+  it('returns ok:"failed" when status is ok but discussable is false', async () => {
+    // Defense-in-depth: a malformed/stale envelope where status==='ok' but
+    // discussable===false must not be treated as a successful extraction.
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () =>
+        JSON.stringify({
+          status: 'ok',
+          requested_type: 'lab_pdf',
+          effective_type: 'lab_pdf',
+          discussable: false,
+          failure_reason: null,
+          document_id: 'doc-x',
+          document_reference: 'DocumentReference/doc-x',
+          doc_type: 'lab_pdf',
+          filename: 'x.pdf',
+          lab: null,
+          intake: null,
+        }),
+    } as Response);
+
+    const result = await uploadDocument({
+      file: makeFile({}),
+      patientId: 'pat-1',
+      docType: 'lab_pdf',
+      fetcher: fetcher as unknown as typeof fetch,
+      baseUrl: 'http://test',
+    });
+    expect(result.ok).toBe('failed');
   });
 
   it('rejects malformed response shape', async () => {
