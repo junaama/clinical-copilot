@@ -133,8 +133,9 @@ Used for:
 }
 ```
 
-- `card` is the OpenEMR chart-card the citation points at. The frontend uses this to send a `postMessage` to the parent OpenEMR window asking it to flash that card. The set is closed; backend MUST emit one of the listed values or `"other"`.
+- `card` is the OpenEMR chart-card the citation points at. The frontend uses this to send a `postMessage` to the parent OpenEMR window asking it to flash that card. The set is closed; backend MUST emit one of the listed values or `"other"`. (Adds `"guideline"` for guideline-corpus citations — see issue 027.)
 - `fhir_ref` is the verifier-ratified FHIR resource per ARCHITECTURE.md §9 step 10 and §13. May be null only for `card: "other"` synthetic cites (e.g., counted-set citations from the W-1 stage-1 probe).
+- `label` is **human-readable and chart-card-aware** (issue 040). Backend owns the copy and never surfaces opaque resource handles like `"MedicationRequest (medications)"`. The LLM may hint richer copy via `<cite/>` tag attributes — `name="metformin" dose="500 mg PO BID"` for medication chips, `source="ADA" section="6.5"` for guideline chips, `page="1" field="results[0]" value="220"` for document chips. Absence markers carried on those attributes (e.g. `dose="[not specified on order]"`) are echoed verbatim so missing chart fields read as missing in returned source data, not as definitive absence.
 
 ## Followups
 
