@@ -284,6 +284,41 @@ async def test_upload_recovers_id_after_bool_given_500_with_recent_filename_matc
     assert call_kwargs.get("params") == {"path": "Lab Report"}
 
 
+async def test_upload_recovers_id_after_bool_true_200_with_recent_filename_match(
+    client: DocumentClient,
+) -> None:
+    """Some OpenEMR builds return JSON ``true`` after a landed upload."""
+
+    upload_response = httpx.Response(
+        200,
+        json=True,
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        200,
+        json=[
+            {
+                "id": "local-doc-101",
+                "filename": "local-lab.pdf",
+                "date": datetime.now(UTC).isoformat(),
+                "mimetype": "application/pdf",
+            },
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "local-lab.pdf", "lab_pdf"
+        )
+
+    assert ok is True
+    assert doc_id == "local-doc-101"
+    assert err is None
+
+
 async def test_upload_recovers_id_from_openemr_standard_docdate_shape(
     client: DocumentClient,
 ) -> None:
@@ -312,6 +347,144 @@ async def test_upload_recovers_id_from_openemr_standard_docdate_shape(
     ):
         ok, doc_id, err, _ms = await client.upload(
             "patient-1", PDF_BYTES, "p04-kowalski-cmp.pdf", "lab_pdf"
+        )
+
+    assert ok is True
+    assert doc_id == "real-openemr-doc"
+    assert err is None
+
+
+async def test_upload_recovers_id_from_openemr_date_only_docdate_shape(
+    client: DocumentClient,
+) -> None:
+    """Older OpenEMR document lists expose ``docdate`` as YYYY-MM-DD only."""
+
+    upload_response = httpx.Response(
+        500,
+        text="bool given in getResponseForPayload",
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        200,
+        json=[
+            {
+                "id": "date-only-openemr-doc",
+                "filename": "p04-kowalski-cmp.pdf",
+                "docdate": datetime.now(UTC).date().isoformat(),
+                "mimetype": "application/pdf",
+            },
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "p04-kowalski-cmp.pdf", "lab_pdf"
+        )
+
+    assert ok is True
+    assert doc_id == "date-only-openemr-doc"
+    assert err is None
+
+
+async def test_upload_rejects_stale_openemr_date_only_docdate_shape(
+    client: DocumentClient,
+) -> None:
+    upload_response = httpx.Response(
+        500,
+        text="bool given in getResponseForPayload",
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        200,
+        json=[
+            {
+                "id": "yesterday-doc",
+                "filename": "p04-kowalski-cmp.pdf",
+                "docdate": (datetime.now(UTC) - timedelta(days=1)).date().isoformat(),
+                "mimetype": "application/pdf",
+            },
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "p04-kowalski-cmp.pdf", "lab_pdf"
+        )
+
+    assert ok is False
+    assert doc_id is None
+    assert err == "upload_landed_id_lost"
+
+
+async def test_upload_recovers_id_from_timestamp_less_filename_match(
+    client: DocumentClient,
+) -> None:
+    upload_response = httpx.Response(
+        500,
+        text="bool given in getResponseForPayload",
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        200,
+        json=[
+            {
+                "id": "40",
+                "filename": "p04-kowalski-cmp.pdf",
+                "mimetype": "application/pdf",
+            },
+            {
+                "id": "42",
+                "filename": "p04-kowalski-cmp.pdf",
+                "mimetype": "application/pdf",
+            },
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "p04-kowalski-cmp.pdf", "lab_pdf"
+        )
+
+    assert ok is True
+    assert doc_id == "42"
+    assert err is None
+
+
+async def test_upload_recovery_filename_match_is_case_and_path_tolerant(
+    client: DocumentClient,
+) -> None:
+    upload_response = httpx.Response(
+        500,
+        text="bool given in getResponseForPayload",
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        200,
+        json=[
+            {
+                "id": "real-openemr-doc",
+                "filename": "P04-KOWALSKI-CMP.PDF",
+                "docdate": datetime.now(UTC).date().isoformat(),
+                "mimetype": "application/pdf",
+            },
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "C:\\fakepath\\p04-kowalski-cmp.pdf", "lab_pdf"
         )
 
     assert ok is True

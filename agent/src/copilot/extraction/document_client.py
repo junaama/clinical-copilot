@@ -31,6 +31,8 @@ Defensive validation done before any HTTP call:
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -38,6 +40,8 @@ from typing import Any
 import httpx
 
 from copilot.config import Settings
+
+_log = logging.getLogger(__name__)
 
 # 20 MB. Anything beyond is rejected client-side. Exposed as a constant so
 # tests can construct edge-of-limit fixtures without re-deriving the number.
@@ -95,9 +99,18 @@ def _document_filename(document: dict[str, Any]) -> str:
         or document.get("filename")
         or document.get("document_name")
         or document.get("file_name")
+        or document.get("title")
         or ""
     )
     return str(raw)
+
+
+def _normalize_filename(filename: str) -> str:
+    return filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].strip().lower()
+
+
+def _filename_fingerprint(filename: str) -> str:
+    return hashlib.sha256(_normalize_filename(filename).encode()).hexdigest()[:12]
 
 
 def _document_id(document: dict[str, Any]) -> str:
@@ -144,23 +157,92 @@ def _find_recent_filename_match(
     attempted_at: datetime,
 ) -> str | None:
     matches: list[tuple[datetime, str]] = []
+    untimed_matches: list[str] = []
     attempted_at = attempted_at.astimezone(UTC)
+    expected_filename = _normalize_filename(filename)
     for document in documents:
-        if _document_filename(document) != filename:
+        if _normalize_filename(_document_filename(document)) != expected_filename:
             continue
         doc_id = _document_id(document)
         if not doc_id:
             continue
         timestamp = _parse_document_timestamp(document)
         if timestamp is None:
+            untimed_matches.append(doc_id)
+            continue
+        # Older OpenEMR document-list responses only expose ``docdate``
+        # (YYYY-MM-DD). Treat same-day date-only matches as recoverable:
+        # the upload route already scoped the list by patient, category,
+        # and filename, and rejecting every date-only row makes successful
+        # uploads appear broken for most of the day.
+        is_date_only = (
+            timestamp.hour == 0
+            and timestamp.minute == 0
+            and timestamp.second == 0
+            and timestamp.microsecond == 0
+        )
+        if is_date_only and timestamp.date() == attempted_at.date():
+            matches.append((timestamp, doc_id))
             continue
         if abs((timestamp - attempted_at).total_seconds()) > _RECOVERY_WINDOW_SECONDS:
             continue
         matches.append((timestamp, doc_id))
     if not matches:
+        # Some OpenEMR document-list variants return id + filename with no
+        # timestamp at all. The fallback list is already scoped by patient,
+        # category, and exact filename immediately after the upload-landed
+        # serializer failure, so returning the highest numeric id is safer
+        # than reporting a false failure and blocking document RAG.
+        if untimed_matches:
+            return max(untimed_matches, key=_document_id_sort_key)
         return None
-    matches.sort(key=lambda item: item[0], reverse=True)
+    matches.sort(key=lambda item: (item[0], _document_id_sort_key(item[1])), reverse=True)
     return matches[0][1]
+
+
+def _document_id_sort_key(document_id: str) -> tuple[int, str]:
+    if document_id.isdigit():
+        return int(document_id), document_id
+    return 0, document_id
+
+
+def _log_upload_recovery_failure(
+    *,
+    patient_id: str,
+    filename: str,
+    category: str,
+    documents: list[dict[str, Any]],
+    list_ok: bool,
+    list_error: str | None,
+) -> None:
+    expected = _normalize_filename(filename)
+    matching = [
+        document
+        for document in documents
+        if _normalize_filename(_document_filename(document)) == expected
+    ]
+    sample = [
+        {
+            "has_id": bool(_document_id(document)),
+            "filename_hash": _filename_fingerprint(_document_filename(document)),
+            "timestamp_present": _parse_document_timestamp(document) is not None,
+            "keys": sorted(str(key) for key in document.keys())[:8],
+        }
+        for document in documents[:5]
+    ]
+    _log.warning(
+        "upload id recovery failed: patient_id_hash=%s category=%s "
+        "filename_hash=%s list_ok=%s list_error=%s document_count=%d "
+        "matching_filename_count=%d sample=%s",
+        hashlib.sha256(patient_id.encode()).hexdigest()[:12],
+        category,
+        _filename_fingerprint(filename),
+        list_ok,
+        list_error,
+        len(documents),
+        len(matching),
+        sample,
+    )
 
 
 class DocumentClient:
@@ -255,26 +337,62 @@ class DocumentClient:
             # When the response body matches that exact signature, recover
             # the real OpenEMR document id from a same-category list call.
             if _is_bool_given_upload_serializer_failure(response):
-                ok, documents, _err, _list_latency = await self.list(
-                    patient_id, category=category
+                return await self._recover_landed_upload_id(
+                    patient_id=patient_id,
+                    category=category,
+                    filename=filename,
+                    attempted_at=attempted_at,
+                    started=started,
                 )
-                recovered_id = (
-                    _find_recent_filename_match(documents, filename, attempted_at)
-                    if ok
-                    else None
-                )
-                total_latency = int((time.monotonic() - started) * 1000)
-                if recovered_id:
-                    return True, recovered_id, None, total_latency
-                return False, None, UPLOAD_LANDED_ID_LOST, total_latency
             # Surface a snippet of the response body so 500s aren't a
             # black box. Truncate to keep the audit log line bounded.
             snippet = body_text[:200].replace("\n", " ").strip()
             return False, None, f"http_{response.status_code}: {snippet}", latency
 
         body = response.json()
+        if body is True:
+            return await self._recover_landed_upload_id(
+                patient_id=patient_id,
+                category=category,
+                filename=filename,
+                attempted_at=attempted_at,
+                started=started,
+            )
+        if not isinstance(body, dict):
+            return False, None, f"unexpected_response: {type(body).__name__}", latency
+
         doc_id = str(body.get("id") or body.get("pid") or "")
         return True, doc_id or None, None, latency
+
+    async def _recover_landed_upload_id(
+        self,
+        *,
+        patient_id: str,
+        category: str,
+        filename: str,
+        attempted_at: datetime,
+        started: float,
+    ) -> tuple[bool, str | None, str | None, int]:
+        ok, documents, list_error, _list_latency = await self.list(
+            patient_id, category=category
+        )
+        recovered_id = (
+            _find_recent_filename_match(documents, filename, attempted_at)
+            if ok
+            else None
+        )
+        total_latency = int((time.monotonic() - started) * 1000)
+        if recovered_id:
+            return True, recovered_id, None, total_latency
+        _log_upload_recovery_failure(
+            patient_id=patient_id,
+            filename=filename,
+            category=category,
+            documents=documents,
+            list_ok=ok,
+            list_error=list_error,
+        )
+        return False, None, UPLOAD_LANDED_ID_LOST, total_latency
 
     # ------------------------------------------------------------------
     # list

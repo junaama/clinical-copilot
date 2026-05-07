@@ -84,13 +84,14 @@ class DocumentService extends BaseService
     {
         $docPathParts = explode("/", (string) $path);
         $lastInPath = end($docPathParts);
+        $normalizedLastInPath = str_replace(["_", " "], "", strtolower((string) $lastInPath));
 
         $sql  = "  SELECT id";
         $sql .= "    FROM categories";
         $sql .= "    WHERE replace(LOWER(name), ' ', '') = ?";
 
-        $results = sqlQuery($sql, [str_replace("_", "", $lastInPath)]);
-        return $results['id'];
+        $results = sqlQuery($sql, [$normalizedLastInPath]);
+        return $results['id'] ?? null;
     }
 
     public function getAllAtPath($pid, $path)
@@ -101,7 +102,7 @@ class DocumentService extends BaseService
 
         $categoryId = $this->getLastIdOfPath($path);
 
-        $documentsSql  = " SELECT doc.id, doc.mimetype, doc.docdate, doc.name, doc.hash";
+        $documentsSql  = " SELECT doc.id, doc.mimetype, doc.docdate, doc.date, doc.name, doc.hash";
         $documentsSql .= " FROM documents doc";
         $documentsSql .= " JOIN categories_to_documents ctd on ctd.document_id = doc.id";
         $documentsSql .= " WHERE ctd.category_id = ? and doc.foreign_id = ? and doc.deleted = 0";
@@ -115,7 +116,8 @@ class DocumentService extends BaseService
                 "hash" => $row["hash"],
                 "id" =>  $row["id"],
                 "mimetype" =>  $row["mimetype"],
-                "docdate" =>  $row["docdate"]
+                "docdate" =>  $row["docdate"],
+                "date" =>  $row["date"]
             ]);
         }
         return $fileResults;
