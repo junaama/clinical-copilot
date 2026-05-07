@@ -24,6 +24,12 @@ agent. Tracks the W2 PRD acceptance criteria for issue 012:
 > and the PHI safety check. This file owns the projection math and
 > rate table.
 
+> **Submission checklist.** The single verification map for the W2
+> submission — every acceptance criterion → existing test, runbook
+> section, or deployed flow — lives at
+> `agentforge-docs/W2-SUBMISSION-CHECKLIST.md`. This report is the
+> "actual numbers" companion to that checklist's AC8.
+
 ---
 
 ## 1. Observability surface (where the numbers come from)
