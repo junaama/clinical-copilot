@@ -27,7 +27,9 @@ from copilot.api.schemas import (
     CohortPatient,
     OvernightBlock,
     PlainBlock,
+    RouteMetadata,
     TriageBlock,
+    derive_route_metadata,
     fhir_ref_to_card,
 )
 
@@ -295,9 +297,55 @@ def test_chat_response_contains_block(fixture_client: TestClient) -> None:
     assert body["conversation_id"] == "demo-1"
     assert isinstance(body["reply"], str) and body["reply"]
     assert body["block"]["kind"] in {"triage", "overnight", "plain"}
+    # Issue 030: state.cache_hits is always present (empty list when no
+    # cache hit fired this turn). The deployed e2e test (issue 030)
+    # asserts a non-empty list on the second post-upload chat turn.
+    assert body["state"]["cache_hits"] == []
     # ChatResponse re-validates as a sanity check.
     parsed = ChatResponse.model_validate(body)
     assert parsed.block.lead == body["reply"]
+
+
+def test_chat_response_surfaces_cache_hits_from_state(
+    fixture_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the graph emits ``cache_hits``, the /chat response carries
+    them through under ``state.cache_hits`` so a client can prove the
+    extraction was cache-served (issue 030)."""
+
+    from copilot import server  # noqa: PLC0415
+
+    class _CacheHitGraph:
+        async def ainvoke(
+            self, inputs: dict[str, Any], config: dict[str, Any]
+        ) -> dict[str, Any]:
+            from langchain_core.messages import AIMessage
+
+            block = PlainBlock(lead="cache-served reply")
+            return {
+                "messages": [AIMessage(content="cache-served reply")],
+                "patient_id": inputs.get("patient_id"),
+                "workflow_id": "W-DOC",
+                "classifier_confidence": 0.91,
+                "block": block.model_dump(by_alias=True),
+                "cache_hits": ["document_id:abc-42"],
+            }
+
+    monkeypatch.setattr(server.app.state, "graph", _CacheHitGraph())
+
+    response = fixture_client.post(
+        "/chat",
+        json={
+            "conversation_id": "demo-cache",
+            "patient_id": "fixture-1",
+            "user_id": "naama",
+            "smart_access_token": "stub",
+            "message": "remind me of the LDL on the same upload",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"]["cache_hits"] == ["document_id:abc-42"]
 
 
 def test_chat_request_accepts_minimal_body() -> None:
@@ -313,3 +361,132 @@ def test_chat_request_accepts_minimal_body() -> None:
 def test_chat_request_rejects_empty_conversation_id() -> None:
     with pytest.raises(ValidationError):
         ChatRequest.model_validate({"conversation_id": "", "message": "hi"})
+
+
+# ---------------------------------------------------------------------------
+# Route metadata (issue 039)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("workflow_id", "decision", "supervisor_action", "expected_kind"),
+    [
+        # Chart happy path — W-2 single-patient brief, no decision short-circuit.
+        ("W-2", "allow", None, "chart"),
+        # Chart fallback for advisory workflow_id values that aren't W-1/W-DOC/W-EVD.
+        ("W-7", "allow", None, "chart"),
+        ("unclear", "allow", None, "chart"),
+        # Panel triage.
+        ("W-1", "allow", None, "panel"),
+        # Guideline / evidence path — workflow_id wins.
+        ("W-EVD", "allow", None, "guideline"),
+        # Guideline path triggered through the supervisor's action when the
+        # classifier didn't surface W-EVD on the latest turn.
+        ("W-2", "allow", "retrieve_evidence", "guideline"),
+        # Document upload path.
+        ("W-DOC", "allow", None, "document"),
+        ("W-2", "allow", "extract", "document"),
+        # Decision short-circuits override the workflow id.
+        ("W-1", "clarify", None, "clarify"),
+        ("W-EVD", "refused_unsourced", None, "refusal"),
+        ("W-DOC", "refused_unsourced", None, "refusal"),
+        ("W-2", "tool_failure", None, "refusal"),
+    ],
+)
+def test_derive_route_metadata_maps_state_to_route(
+    workflow_id: str | None,
+    decision: str | None,
+    supervisor_action: str | None,
+    expected_kind: str,
+) -> None:
+    """``derive_route_metadata`` covers the full route-kind matrix."""
+
+    route = derive_route_metadata(
+        workflow_id=workflow_id,
+        decision=decision,
+        supervisor_action=supervisor_action,
+    )
+    assert route.kind == expected_kind
+    assert route.label  # never empty
+
+
+def test_route_metadata_rejects_unknown_kind() -> None:
+    """``RouteMetadata`` is closed-set so the wire can't drift open."""
+
+    with pytest.raises(ValidationError):
+        RouteMetadata.model_validate({"kind": "mystery", "label": "x"})
+
+
+def test_route_metadata_rejects_empty_label() -> None:
+    with pytest.raises(ValidationError):
+        RouteMetadata.model_validate({"kind": "chart", "label": ""})
+
+
+def test_chat_response_carries_chart_route_for_chart_answer(
+    fixture_client: TestClient,
+) -> None:
+    """The chart-route happy path renders a structured route on /chat.
+
+    The stub graph emits ``W-2`` with no supervisor / refusal short-circuit,
+    so the response must surface ``state.route`` with ``kind: "chart"`` and
+    a non-empty user-facing label.
+    """
+
+    from copilot import server
+
+    class _ChartGraph:
+        async def ainvoke(
+            self, inputs: dict[str, Any], config: dict[str, Any]
+        ) -> dict[str, Any]:
+            from langchain_core.messages import AIMessage
+
+            block = PlainBlock(lead="Eduardo had a quiet night.")
+            return {
+                "messages": [AIMessage(content=block.lead)],
+                "patient_id": inputs.get("patient_id"),
+                "workflow_id": "W-2",
+                "classifier_confidence": 0.91,
+                "decision": "allow",
+                "block": block.model_dump(by_alias=True),
+            }
+
+    server.app.state.graph = _ChartGraph()
+
+    response = fixture_client.post(
+        "/chat",
+        json={
+            "conversation_id": "demo-route-chart",
+            "patient_id": "fixture-1",
+            "user_id": "naama",
+            "smart_access_token": "stub",
+            "message": "What happened to Eduardo overnight?",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    route = body["state"]["route"]
+    assert route["kind"] == "chart"
+    assert isinstance(route["label"], str) and len(route["label"]) > 0
+    assert route["label"] != "Reading this patient's record"  # backend owns the copy
+
+
+def test_chat_response_route_reflects_panel_workflow(
+    fixture_client: TestClient,
+) -> None:
+    """The original triage stub maps W-1 to a panel route, not chart."""
+
+    response = fixture_client.post(
+        "/chat",
+        json={
+            "conversation_id": "demo-route-panel",
+            "patient_id": "fixture-1",
+            "user_id": "naama",
+            "smart_access_token": "stub",
+            "message": "Who needs attention first?",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    route = body["state"]["route"]
+    assert route["kind"] == "panel"
+    assert route["label"]

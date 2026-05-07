@@ -452,6 +452,23 @@ body {
 .agent-tle-kind.k-med-admin { background: oklch(0.95 0.06 200); color: oklch(0.40 0.14 230); }
 
 /* citations */
+/* route badge — issue 039 */
+.agent-route {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin-bottom: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: oklch(0.98 0.005 280);
+  font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--ink-3); font-weight: 600;
+}
+.agent-route-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
+.agent-route[data-route-kind='refusal'] { color: oklch(0.55 0.14 28); }
+.agent-route[data-route-kind='clarify'] { color: oklch(0.55 0.13 80); }
+
 .agent-cites {
   margin-top: 10px; padding-top: 10px;
   border-top: 1px dashed var(--line);

@@ -31,10 +31,16 @@ The frontend sends `message` for both free-text and chip clicks (chip click send
     "patient_id":  "string | null",
     "workflow_id": "W-1 | W-2 | unclear | ...",
     "classifier_confidence": "number 0..1",
-    "message_count": "integer"
+    "message_count": "integer",
+    "route": {
+      "kind":  "chart | panel | guideline | document | clarify | refusal",
+      "label": "string — user-facing route description (UI renders verbatim)"
+    }
   }
 }
 ```
+
+`state.route` is the structured route-transparency contract from issue 039. The frontend uses `kind` to dispatch on (badge styling, header copy switch) and renders `label` verbatim — never derives the label from the kind on the client side, the backend owns the copy. The chat header surfaces the latest route label so a panel or guideline answer is not mislabeled as "Reading this patient's record".
 
 `reply` is duplicated as `block.lead` for variants that have a lead. Frontend reads `block.lead` for the typewriter; `reply` exists for clients that only want plain text (logging, smoke tests).
 

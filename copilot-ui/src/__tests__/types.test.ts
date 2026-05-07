@@ -130,3 +130,65 @@ describe('parseChatResponse', () => {
     expect(result.block.citations[0]?.fhir_ref).toBe('guideline:ada-a1c-2024-1');
   });
 });
+
+describe('parseChatResponse — route metadata (issue 039)', () => {
+  it('parses a chart route with a user-facing label', () => {
+    const ok = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        ...MOCK_OVERNIGHT_RESPONSE.state,
+        route: { kind: 'chart', label: 'Reading the patient record' },
+      },
+    };
+    const result = parseChatResponse(ok);
+    expect(result.state.route.kind).toBe('chart');
+    expect(result.state.route.label).toBe('Reading the patient record');
+  });
+
+  it('rejects a missing route', () => {
+    const bad = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        patient_id: '4',
+        workflow_id: 'W-2',
+        classifier_confidence: 0.9,
+        message_count: 1,
+        // route deliberately omitted
+      },
+    };
+    expect(() => parseChatResponse(bad)).toThrow(/route/);
+  });
+
+  it('rejects an unknown route kind', () => {
+    const bad = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        ...MOCK_OVERNIGHT_RESPONSE.state,
+        route: { kind: 'mystery', label: 'x' },
+      },
+    };
+    expect(() => parseChatResponse(bad)).toThrow(/route kind/);
+  });
+
+  it('rejects an empty route label', () => {
+    const bad = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        ...MOCK_OVERNIGHT_RESPONSE.state,
+        route: { kind: 'chart', label: '' },
+      },
+    };
+    expect(() => parseChatResponse(bad)).toThrow(/state.route.label/);
+  });
+
+  it('rejects a non-object route', () => {
+    const bad = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        ...MOCK_OVERNIGHT_RESPONSE.state,
+        route: 'chart',
+      },
+    };
+    expect(() => parseChatResponse(bad)).toThrow(/state.route/);
+  });
+});

@@ -7,7 +7,7 @@
  */
 
 import type { JSX } from 'react';
-import type { Block, Citation, CitationCard } from '../api/types';
+import type { Block, ChatRoute, Citation, CitationCard } from '../api/types';
 import { Lead } from './Lead';
 import { CohortBlock } from './CohortBlock';
 import { DeltaGrid } from './DeltaGrid';
@@ -17,6 +17,7 @@ export interface AgentMessage {
   readonly role: 'agent';
   readonly block: Block;
   readonly streaming: boolean;
+  readonly route?: ChatRoute;
 }
 
 export interface AgentErrorMessage {
@@ -46,6 +47,7 @@ export function AgentMsg({
   return (
     <div className="agent-msg agent">
       <div className="agent-bubble agent">
+        {message.route && <RouteBadge route={message.route} />}
         <Lead text={block.lead} streaming={streaming} />
         {showBody && renderBody(block, onJumpToVitals)}
         {showBody && showCitations && block.citations.length > 0 && (
@@ -93,6 +95,24 @@ function renderBody(
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled block: ${JSON.stringify(value)}`);
+}
+
+interface RouteBadgeProps {
+  readonly route: ChatRoute;
+}
+
+function RouteBadge({ route }: RouteBadgeProps): JSX.Element {
+  return (
+    <div
+      className="agent-route"
+      data-route-kind={route.kind}
+      role="status"
+      aria-label={`Route: ${route.label}`}
+    >
+      <span className="agent-route-dot" aria-hidden="true" />
+      <span className="agent-route-label">{route.label}</span>
+    </div>
+  );
 }
 
 interface CitationsProps {

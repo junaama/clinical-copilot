@@ -44,6 +44,7 @@ from .api.schemas import (
     OvernightBlock,
     PlainBlock,
     TriageBlock,
+    derive_route_metadata,
 )
 from .care_team import CareTeamGate
 from .checkpointer import open_checkpointer
@@ -493,6 +494,13 @@ async def chat(
     # second post-upload chat turn carries a non-empty list to verify the
     # cache-first branch (issue 023) in production.
     cache_hits = list(result.get("cache_hits") or [])
+    # Issue 039: structured route metadata so the UI renders a route badge
+    # and the header label without inferring routing from answer prose.
+    route = derive_route_metadata(
+        workflow_id=result.get("workflow_id"),
+        decision=result.get("decision"),
+        supervisor_action=result.get("supervisor_action"),
+    )
     # Frontend reads block.lead for the typewriter; reply is duplicated for
     # plain-text consumers (logs, smoke tests) per the contract.
     return ChatResponse(
@@ -505,6 +513,7 @@ async def chat(
             "classifier_confidence": float(result.get("classifier_confidence") or 0.0),
             "message_count": len(messages),
             "cache_hits": cache_hits,
+            "route": route.model_dump(),
         },
     )
 
