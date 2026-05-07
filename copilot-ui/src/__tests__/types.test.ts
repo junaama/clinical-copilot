@@ -192,3 +192,100 @@ describe('parseChatResponse — route metadata (issue 039)', () => {
     expect(() => parseChatResponse(bad)).toThrow(/state.route/);
   });
 });
+
+describe('parseChatResponse — diagnostics (issue 042)', () => {
+  it('parses a diagnostics object with decision + supervisor_action', () => {
+    const ok = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        ...MOCK_OVERNIGHT_RESPONSE.state,
+        diagnostics: { decision: 'allow', supervisor_action: 'extract' },
+      },
+    };
+    const result = parseChatResponse(ok);
+    expect(result.state.diagnostics.decision).toBe('allow');
+    expect(result.state.diagnostics.supervisor_action).toBe('extract');
+  });
+
+  it('accepts empty-string diagnostic fields (not-set sentinel)', () => {
+    // Backend uses '' to signal "not set this turn" — clarify and chart
+    // turns have no supervisor_action, for example.
+    const ok = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        ...MOCK_OVERNIGHT_RESPONSE.state,
+        diagnostics: { decision: '', supervisor_action: '' },
+      },
+    };
+    const result = parseChatResponse(ok);
+    expect(result.state.diagnostics.decision).toBe('');
+    expect(result.state.diagnostics.supervisor_action).toBe('');
+  });
+
+  it('rejects a missing diagnostics field', () => {
+    const bad = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        patient_id: '4',
+        workflow_id: 'W-2',
+        classifier_confidence: 0.9,
+        message_count: 1,
+        route: { kind: 'chart', label: 'Reading the patient record' },
+        // diagnostics deliberately omitted
+      },
+    };
+    expect(() => parseChatResponse(bad)).toThrow(/diagnostics/);
+  });
+
+  it('rejects a non-object diagnostics', () => {
+    const bad = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        ...MOCK_OVERNIGHT_RESPONSE.state,
+        diagnostics: 'allow',
+      },
+    };
+    expect(() => parseChatResponse(bad)).toThrow(/state.diagnostics/);
+  });
+
+  it('rejects a non-string decision', () => {
+    const bad = {
+      ...MOCK_OVERNIGHT_RESPONSE,
+      state: {
+        ...MOCK_OVERNIGHT_RESPONSE.state,
+        diagnostics: { decision: 42, supervisor_action: '' },
+      },
+    };
+    expect(() => parseChatResponse(bad)).toThrow(/diagnostics.decision/);
+  });
+
+  it('parses a panel-unavailable failure response with diagnostics', () => {
+    // The full wire shape on a panel triage failure: panel kind +
+    // ``Panel data unavailable`` label + tool_failure decision.
+    const failureBlock = {
+      kind: 'plain' as const,
+      lead:
+        "Panel data is unavailable right now, so I can't rank the " +
+        'patients on your panel.',
+      citations: [],
+      followups: [],
+    };
+    const ok = {
+      conversation_id: 'demo-panel-fail',
+      reply: failureBlock.lead,
+      block: failureBlock,
+      state: {
+        patient_id: 'fixture-1',
+        workflow_id: 'W-1',
+        classifier_confidence: 0.93,
+        message_count: 2,
+        route: { kind: 'panel', label: 'Panel data unavailable' },
+        diagnostics: { decision: 'tool_failure', supervisor_action: '' },
+      },
+    };
+    const result = parseChatResponse(ok);
+    expect(result.state.route.kind).toBe('panel');
+    expect(result.state.route.label).toBe('Panel data unavailable');
+    expect(result.state.diagnostics.decision).toBe('tool_failure');
+  });
+});

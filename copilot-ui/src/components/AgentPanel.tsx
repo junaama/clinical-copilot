@@ -149,6 +149,17 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
         block: result.response.block,
         streaming: true,
         route: result.response.state.route,
+        // Issue 042: per-turn diagnostics for the Technical details
+        // affordance. The data carried here never bleeds into the
+        // clinical answer — AgentMsg renders it inside a collapsed
+        // ``<details>`` so the clinician sees only the lead unless
+        // they open it.
+        debugInfo: {
+          route: result.response.state.route,
+          workflow_id: result.response.state.workflow_id,
+          classifier_confidence: result.response.state.classifier_confidence,
+          diagnostics: result.response.state.diagnostics,
+        },
       },
     };
     setMessages((prev) => [...prev, agentMsg]);

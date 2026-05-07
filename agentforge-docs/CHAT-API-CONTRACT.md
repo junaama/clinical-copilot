@@ -35,12 +35,20 @@ The frontend sends `message` for both free-text and chip clicks (chip click send
     "route": {
       "kind":  "chart | panel | guideline | document | clarify | refusal",
       "label": "string — user-facing route description (UI renders verbatim)"
+    },
+    "diagnostics": {
+      "decision":          "string — graph decision (allow | clarify | tool_failure | refused_unsourced | ...) or '' if not set",
+      "supervisor_action": "string — supervisor action (extract | retrieve_evidence | ...) or '' if not set"
     }
   }
 }
 ```
 
 `state.route` is the structured route-transparency contract from issue 039. The frontend uses `kind` to dispatch on (badge styling, header copy switch) and renders `label` verbatim — never derives the label from the kind on the client side, the backend owns the copy. The chat header surfaces the latest route label so a panel or guideline answer is not mislabeled as "Reading this patient's record".
+
+**Panel triage failures (issue 042) are the explicit exception to the route-kind mapping.** When a W-1 turn's `decision` is in the refusal set (`tool_failure`, `refused_unsourced`, etc.), the route stays `kind: "panel"` with `label: "Panel data unavailable"` so the badge still advertises the panel route the clinician asked for, with the label naming the failure state. (Failures on other routes — guideline, document — transition to `kind: "refusal"`.)
+
+`state.diagnostics` is the issue 042 technical-details contract. Empty strings denote "not set this turn" (e.g. clarify and chart turns have no `supervisor_action`). The clinical answer prose **never** contains decision tokens, probe names, or HTTP statuses — the verifier scrubs those. The UI surfaces `diagnostics` only inside a hidden-by-default `<details>` so a developer or grader can audit per-turn routing without the clinician seeing internals.
 
 `reply` is duplicated as `block.lead` for variants that have a lead. Frontend reads `block.lead` for the typewriter; `reply` exists for clients that only want plain text (logging, smoke tests).
 

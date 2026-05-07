@@ -194,6 +194,14 @@ _ROUTE_LABELS: dict[str, str] = {
     "refusal": "Cannot ground this answer",
 }
 
+# Issue 042: panel triage failures keep advertising the panel route — the
+# clinician asked about the panel, the system tried the panel route and
+# failed closed, so the route label names that failure state. The kind
+# stays ``panel`` so the badge styling reflects the route and the
+# click-flow / source-overlay code (which dispatches on kind) is
+# unaffected.
+PANEL_UNAVAILABLE_LABEL = "Panel data unavailable"
+
 
 def derive_route_metadata(
     *,
@@ -205,12 +213,17 @@ def derive_route_metadata(
 
     Decision short-circuits (clarify, refusal) take precedence over workflow
     so a refusal that originated on a guideline-intent turn is still labeled
-    as a refusal, not a guideline read.
+    as a refusal, not a guideline read. Panel triage failures (issue 042)
+    are the explicit exception: a W-1 turn that fails closed keeps the
+    ``panel`` route kind so the badge advertises the panel route, with a
+    ``Panel data unavailable`` label naming the failure state.
     """
 
     if decision == "clarify":
         return RouteMetadata(kind="clarify", label=_ROUTE_LABELS["clarify"])
     if decision in _REFUSAL_DECISIONS:
+        if workflow_id == "W-1":
+            return RouteMetadata(kind="panel", label=PANEL_UNAVAILABLE_LABEL)
         return RouteMetadata(kind="refusal", label=_ROUTE_LABELS["refusal"])
     if workflow_id == "W-EVD" or supervisor_action == "retrieve_evidence":
         return RouteMetadata(kind="guideline", label=_ROUTE_LABELS["guideline"])

@@ -149,6 +149,7 @@ export const MOCK_TRIAGE_RESPONSE: ChatResponse = {
     classifier_confidence: 0.93,
     message_count: 2,
     route: { kind: 'panel', label: 'Reviewing your panel' },
+    diagnostics: { decision: 'allow', supervisor_action: '' },
   },
 };
 
@@ -162,6 +163,7 @@ export const MOCK_OVERNIGHT_RESPONSE: ChatResponse = {
     classifier_confidence: 0.91,
     message_count: 4,
     route: { kind: 'chart', label: 'Reading the patient record' },
+    diagnostics: { decision: 'allow', supervisor_action: '' },
   },
 };
 
@@ -175,5 +177,6 @@ export const MOCK_PLAIN_RESPONSE: ChatResponse = {
     classifier_confidence: 0.42,
     message_count: 1,
     route: { kind: 'clarify', label: 'Asking for clarification' },
+    diagnostics: { decision: 'clarify', supervisor_action: '' },
   },
 };

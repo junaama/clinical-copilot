@@ -501,6 +501,18 @@ async def chat(
         decision=result.get("decision"),
         supervisor_action=result.get("supervisor_action"),
     )
+    # Issue 042: technical-details affordance. The clinical answer must
+    # not contain probe names or HTTP statuses (the verifier scrubs
+    # those), but a developer or grader needs to see the per-turn
+    # decision and supervisor action to confirm the system failed
+    # closed rather than hallucinated. These fields are emitted on the
+    # wire under ``state.diagnostics`` and rendered by the UI behind a
+    # collapsed ``Technical details`` ``<details>`` element so they
+    # never bleed into the main answer.
+    diagnostics: dict[str, Any] = {
+        "decision": result.get("decision") or "",
+        "supervisor_action": result.get("supervisor_action") or "",
+    }
     # Frontend reads block.lead for the typewriter; reply is duplicated for
     # plain-text consumers (logs, smoke tests) per the contract.
     return ChatResponse(
@@ -514,6 +526,7 @@ async def chat(
             "message_count": len(messages),
             "cache_hits": cache_hits,
             "route": route.model_dump(),
+            "diagnostics": diagnostics,
         },
     )
 
