@@ -1,0 +1,49 @@
+# Railway CI/CD
+#
+# Setup (one-time):
+#   1. In Railway: Project Settings → Tokens → "Create Token", scope it to the
+#      `production` environment. Copy the token.
+#   2. In GitLab: Settings → CI/CD → Variables → "Add variable":
+#        Key:      RAILWAY_TOKEN
+#        Value:    <token from step 1>
+#        Type:     Variable
+#        Flags:    Protected, Masked, Hidden
+#      Mark "Protected" so it's only exposed on protected branches (main).
+#
+# A project token deploys any service in its environment, so one token covers
+# all four jobs below. `railway up` reads RAILWAY_TOKEN from the environment.
+
+stages:
+  - deploy
+
+.railway:
+  image: ghcr.io/railwayapp/cli:latest
+  before_script:
+    - apk add --no-cache bash
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"
+  interruptible: true
+
+deploy:agent:
+  extends: .railway
+  stage: deploy
+  script:
+    - bash scripts/deploy-agent.sh
+
+deploy:ui:
+  extends: .railway
+  stage: deploy
+  script:
+    - bash scripts/deploy-ui.sh
+
+deploy:openemr:
+  extends: .railway
+  stage: deploy
+  script:
+    - bash scripts/deploy-openemr.sh
+
+deploy:minio:
+  extends: .railway
+  stage: deploy
+  script:
+    - bash scripts/deploy-minio.sh
