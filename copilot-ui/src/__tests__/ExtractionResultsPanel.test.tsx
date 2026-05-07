@@ -1,8 +1,30 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExtractionResultsPanel } from '../components/ExtractionResultsPanel';
-import type { ExtractionResponse } from '../api/extraction';
+import type {
+  ExtractionResponse,
+  UploadBboxRecord,
+} from '../api/extraction';
+
+function makeFile(opts: { name?: string; type?: string; size?: number } = {}): File {
+  const { name = 'lab.png', type = 'image/png', size = 1024 } = opts;
+  const buf = new Uint8Array(size);
+  return new File([buf], name, { type });
+}
+
+function bbox(
+  field_path: string,
+  overrides: Partial<UploadBboxRecord> = {},
+): UploadBboxRecord {
+  return {
+    field_path,
+    extracted_value: overrides.extracted_value ?? 'value',
+    matched_text: overrides.matched_text ?? 'value',
+    bbox: overrides.bbox ?? { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+    match_confidence: overrides.match_confidence ?? 0.9,
+  };
+}
 
 function labFixture(): ExtractionResponse {
   return {
@@ -206,6 +228,181 @@ describe('ExtractionResultsPanel', () => {
     expect(
       screen.getByText(/No intake form fields were extracted/i),
     ).toBeInTheDocument();
+  });
+
+  describe('Source tabs (issue 032)', () => {
+    const objectUrl = 'blob:mock-source-url';
+
+    beforeEach(() => {
+      // jsdom does not implement URL.createObjectURL.
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: vi.fn(() => objectUrl),
+      });
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        value: vi.fn(),
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('renders Results and Source tab controls when an extraction is shown', () => {
+      render(<ExtractionResultsPanel extraction={labFixture()} />);
+      expect(
+        screen.getByRole('tab', { name: /results/i }),
+      ).toHaveAttribute('aria-selected', 'true');
+      expect(
+        screen.getByRole('tab', { name: /source/i }),
+      ).toHaveAttribute('aria-selected', 'false');
+    });
+
+    it('switches to the Source tab when the user clicks it', async () => {
+      const fixture = labFixture();
+      render(
+        <ExtractionResultsPanel
+          extraction={fixture}
+          sourceFile={makeFile({ name: 'cbc.png', type: 'image/png' })}
+        />,
+      );
+      await userEvent.click(screen.getByRole('tab', { name: /source/i }));
+      expect(
+        screen.getByRole('tab', { name: /source/i }),
+      ).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByTestId('source-tab-panel')).toBeInTheDocument();
+      expect(screen.queryByText('Hemoglobin A1c')).not.toBeInTheDocument();
+    });
+
+    it('exposes a source CTA only when an exact field_path match exists', () => {
+      const fixture = labFixture();
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [bbox('results[0].value', { extracted_value: '8.2' })],
+      };
+      render(<ExtractionResultsPanel extraction={withBboxes} />);
+      expect(
+        screen.getByTestId('source-cta-results[0].value'),
+      ).toBeInTheDocument();
+      // No bbox for row 1 (Creatinine) → no CTA.
+      expect(
+        screen.queryByTestId('source-cta-results[1].value'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('renders no source CTAs when bboxes is empty', () => {
+      render(<ExtractionResultsPanel extraction={labFixture()} />);
+      const rowCount = screen.getAllByRole('row').length;
+      expect(rowCount).toBeGreaterThan(0);
+      expect(
+        screen.queryAllByRole('button', { name: /show source/i }),
+      ).toHaveLength(0);
+    });
+
+    it('selecting a source CTA switches to Source tab and marks the matching bbox', async () => {
+      const fixture = labFixture();
+      const sourceFile = makeFile({ name: 'cbc.png', type: 'image/png' });
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [
+          bbox('results[0].value', {
+            bbox: { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+          }),
+          bbox('results[1].value', {
+            bbox: { page: 1, x: 0.5, y: 0.4, width: 0.2, height: 0.05 },
+          }),
+        ],
+      };
+      render(
+        <ExtractionResultsPanel
+          extraction={withBboxes}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(
+        screen.getByTestId('source-cta-results[0].value'),
+      );
+      expect(
+        screen.getByRole('tab', { name: /source/i }),
+      ).toHaveAttribute('aria-selected', 'true');
+
+      const selected = screen.getByTestId('source-bbox-selected');
+      expect(selected).toHaveAttribute(
+        'data-field-path',
+        'results[0].value',
+      );
+
+      // Both boxes render — selected prominent, others faint.
+      const allBoxes = screen.getAllByTestId(/^source-bbox-/);
+      expect(allBoxes.length).toBe(2);
+    });
+
+    it('renders the uploaded image in the Source tab using a browser-local object URL', async () => {
+      const fixture = labFixture();
+      const sourceFile = makeFile({ name: 'cbc.png', type: 'image/png' });
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [bbox('results[0].value')],
+      };
+      render(
+        <ExtractionResultsPanel
+          extraction={withBboxes}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(screen.getByRole('tab', { name: /source/i }));
+      const img = screen.getByAltText(/source preview/i) as HTMLImageElement;
+      expect(img).toBeInTheDocument();
+      expect(img.src).toBe(objectUrl);
+    });
+
+    it('positions bbox overlays using normalized coordinates', async () => {
+      const fixture = labFixture();
+      const sourceFile = makeFile({ name: 'cbc.png', type: 'image/png' });
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [
+          bbox('results[0].value', {
+            bbox: { page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 },
+          }),
+        ],
+      };
+      render(
+        <ExtractionResultsPanel
+          extraction={withBboxes}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(screen.getByRole('tab', { name: /source/i }));
+      const overlay = screen.getByTestId(
+        'source-bbox-results[0].value',
+      );
+      expect(overlay.style.left).toBe('10%');
+      expect(overlay.style.top).toBe('20%');
+      expect(overlay.style.width).toBe('30%');
+      expect(overlay.style.height).toBe('5%');
+    });
+
+    it('renders an empty-state in the Source tab when no file is provided', async () => {
+      render(<ExtractionResultsPanel extraction={labFixture()} />);
+      await userEvent.click(screen.getByRole('tab', { name: /source/i }));
+      expect(
+        screen.getByText(/no source preview available/i),
+      ).toBeInTheDocument();
+    });
+
+    it('exposes a source CTA on intake chief_concern when matched', () => {
+      const fixture = intakeFixture();
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [bbox('chief_concern')],
+      };
+      render(<ExtractionResultsPanel extraction={withBboxes} />);
+      expect(
+        screen.getByTestId('source-cta-chief_concern'),
+      ).toBeInTheDocument();
+    });
   });
 
   it('renders nothing when the canonical status is not ok (issue 025)', () => {

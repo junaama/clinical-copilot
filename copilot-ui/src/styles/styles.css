@@ -1087,4 +1087,88 @@ body {
   color: var(--ink-3);
   font-size: 12px;
 }
+.extraction-panel__tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line-2);
+}
+.extraction-panel__tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.extraction-panel__tab--active {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+.extraction-panel__source-cta {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+  background: transparent;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.extraction-panel__source-cta:hover {
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+.extraction-panel__source {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.extraction-panel__source-stage {
+  position: relative;
+  width: 100%;
+  background: var(--surface-2, #f6f6f6);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.extraction-panel__source-image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.extraction-panel__source-placeholder {
+  padding: 24px;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: center;
+}
+.extraction-panel__source-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.extraction-panel__bbox {
+  border: 1px solid;
+  border-radius: 2px;
+}
+.extraction-panel__bbox--faint {
+  border-color: oklch(0.7 0.05 240 / 0.5);
+  background: oklch(0.7 0.05 240 / 0.08);
+}
+.extraction-panel__bbox--selected {
+  border-color: oklch(0.55 0.18 25);
+  background: oklch(0.7 0.18 25 / 0.18);
+  box-shadow: 0 0 0 2px oklch(0.55 0.18 25 / 0.4);
+}
+.extraction-panel__source-caption {
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-3);
+}
 
