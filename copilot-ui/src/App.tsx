@@ -179,6 +179,13 @@ function StandaloneApp(): JSX.Element {
   // Rehydrate messages whenever the active conversation changes to one the
   // server already knows about (deep-link or sidebar-click). A fresh thread
   // (no server-side state yet) returns 404 / null and stays empty.
+  //
+  // Issue 045: assistant rows may carry a structured ``block`` and route
+  // metadata when the per-turn provenance store has them. We restore the
+  // exact block kind and route badge the clinician saw on the original
+  // turn — citations, followups, and route label all survive reopen.
+  // Legacy rows from the LangGraph checkpoint fallback have only
+  // ``content`` and render as a plain block with no source chips.
   useEffect(() => {
     if (session.state !== 'authenticated') return;
     let cancelled = false;
@@ -193,13 +200,20 @@ function StandaloneApp(): JSX.Element {
             text: m.content,
           } satisfies ChatMessage;
         }
+        const block = m.block ?? {
+          kind: 'plain' as const,
+          lead: m.content,
+          citations: [],
+          followups: [],
+        };
         return {
           id: nextLocalMessageId(),
           role: 'agent',
           agent: {
             role: 'agent',
-            block: { kind: 'plain', lead: m.content, citations: [], followups: [] },
+            block,
             streaming: false,
+            ...(m.route ? { route: m.route } : {}),
           },
         } satisfies ChatMessage;
       });

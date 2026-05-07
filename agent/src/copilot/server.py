@@ -49,6 +49,12 @@ from .api.schemas import (
 from .care_team import CareTeamGate
 from .checkpointer import open_checkpointer
 from .config import get_settings
+from .conversation_turns import (
+    ConversationTurn,
+    ConversationTurnRegistry,
+    InMemoryTurnStore,
+    open_conversation_turn_store,
+)
 from .conversations import (
     ConversationRegistry,
     InMemoryConversationStore,
@@ -150,7 +156,13 @@ async def lifespan(app: FastAPI):
         existing_session = hasattr(app.state, "session_gateway")
         existing_conv = hasattr(app.state, "conversation_registry")
         existing_summarizer = hasattr(app.state, "title_summarizer")
-        if existing_session and existing_conv and existing_summarizer:
+        existing_turn = hasattr(app.state, "conversation_turn_registry")
+        if (
+            existing_session
+            and existing_conv
+            and existing_summarizer
+            and existing_turn
+        ):
             yield
             return
         if settings.checkpointer_dsn:
@@ -166,19 +178,26 @@ async def lifespan(app: FastAPI):
                 async with open_conversation_store(
                     settings.checkpointer_dsn
                 ) as conv_store:
-                    if not existing_session:
-                        app.state.session_gateway = SessionGateway(
-                            store=session_store
-                        )
-                    if not existing_conv:
-                        app.state.conversation_registry = ConversationRegistry(
-                            store=conv_store
-                        )
-                    if not existing_summarizer:
-                        app.state.title_summarizer = _maybe_build_title_summarizer(
-                            settings, app.state.conversation_registry
-                        )
-                    yield
+                    async with open_conversation_turn_store(
+                        settings.checkpointer_dsn
+                    ) as turn_store:
+                        if not existing_session:
+                            app.state.session_gateway = SessionGateway(
+                                store=session_store
+                            )
+                        if not existing_conv:
+                            app.state.conversation_registry = ConversationRegistry(
+                                store=conv_store
+                            )
+                        if not existing_turn:
+                            app.state.conversation_turn_registry = (
+                                ConversationTurnRegistry(store=turn_store)
+                            )
+                        if not existing_summarizer:
+                            app.state.title_summarizer = _maybe_build_title_summarizer(
+                                settings, app.state.conversation_registry
+                            )
+                        yield
         else:
             if not existing_session:
                 app.state.session_gateway = SessionGateway(
@@ -187,6 +206,10 @@ async def lifespan(app: FastAPI):
             if not existing_conv:
                 app.state.conversation_registry = ConversationRegistry(
                     store=InMemoryConversationStore()
+                )
+            if not existing_turn:
+                app.state.conversation_turn_registry = ConversationTurnRegistry(
+                    store=InMemoryTurnStore()
                 )
             if not existing_summarizer:
                 app.state.title_summarizer = _maybe_build_title_summarizer(
@@ -513,6 +536,38 @@ async def chat(
         "decision": result.get("decision") or "",
         "supervisor_action": result.get("supervisor_action") or "",
     }
+    # Issue 045: per-turn provenance snapshot for sidebar reopen. The
+    # LangGraph checkpoint only retains the most-recent turn's structured
+    # block (``CoPilotState.block`` is overwritten on every turn), so we
+    # capture each completed turn here so reopen can restore route
+    # labels, source chips, and block kind. Skipped when there's no
+    # authenticated user — anonymous chat doesn't land in any sidebar
+    # and therefore doesn't need rehydration provenance.
+    turn_registry: ConversationTurnRegistry | None = getattr(
+        app.state, "conversation_turn_registry", None
+    )
+    if turn_registry is not None and user_id:
+        try:
+            await turn_registry.append_turn(
+                conversation_id=req.conversation_id,
+                user_message=req.message,
+                assistant_text=reply,
+                block=block.model_dump(by_alias=True),
+                route_kind=route.kind,
+                route_label=route.label,
+                workflow_id=result.get("workflow_id") or "",
+                classifier_confidence=float(
+                    result.get("classifier_confidence") or 0.0
+                ),
+                decision=result.get("decision") or "",
+                supervisor_action=result.get("supervisor_action") or "",
+            )
+        except Exception:
+            # Turn-store write failure must not fail the chat reply —
+            # rehydration is a best-effort surface, not a critical path.
+            _log.warning(
+                "conversation turn write failed", exc_info=True
+            )
     # Frontend reads block.lead for the typewriter; reply is duplicated for
     # plain-text consumers (logs, smoke tests) per the contract.
     return ChatResponse(
@@ -1028,12 +1083,18 @@ async def get_conversation_messages(
     conversation_id: str,
     copilot_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
-    """Return the prior turns for a conversation, loaded from the LangGraph
-    checkpoint. Drives sidebar reopen — clicking a thread fetches its
-    messages and rehydrates the chat surface.
+    """Return the prior turns for a conversation. Drives sidebar reopen —
+    clicking a thread fetches its messages and rehydrates the chat surface.
 
-    Returns turn pairs as ``[{role: 'user' | 'agent', content: str}, ...]``
-    so the frontend doesn't have to know about LangChain message types.
+    Issue 045: when per-turn provenance has been recorded (every turn
+    completed by /chat after the issue-045 wire-in), the response carries
+    structured ``block`` and ``route`` fields per assistant row so the
+    UI can re-render route badges and source chips exactly as the
+    clinician saw them on the original turn. Legacy turns from before
+    the wire-in (or anonymous flows) fall back to a LangGraph checkpoint
+    scan — they appear as plain-text messages with no block/route, and
+    the frontend renders a safe ``plain`` block.
+
     Authorization: the row must belong to the requesting user.
     """
     user_id = await _resolve_user_id_from_cookie(copilot_session)
@@ -1045,7 +1106,45 @@ async def get_conversation_messages(
         # owner-mismatch is indistinguishable from non-existence.
         raise HTTPException(status_code=404, detail="conversation not found")
 
-    messages: list[dict[str, str]] = []
+    messages: list[dict[str, Any]] = []
+
+    # Issue 045: prefer the per-turn provenance store. When present, it
+    # carries the structured block, route metadata, and diagnostics that
+    # the LangGraph checkpoint cannot replay (the checkpoint only holds
+    # the most-recent turn's ``block`` field — prior turns are clobbered).
+    turn_registry: ConversationTurnRegistry | None = getattr(
+        app.state, "conversation_turn_registry", None
+    )
+    turns: list[ConversationTurn] = []
+    if turn_registry is not None:
+        turns = await turn_registry.list_turns(conversation_id)
+    if turns:
+        for t in turns:
+            messages.append({"role": "user", "content": t.user_message})
+            messages.append(
+                {
+                    "role": "agent",
+                    "content": t.assistant_text,
+                    "block": t.block,
+                    "route": {"kind": t.route_kind, "label": t.route_label},
+                    "diagnostics": {
+                        "decision": t.decision,
+                        "supervisor_action": t.supervisor_action,
+                    },
+                    "workflow_id": t.workflow_id,
+                    "classifier_confidence": t.classifier_confidence,
+                }
+            )
+        return {
+            "id": row.id,
+            "title": row.title,
+            "last_focus_pid": row.last_focus_pid,
+            "messages": messages,
+        }
+
+    # Legacy fallback: scan the LangGraph checkpoint for plain-text turn
+    # pairs. No structured block / route is available — the UI renders
+    # these as ``plain`` blocks with no source chips or route badge.
     graph = getattr(app.state, "graph", None)
     if graph is not None and hasattr(graph, "aget_state"):
         config: dict[str, Any] = {"configurable": {"thread_id": conversation_id}}
