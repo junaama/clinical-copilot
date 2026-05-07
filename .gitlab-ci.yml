@@ -36,12 +36,6 @@ deploy:ui:
   script:
     - bash scripts/deploy-ui.sh
 
-deploy:openemr:
-  extends: .railway
-  stage: deploy
-  script:
-    - bash scripts/deploy-openemr.sh
-
 deploy:minio:
   extends: .railway
   stage: deploy
