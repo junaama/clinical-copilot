@@ -27,6 +27,9 @@ rm -rf "${PATCHES_DEST}"
 mkdir -p "${PATCHES_DEST}/src/Common/Session"
 cp "${REPO_ROOT}/src/Common/Session/SessionConfigurationBuilder.php" \
    "${PATCHES_DEST}/src/Common/Session/SessionConfigurationBuilder.php"
+mkdir -p "${PATCHES_DEST}/src/Services"
+cp "${REPO_ROOT}/src/Services/DocumentService.php" \
+   "${PATCHES_DEST}/src/Services/DocumentService.php"
 echo "==> Staged PHP patches: $(find "${PATCHES_DEST}" -type f | wc -l | tr -d ' ') file(s)"
 
 echo "==> Deploying openemr from ${CTX}"
