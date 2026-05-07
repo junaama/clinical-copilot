@@ -30,6 +30,9 @@ cp "${REPO_ROOT}/src/Common/Session/SessionConfigurationBuilder.php" \
 mkdir -p "${PATCHES_DEST}/src/Services"
 cp "${REPO_ROOT}/src/Services/DocumentService.php" \
    "${PATCHES_DEST}/src/Services/DocumentService.php"
+mkdir -p "${PATCHES_DEST}/src/RestControllers"
+cp "${REPO_ROOT}/src/RestControllers/DocumentRestController.php" \
+   "${PATCHES_DEST}/src/RestControllers/DocumentRestController.php"
 echo "==> Staged PHP patches: $(find "${PATCHES_DEST}" -type f | wc -l | tr -d ' ') file(s)"
 
 echo "==> Deploying openemr from ${CTX}"
