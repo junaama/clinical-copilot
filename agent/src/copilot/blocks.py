@@ -62,7 +62,20 @@ _CITE_INNER_REF_PATTERN = re.compile(
     rf"([^{_CITE_QUOTE_CLASS}]+)[{_CITE_QUOTE_CLASS}]",
     flags=re.IGNORECASE,
 )
-_CITE_ATTR_KEYS: tuple[str, ...] = ("source", "section", "page", "field", "value")
+_CITE_ATTR_KEYS: tuple[str, ...] = (
+    "source",
+    "section",
+    "page",
+    "field",
+    "value",
+    # Issue 040: medication chips surface the drug name and dose so the
+    # source label reads as a clinical reference rather than as the
+    # opaque ``MedicationRequest/<id>`` resource handle. The LLM is told
+    # to populate these from the ``medication`` / ``dosage`` fields it
+    # already sees on the medication tool envelope.
+    "name",
+    "dose",
+)
 
 
 # Canonical follow-up chip strings, verbatim from the prototype copy. The
@@ -174,6 +187,26 @@ def build_citations(
     return tuple(citations)
 
 
+# Issue 040: card-aware humanized defaults for chart citation chips. The
+# previous default (``"<ResourceType> (<card>)"``) leaked the FHIR
+# resource handle into the chip — the issue's "source chip labels are
+# human-readable and avoid opaque-only identifiers" criterion requires
+# clinician-facing copy, not internal type names. Used when the cite tag
+# carries no overriding attribute hint (``name`` / ``field`` / etc.).
+_HUMAN_LABEL_BY_CARD: dict[CitationCard, str] = {
+    "medications": "Medication order",
+    "vitals": "Vital sign",
+    "labs": "Lab result",
+    "problems": "Problem",
+    "allergies": "Allergy",
+    "prescriptions": "Order",
+    "encounters": "Encounter",
+    "documents": "Document",
+    "guideline": "Guideline source",
+    "other": "Chart source",
+}
+
+
 def _default_label_for(
     fhir_ref: str,
     card: CitationCard,
@@ -184,6 +217,14 @@ def _default_label_for(
     Guideline refs use the ``source`` / ``section`` attributes from the
     original ``<cite/>`` tag when present so the chip identifies the
     guideline by name rather than by opaque chunk id.
+
+    Chart medication refs surface the drug name (and optional dose) from
+    the ``name`` / ``dose`` cite attributes so a medication chip reads
+    as ``metformin · 500 mg PO BID`` instead of the opaque resource
+    handle. Absence markers in either attribute (e.g.
+    ``dose="[not specified on order]"``) are echoed verbatim — missing
+    chart fields read as missing in the returned source data, not as a
+    fabricated default.
     """
     a = attrs or {}
     if fhir_ref.startswith("guideline:"):
@@ -195,9 +236,17 @@ def _default_label_for(
             return source
         if section:
             return f"Guideline · {section}"
-        return "Guideline source"
-    resource_type = fhir_ref.split("/", 1)[0] if "/" in fhir_ref else fhir_ref
-    return f"{resource_type} ({card})"
+        return _HUMAN_LABEL_BY_CARD["guideline"]
+
+    if card == "medications":
+        name = (a.get("name") or "").strip()
+        dose = (a.get("dose") or "").strip()
+        if name and dose:
+            return f"{name} · {dose}"
+        if name:
+            return name
+
+    return _HUMAN_LABEL_BY_CARD.get(card, "Chart source")
 
 
 def plain_block_from_text(

@@ -204,6 +204,116 @@ describe('AgentMsg guideline citations (issue 027)', () => {
   });
 });
 
+describe('AgentMsg chart medication citations (issue 040)', () => {
+  const medicationPlainBlock = {
+    kind: 'plain' as const,
+    lead: 'Active home medications include metformin and lisinopril.',
+    citations: [
+      {
+        card: 'medications' as const,
+        label: 'metformin · 500 mg PO BID',
+        fhir_ref: 'MedicationRequest/m1',
+      },
+      {
+        card: 'medications' as const,
+        label: 'lisinopril · [not specified on order]',
+        fhir_ref: 'MedicationRequest/m2',
+      },
+    ],
+    followups: [] as readonly string[],
+  };
+
+  it('renders chart medication chips with human-readable labels', () => {
+    render(
+      <AgentMsg
+        message={makeMsg(medicationPlainBlock)}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const chip = screen.getByText('metformin · 500 mg PO BID');
+    expect(chip).toBeInTheDocument();
+    expect(chip.closest('button')?.dataset['card']).toBe('medications');
+  });
+
+  it('preserves the absence marker on a missing-field medication chip', () => {
+    render(
+      <AgentMsg
+        message={makeMsg(medicationPlainBlock)}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    // The frontend renders the absence marker verbatim — missing chart
+    // fields read as missing in the source data, not as definitive
+    // absence (issue 040 acceptance criterion 4).
+    expect(
+      screen.getByText('lisinopril · [not specified on order]'),
+    ).toBeInTheDocument();
+  });
+
+  it('passes the medication citation back to onCite on click', async () => {
+    const user = userEvent.setup();
+    const onCite = vi.fn();
+    render(
+      <AgentMsg
+        message={makeMsg(medicationPlainBlock)}
+        showCitations
+        onCite={onCite}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByText('metformin · 500 mg PO BID'));
+    expect(onCite).toHaveBeenCalledTimes(1);
+    expect(onCite.mock.calls[0]?.[0]).toMatchObject({
+      card: 'medications',
+      fhir_ref: 'MedicationRequest/m1',
+    });
+  });
+
+  it('does not render the opaque resource-handle as a chip label', () => {
+    render(
+      <AgentMsg
+        message={makeMsg(medicationPlainBlock)}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    // The pre-issue-040 default, "MedicationRequest (medications)",
+    // leaked the FHIR resource type into the chip. The new label is
+    // human-readable; this assertion guards against regression.
+    expect(
+      screen.queryByText('MedicationRequest (medications)'),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe('AgentMsg chart medication chip click flow (issue 040)', () => {
+  it('routes a medication chip through the chart-card path with planCitationClick', async () => {
+    const { planCitationClick } = await import('../api/citations');
+    const effect = planCitationClick({
+      card: 'medications',
+      label: 'metformin · 500 mg PO BID',
+      fhir_ref: 'MedicationRequest/m1',
+    });
+    // The click effect must dispatch a chart-card flash so the existing
+    // copilot:flash-card postMessage path runs (issue 040 acceptance
+    // criterion 5).
+    expect(effect).toEqual({
+      kind: 'chart-card',
+      card: 'medications',
+      fhir_ref: 'MedicationRequest/m1',
+    });
+  });
+});
+
 describe('AgentMsg route badge (issue 039)', () => {
   it('renders the route label as a status badge when route is present', () => {
     const msg: AgentMessage = {
