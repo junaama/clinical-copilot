@@ -369,12 +369,12 @@ def test_upload_returns_canonical_upload_failed_outcome(
 
     The body carries ``status='upload_failed'``, ``discussable=false``, no
     extraction payload, and a user-safe ``failure_reason`` that is free of
-    raw exception details (no ``openemr_unauthorized`` token).
+    raw exception details.
     """
 
     stub: _StubDocumentClient = upload_client.stub_doc  # type: ignore[attr-defined]
     stub.ok = False
-    stub.error = "openemr_unauthorized"
+    stub.error = "stub_upload_failed"
 
     response = upload_client.post(
         "/upload",
@@ -394,11 +394,39 @@ def test_upload_returns_canonical_upload_failed_outcome(
     assert body["filename"] == "x.pdf"
     assert isinstance(body["failure_reason"], str)
     # No raw upstream details leak to the wire.
-    assert "openemr_unauthorized" not in body["failure_reason"]
+    assert "stub_upload_failed" not in body["failure_reason"]
     # No upload-time extraction-cache row is written for failed uploads.
     assert upload_client.stub_store.lab_saves == []  # type: ignore[attr-defined]
     # No system message either — the synthetic chat would have nothing real
     # to discuss.
+    assert upload_client.system_messages == []  # type: ignore[attr-defined]
+
+
+def test_upload_returns_canonical_unauthorized_outcome(
+    upload_client: TestClient,
+) -> None:
+    """Authorization failures preserve the issue-025 unauthorized path."""
+
+    stub: _StubDocumentClient = upload_client.stub_doc  # type: ignore[attr-defined]
+    stub.ok = False
+    stub.error = "openemr_unauthorized"
+
+    response = upload_client.post(
+        "/upload",
+        files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4\n"), "application/pdf")},
+        data={"patient_id": "p-1", "doc_type": "lab_pdf"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "unauthorized"
+    assert body["discussable"] is False
+    assert body["lab"] is None
+    assert body["intake"] is None
+    assert isinstance(body["failure_reason"], str)
+    assert "access" in body["failure_reason"].lower()
+    assert "openemr_unauthorized" not in body["failure_reason"]
+    assert upload_client.stub_store.lab_saves == []  # type: ignore[attr-defined]
     assert upload_client.system_messages == []  # type: ignore[attr-defined]
 
 

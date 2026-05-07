@@ -126,8 +126,11 @@ def _route_after_classifier(
 # refs; the verifier must capture only the ``ref`` value regardless of
 # trailing attributes, otherwise valid document/guideline citations fall
 # through as ``unresolved`` and trip the verifier's regen loop.
+_CITE_QUOTE_CLASS = r'"\u201c\u201d\u2018\u2019'
+
 _CITE_PATTERN = re.compile(
-    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’][^>]*/?\s*>',
+    rf"<cite\s+ref\s*=\s*[{_CITE_QUOTE_CLASS}]"
+    rf"([^{_CITE_QUOTE_CLASS}]+)[{_CITE_QUOTE_CLASS}][^>]*/?\s*>",
     flags=re.IGNORECASE,
 )
 _FHIR_REF_PATTERN = re.compile(r'"fhir_ref"\s*:\s*"([^"]+)"')
@@ -504,7 +507,7 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             decision = await classifier_model.ainvoke(
                 [SystemMessage(content=CLASSIFIER_SYSTEM), HumanMessage(content=classifier_input)]
             )
-        except Exception as exc:  # noqa: BLE001 — classifier failure must not crash the turn
+        except Exception as exc:
             _log.warning(
                 "classifier_failed model=%s err=%s: %s",
                 settings.llm_model,
@@ -562,8 +565,12 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             response = await chat_model.ainvoke(
                 [SystemMessage(content=CLARIFY_SYSTEM), HumanMessage(content=latest_str)]
             )
-            content = response.content if isinstance(response.content, str) else str(response.content)
-        except Exception:  # noqa: BLE001 — never block on clarify failure
+            content = (
+                response.content
+                if isinstance(response.content, str)
+                else str(response.content)
+            )
+        except Exception:
             content = (
                 "I'm not sure what you want to look at. Could you say which "
                 "patient (or which question across your panel)?"

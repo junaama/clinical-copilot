@@ -1256,6 +1256,14 @@ _FAILURE_REASONS: dict[str, str] = {
     ),
 }
 
+_AUTH_UPLOAD_ERRORS = frozenset(
+    {
+        "no_token",
+        "openemr_unauthorized",
+        "unauthorized",
+    }
+)
+
 
 def _make_failure_response(
     *,
@@ -1288,6 +1296,25 @@ def _make_failure_response(
         intake=None,
         failure_reason=_FAILURE_REASONS.get(status),
     )
+
+
+def _upload_failure_status(error: str | None) -> str:
+    """Map DocumentClient upload errors to canonical wire statuses."""
+
+    if error == UPLOAD_LANDED_ID_LOST:
+        return "doc_ref_failed"
+
+    normalized = (error or "").lower()
+    if (
+        normalized in _AUTH_UPLOAD_ERRORS
+        or normalized.startswith(("http_401", "http_403"))
+        or "unauthorized" in normalized
+        or "forbidden" in normalized
+        or "denied" in normalized
+    ):
+        return "unauthorized"
+
+    return "upload_failed"
 
 
 @app.post("/upload", response_model=UploadResponse)
@@ -1406,13 +1433,11 @@ async def upload(
         #   - Anything else: the upload itself failed; retry/re-attach.
         # Both surface as a canonical 200 + status response so the panel
         # and chat handoff can read one shape (issue 025).
+        failure_status = _upload_failure_status(err)
         _log.warning(
-            "upload failed: doc_client_error=%s landed_id_lost=%s",
+            "upload failed: doc_client_error=%s canonical_status=%s",
             err,
-            err == UPLOAD_LANDED_ID_LOST,
-        )
-        failure_status = (
-            "doc_ref_failed" if err == UPLOAD_LANDED_ID_LOST else "upload_failed"
+            failure_status,
         )
         return _make_failure_response(
             status=failure_status,

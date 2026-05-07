@@ -41,8 +41,11 @@ from .api.schemas import (
 
 _log = logging.getLogger(__name__)
 
+_CITE_QUOTE_CLASS = r'"\u201c\u201d\u2018\u2019'
+
 _CITE_PATTERN = re.compile(
-    r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’][^>]*/?\s*>',
+    rf"<cite\s+ref\s*=\s*[{_CITE_QUOTE_CLASS}]"
+    rf"([^{_CITE_QUOTE_CLASS}]+)[{_CITE_QUOTE_CLASS}][^>]*/?\s*>",
     flags=re.IGNORECASE,
 )
 
@@ -55,7 +58,8 @@ _CITE_FULL_TAG_PATTERN = re.compile(
     flags=re.IGNORECASE,
 )
 _CITE_INNER_REF_PATTERN = re.compile(
-    r'ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]',
+    rf"ref\s*=\s*[{_CITE_QUOTE_CLASS}]"
+    rf"([^{_CITE_QUOTE_CLASS}]+)[{_CITE_QUOTE_CLASS}]",
     flags=re.IGNORECASE,
 )
 _CITE_ATTR_KEYS: tuple[str, ...] = ("source", "section", "page", "field", "value")
@@ -119,7 +123,8 @@ def extract_cite_attributes(text: str) -> dict[str, dict[str, str]]:
         attrs: dict[str, str] = {}
         for key in _CITE_ATTR_KEYS:
             attr_pattern = re.compile(
-                rf'\b{key}\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’]',
+                rf"\b{key}\s*=\s*[{_CITE_QUOTE_CLASS}]"
+                rf"([^{_CITE_QUOTE_CLASS}]+)[{_CITE_QUOTE_CLASS}]",
                 flags=re.IGNORECASE,
             )
             m = attr_pattern.search(inner)
@@ -274,10 +279,10 @@ async def synthesize_triage_block(
                 HumanMessage(content=prompt),
             ]
         )
-    except (ValidationError, json.JSONDecodeError) as exc:  # noqa: PERF203
+    except (ValidationError, json.JSONDecodeError) as exc:
         _log.warning("triage structured-output validation failed: %s", exc)
         return plain_block_from_text(synthesis_text)
-    except Exception as exc:  # noqa: BLE001 — never let LLM glitches break the wire
+    except Exception as exc:
         _log.warning("triage structured-output call failed: %s", exc)
         return plain_block_from_text(synthesis_text)
 
@@ -331,7 +336,7 @@ async def synthesize_overnight_block(
     except (ValidationError, json.JSONDecodeError) as exc:
         _log.warning("overnight structured-output validation failed: %s", exc)
         return plain_block_from_text(synthesis_text)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("overnight structured-output call failed: %s", exc)
         return plain_block_from_text(synthesis_text)
 
@@ -491,5 +496,3 @@ def _normalize_timeline_kind(value: str | None) -> str:
     # LLM may casefold or use plurals; do a case-insensitive match.
     lookup = {k.lower(): k for k in _VALID_TIMELINE_KINDS}
     return lookup.get(value.strip().lower(), "Other")
-
-
