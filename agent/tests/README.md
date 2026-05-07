@@ -141,6 +141,73 @@ response). Revert
 and the second-chat-turn assertion fails (`cache_hits` stays empty
 because the second `extract_document` ran a fresh VLM extraction).
 
+## Week 2 reliability live smoke (`test_w2_reliability_live_smoke.py`, marker: `live_http`)
+
+A second `live_http` file, narrower than `test_http_e2e_deployed.py` and
+focused on the Week 2 reliability slice (issues 024-028). It pins the
+exact failures the deployed browser flow surfaced before those fixes
+landed: silent wrong-type uploads, panel/chat contradiction on the
+post-upload turn, and uncited guideline answers from RAG.
+
+Cases:
+
+| Test | What it exercises end-to-end |
+|---|---|
+| `test_smoke_lab_mode_rejects_intake_fixture` | `POST /upload` with the intake fixture and `doc_type=lab_pdf` returns HTTP 409 with `detail.code == "doc_type_mismatch"` (issue 024). |
+| `test_smoke_intake_upload_then_chat_cites_same_document` | Successful intake upload returns a populated `intake` payload + canonical doc-ref (issue 025); the immediate post-upload chat turn cites the same `DocumentReference/<id>` (issue 026). |
+| `test_smoke_ada_a1c_question_returns_guideline_citation` | An ADA A1c-target prompt produces a chat block whose citations include a `guideline`-card record (issues 027 + 028). |
+| `test_smoke_kdigo_ace_arb_question_returns_guideline_citation` | A KDIGO ACE/ARB prompt produces the same guideline-card citation shape — sister case for the second corpus the demo relies on. |
+
+Cost: ~$0.25 per full run (one VLM upload + four chat turns); the four
+cases are independent so a partial run only pays for the cited turns.
+Wall-clock: 60-180 s.
+
+The suite is **opt-in**. Default `addopts` filters out `-m live_http`. To
+run:
+
+```bash
+cd agent
+COPILOT_SESSION_COOKIE=<value-from-browser> \
+  uv run pytest -m live_http -v tests/test_w2_reliability_live_smoke.py
+```
+
+A missing cookie causes `skip`, never `fail`.
+
+### Required env
+
+Same env contract as `test_http_e2e_deployed.py` — see the table in the
+section above. Both files honour `COPILOT_SESSION_COOKIE`,
+`COPILOT_AGENT_BASE_URL`, and `E2E_PATIENT_UUID` /
+`E2E_LIVE_HTTP_PATIENT_UUID`.
+
+### Required fixtures
+
+The intake-upload and mismatch cases use
+`example-documents/intake-forms/p01-chen-intake-typed.pdf`, a synthetic
+intake PDF committed under `example-documents/`. No real PHI is
+involved. Both guideline-citation cases drive the deployed RAG corpus
+directly through `/chat` and don't need a local fixture.
+
+### Reverting the underlying fixes
+
+The smoke is a regression detector for the W2 reliability slice. Reverting
+[024](../../issues/done/024-upload-type-mismatch-guard.md) makes the
+mismatch case fail (the upload accepts the intake fixture as `lab_pdf`
+and returns HTTP 200). Reverting
+[025](../../issues/done/025-canonical-upload-outcome.md) makes the intake
+case fail (`intake` payload missing on a 200 response, or `discussable`
+not flipped). Reverting
+[026](../../issues/done/026-post-upload-chat-consistency.md) makes the
+post-upload chat assertion fail (the synthetic doc-ref leaks back into
+``fetched_refs`` and the verifier refuses the turn). Reverting
+[027](../../issues/done/027-guideline-citation-wire-contract.md) makes
+both ADA/KDIGO assertions fail (guideline citations dropped from the
+block). Reverting
+[028](../../issues/done/028-rag-citation-fail-closed.md) loosens the
+fail-closed gate; one of the guideline cases will eventually surface an
+uncited RAG answer — the smoke catches that regression on the first run
+that produces an empty citation list.
+
 ## When to add a test where
 
 | Question | Where it lives |
@@ -149,6 +216,7 @@ because the second `extract_document` ran a fresh VLM extraction).
 | **How** the graph hands data between nodes (state→contextvar, message-stream contract, post-worker re-dispatch, citation-subset invariant on the terminal AIMessage) | `tests/test_graph_integration.py` |
 | End-to-end with real models, real Cohere, real OpenEMR — verifying the wiring against actual cognition | `tests/test_graph_e2e_live.py` (mark `live`) |
 | End-to-end against the **deployed** agent over HTTPS, using a captured browser session — verifying the production behaviour of upload + chat + cache-first re-read | `tests/test_http_e2e_deployed.py` (mark `live_http`) |
+| Live smoke against the **deployed** agent for the W2 reliability slice — upload mismatch, intake handoff, post-upload chat consistency, ADA/KDIGO guideline citations | `tests/test_w2_reliability_live_smoke.py` (mark `live_http`) |
 | LLM behaviour quality on real prompts (faithfulness, refusal phrasing, citation discipline at scale) | eval harness (`make eval-full`), not pytest |
 
 Don't merge the suites. The fixture eval gate is deliberately
