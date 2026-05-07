@@ -119,6 +119,114 @@ Reference variables (`${{mariadb.RAILWAY_PRIVATE_DOMAIN}}`) are resolved by Rail
 | Connect to MySQL shell | `railway connect mariadb` (uses root creds automatically) |
 | Service stats / status | `railway status --json` |
 
+## Post-redeploy admin checklist
+
+Run this whenever the OpenEMR volume is fresh — first deploy, volume wipe, or any time `OE_PASS` is rotated and the installer reruns. None of these survive a wiped volume; all of them must succeed before the agent can authenticate against FHIR.
+
+The web steps live under **Admin → Globals → Connectors** unless noted.
+
+### 1. Enable the REST + FHIR APIs
+
+Admin → Globals → Connectors:
+
+- [x] **Enable OpenEMR Standard REST API**
+- [x] **Enable OpenEMR FHIR REST API**
+- [x] **Enable OAuth2 Password Grant** (only if a service-account / system-scope token is wanted; not required for the standalone-launch flow the agent uses)
+
+Save. Without these flags the FHIR endpoints return `"API is disabled"` 404s.
+
+### 2. Set the OAuth issuer URL (`site_addr_oath`)
+
+Admin → Globals → Connectors → **Site Address (`site_addr_oath`)**:
+
+```
+https://openemr-production-c5b4.up.railway.app
+```
+
+Must be `https://` (not `http://`) and must match the public Railway domain exactly. If wrong, the OAuth `aud` check fails with *"Aud parameter did not match authorized server"* on the authorize redirect, and the browser blocks the callback as mixed content.
+
+### 3. Register the agent's standalone OAuth client
+
+From the repo root:
+
+```bash
+cd agent
+uv run python -m scripts.seed.bootstrap_standalone_oauth \
+  --base-url   https://openemr-production-c5b4.up.railway.app \
+  --agent-url  https://copilot-agent-production-3776.up.railway.app
+```
+
+Prints the new `client_id` + `client_secret` to stdout. The script registers a confidential authcode + PKCE client at `/oauth2/default/registration` with `token_endpoint_auth_method=client_secret_post`. See `agent/scripts/seed/bootstrap_standalone_oauth.py` for the exact scope set.
+
+> **Scope drift check.** The bootstrap script's `REQUESTED_SCOPES` and the agent runtime's `SMART_STANDALONE_SCOPES` env var must list the same scopes. OpenEMR silently drops any scope from the issued token that wasn't registered against the client — and without `api:oemr` the Standard REST API rejects every call with 403 *"insufficient permissions for the requested resource"* (the FHIR-only `user/*.rs` scopes do not unlock `/apis/default/api/...`, where document upload, allergy/medication/problem writes live). After registering, confirm both sides match:
+>
+> ```bash
+> # What the client is registered for
+> railway ssh --service openemr 'MYSQL_PWD="$MYSQL_ROOT_PASS" mariadb -h "$MYSQL_HOST" -u root openemr -e \
+>   "SELECT scope FROM oauth_clients WHERE client_id = \"<id from step 3>\";"'
+>
+> # What the agent will request on /authorize
+> railway variables --service copilot-agent --json | python3 -c "import json,sys; print(json.load(sys.stdin)['SMART_STANDALONE_SCOPES'])"
+> ```
+>
+> If they differ, align the client row to match the env (the env is canonical):
+>
+> ```bash
+> SCOPES=$(railway variables --service copilot-agent --json | python3 -c "import json,sys; print(json.load(sys.stdin)['SMART_STANDALONE_SCOPES'])")
+> railway ssh --service openemr "MYSQL_PWD=\"\$MYSQL_ROOT_PASS\" mariadb -h \"\$MYSQL_HOST\" -u root openemr -e \"UPDATE oauth_clients SET scope = '$SCOPES' WHERE client_id = '<id from step 3>';\""
+> ```
+>
+> Then sign the user out of the agent UI and back in — the existing session is still holding a token issued before the scope fix and won't pick up the change until a fresh `/authorize` → `/token` exchange.
+
+### 4. Update agent env with the new client credentials
+
+```bash
+railway variables --service copilot-agent \
+  --set "SMART_STANDALONE_CLIENT_ID=<id from step 3>" \
+  --set "SMART_STANDALONE_CLIENT_SECRET=<secret from step 3>"
+railway redeploy --service copilot-agent
+```
+
+### 4b. Enable the client and confirm `is_enabled = 1`
+
+`bootstrap_standalone_oauth.py` writes the client row with `is_enabled = 0` (OpenEMR's default for newly-registered clients). The agent's `/authorize` flow refuses to mint tokens for disabled clients. Flip it on:
+
+```bash
+railway ssh --service openemr 'MYSQL_PWD="$MYSQL_ROOT_PASS" mariadb -h "$MYSQL_HOST" -u root openemr -e \
+  "UPDATE oauth_clients SET is_enabled = 1 WHERE client_id = \"<id from step 3>\"; \
+   SELECT client_id, is_enabled FROM oauth_clients WHERE client_id = \"<id from step 3>\";"'
+```
+
+The dashboard route is **Admin → System → API Clients** if you'd rather click through.
+
+### 5. Seed dr_smith + ACL + CareTeam
+
+```bash
+cd agent
+uv run python -m scripts.seed.seed_careteam
+```
+
+This writes to MariaDB directly: `users`, `users_secure` (bcrypt with `$2y$` prefix — PHP's `password_get_info` rejects `$2b$`), `groups`, and the `care_teams` / `care_team_member` rows that scope dr_smith's panel.
+
+The ACL row (`gacl_aro` membership in `Physicians`) cannot be inserted via raw SQL — phpGACL caches break. Use the script's PHP-helper output:
+
+```bash
+uv run python -m scripts.seed.seed_careteam --print-acl-php
+# pipe the printed php -r "..." into the openemr container shell
+```
+
+### 6. Verify
+
+```bash
+# Confirm five-gate login chain passes:
+# users.active=1, groups.user='dr_smith', aclGetGroupTitles non-empty,
+# users_secure.password set, passwordVerify accepts dr_smith_pass.
+curl -sk -X POST https://openemr-production-c5b4.up.railway.app/oauth2/default/login \
+  -d 'username=dr_smith&password=dr_smith_pass'   # expect 302 to /authorize
+```
+
+Then sign into the agent UI as `dr_smith / dr_smith_pass` — panel should render with the seeded CareTeam patients.
+
 ## Known gotchas
 
 1. **Passwords are baked into the volume on first boot.** Changing `MYSQL_PASS` or `OE_PASS` env vars after first boot does NOT change the actual passwords — those live in the DB and `sites/default/sqlconf.php`. To rotate: change the password inside OpenEMR's admin UI (for `OE_PASS`) or via SQL (for `MYSQL_PASS`), then update the env var to match.

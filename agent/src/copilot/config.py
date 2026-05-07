@@ -76,14 +76,25 @@ class Settings(BaseSettings):
         alias="SMART_STANDALONE_REDIRECT_URI",
     )
     smart_standalone_scopes: str = Field(
+        # Must match REQUESTED_SCOPES in
+        # agent/scripts/seed/bootstrap_standalone_oauth.py — OpenEMR
+        # silently drops scopes from the issued token that the client
+        # wasn't registered for. Without api:oemr the Standard REST API
+        # (used for document upload, allergy/medication/problem writes)
+        # responds 403 "insufficient permissions for the requested
+        # resource" on every request.
         default=(
-            "openid fhirUser offline_access "
+            "openid fhirUser offline_access profile email "
+            "api:oemr api:fhir "
             "user/Patient.rs user/Observation.rs "
             "user/Condition.rs user/MedicationRequest.rs "
             "user/Encounter.rs "
             "user/AllergyIntolerance.rs user/DocumentReference.rs "
             "user/DiagnosticReport.rs user/ServiceRequest.rs "
-            "user/CareTeam.rs user/Practitioner.rs"
+            "user/CareTeam.rs user/Practitioner.rs "
+            "user/document.crs user/allergy.cruds "
+            "user/medication.cruds user/medical_problem.cruds "
+            "user/patient.rs"
         ),
         alias="SMART_STANDALONE_SCOPES",
     )

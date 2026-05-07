@@ -43,12 +43,22 @@ CONTACT_EMAIL = "naama.paulemont@challenger.gauntletai.com"
 
 # Must match ``smart_standalone_scopes`` default in
 # ``agent/src/copilot/config.py``. Keep these in sync — the agent sends
-# this exact scope string on /authorize, and OpenEMR rejects scopes the
-# client wasn't registered for.
+# this exact scope string on /authorize, and OpenEMR silently drops any
+# scope from the issued token that wasn't registered against the client.
+# Without ``api:oemr`` the Standard REST API rejects every request with
+# "insufficient permissions for the requested resource" (the FHIR-only
+# user/* scopes don't unlock /apis/default/api/...).
 REQUESTED_SCOPES = " ".join([
     "openid",
     "fhirUser",
     "offline_access",
+    "profile",
+    "email",
+    # API-class scopes — required for token to be honored on the
+    # Standard REST and FHIR endpoints respectively.
+    "api:oemr",
+    "api:fhir",
+    # FHIR resources the agent reads
     "user/Patient.rs",
     "user/Observation.rs",
     "user/Condition.rs",
@@ -60,6 +70,13 @@ REQUESTED_SCOPES = " ".join([
     "user/ServiceRequest.rs",
     "user/CareTeam.rs",
     "user/Practitioner.rs",
+    # Standard-API write scopes (CRUDS / CRS) the agent uses for
+    # document upload, allergy/medication/problem updates, patient lookup.
+    "user/document.crs",
+    "user/allergy.cruds",
+    "user/medication.cruds",
+    "user/medical_problem.cruds",
+    "user/patient.rs",
 ])
 
 
