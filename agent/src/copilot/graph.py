@@ -139,17 +139,23 @@ _TOOL_OK_PATTERN = re.compile(r'"ok"\s*:\s*(true|false)')
 _TOOL_OK_FALSE_PATTERN = re.compile(r'"ok"\s*:\s*false', re.IGNORECASE)
 _TOOL_STATUS_PATTERN = re.compile(r'"status"\s*:\s*"([^"]+)"')
 
-# Issue 041: internal-leak markers that must never reach the clinician on
-# a guideline failure. The verifier scans the final AIMessage on W-EVD
+# Issue 041 / 042: internal-leak markers that must never reach the
+# clinician. The verifier scans the final AIMessage on W-EVD and W-1
 # turns for these tokens and replaces the answer with a clean
-# corpus-bound refusal when any are present. Worker names, raw tool
-# error tokens, and HTTP-status fragments are debug surface — they
-# belong in traces, not in the chat. Stored lowercase so the scan can
-# fold-case the answer once.
+# safe-failure copy when any are present. Worker names, probe names,
+# raw tool error tokens, and HTTP-status fragments are debug surface —
+# they belong in traces and the technical-details affordance, not in
+# the clinical answer. Stored lowercase so the scan can fold-case the
+# answer once.
 _GUIDELINE_INTERNAL_LEAK_MARKERS: tuple[str, ...] = (
     "evidence_retriever",
     "intake_extractor",
     "retrieve_evidence",
+    "run_panel_triage",
+    "run_panel_med_safety",
+    "list_panel",
+    "careteam_denied",
+    "denied_authz",
     "no_active_user",
     "no_active_patient",
     "retrieval_failed",
@@ -295,6 +301,72 @@ def _is_document_path(state: CoPilotState) -> bool:
         return True
     if (state.get("supervisor_action") or "") == "extract":
         return True
+    return False
+
+
+# Issue 042: panel-triage tools. The classifier's ``W-1`` is the primary
+# signal but a turn can call ``run_panel_triage`` even on a misrouted
+# workflow id, so the tool-name check is the defense-in-depth signal.
+_PANEL_TRIAGE_TOOLS: frozenset[str] = frozenset(
+    {"run_panel_triage", "run_panel_med_safety"}
+)
+
+
+def _is_panel_path(state: CoPilotState) -> bool:
+    """True if this turn ran a panel-level tool or was classified as W-1.
+
+    Issue 042: the agent_node uses this in combination with the
+    ``sub_messages`` view (see ``_has_panel_tool_call`` /
+    ``_has_failed_panel_tool_message``) to decide whether to enforce
+    the panel-failure contract. ``state.messages`` only carries the
+    final AIMessage (the LangGraph ``add_messages`` reducer does not
+    accumulate the inner agent's ToolMessages), so the workflow_id is
+    the only signal available here.
+    """
+    if (state.get("workflow_id") or "") == "W-1":
+        return True
+    for msg in state.get("messages", []) or []:
+        if isinstance(msg, ToolMessage) and (msg.name or "") in _PANEL_TRIAGE_TOOLS:
+            return True
+    return False
+
+
+def _panel_triage_failed(state: CoPilotState) -> bool:
+    """True when a panel-level ToolMessage in ``state.messages`` is ``ok: false``.
+
+    The runtime usually invokes the agent_node-side
+    ``_has_failed_panel_tool_message(sub_messages)`` instead, since
+    ``state.messages`` only carries the final AIMessage. This helper
+    exists so external callers (and the predicate-level unit tests)
+    can interrogate the same shape.
+    """
+    return _has_failed_panel_tool_message(state.get("messages", []) or [])
+
+
+def _has_panel_tool_call(messages: list[Any]) -> bool:
+    """True if ``messages`` contains a ToolMessage from a panel-level tool."""
+    for msg in messages:
+        if isinstance(msg, ToolMessage) and (msg.name or "") in _PANEL_TRIAGE_TOOLS:
+            return True
+    return False
+
+
+def _has_failed_panel_tool_message(messages: list[Any]) -> bool:
+    """True when any panel-level ToolMessage in ``messages`` is ``ok: false``.
+
+    Issue 042: a failed panel call (FHIR transport error, HTTP 401/403
+    via the gate, careteam_denied, etc.) means the panel data is
+    genuinely unavailable. The agent_node uses this to decide whether
+    to replace the answer with the panel-unavailable refusal copy.
+    """
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        if (msg.name or "") not in _PANEL_TRIAGE_TOOLS:
+            continue
+        content = msg.content if isinstance(msg.content, str) else str(msg.content or "")
+        if _TOOL_OK_FALSE_PATTERN.search(content):
+            return True
     return False
 
 
@@ -775,6 +847,31 @@ def build_graph(settings: Settings | None = None, *, checkpointer: Any | None = 
             update["resolved_patients"] = new_resolved
         if new_focus and new_focus != state.get("focus_pid"):
             update["focus_pid"] = new_focus
+
+        # Issue 042: panel-route fail-closed. ``state.messages`` doesn't
+        # carry the inner agent's ToolMessages (only ``[final]`` is
+        # appended by the reducer), so the panel-failure detection has
+        # to run here where ``sub_messages`` is in scope. We replace
+        # the answer + block with the panel-unavailable refusal and
+        # set ``decision="tool_failure"`` — the verifier's short-circuit
+        # at the top of ``verifier_node`` then exits cleanly without
+        # treating this as an unresolved-citation regen case.
+        panel_path = (state.get("workflow_id") or "") == "W-1" or _has_panel_tool_call(
+            sub_messages
+        )
+        panel_tool_failed = _has_failed_panel_tool_message(sub_messages)
+        leak_in_text = _has_internal_leak(final_text)
+        if panel_path and (panel_tool_failed or leak_in_text):
+            refusal_text = (
+                "Panel data is unavailable right now, so I can't rank the "
+                "patients on your panel. Please retry in a moment, or pick "
+                "a specific patient to ask about instead."
+            )
+            refusal_block = refusal_plain_block(refusal_text)
+            update["messages"] = [AIMessage(content=refusal_text)]
+            update["decision"] = "tool_failure"
+            update["block"] = refusal_block.model_dump(by_alias=True)
+            return update
 
         # Synthesize the structured overnight block. Validation failures fall
         # back to a PlainBlock inside the helper so the wire shape is always

@@ -137,12 +137,26 @@ export interface ChatRoute {
   readonly label: string;
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Diagnostics — issue 042
+// Per-turn graph decision + supervisor action so a developer or grader can
+// audit why a turn took the route it did, without leaking internals into
+// the clinical answer. Always present on the wire; empty strings mean
+// "not set this turn".
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface ChatDiagnostics {
+  readonly decision: string;
+  readonly supervisor_action: string;
+}
+
 export interface ChatState {
   readonly patient_id: string | null;
   readonly workflow_id: string;
   readonly classifier_confidence: number;
   readonly message_count: number;
   readonly route: ChatRoute;
+  readonly diagnostics: ChatDiagnostics;
 }
 
 export interface ChatResponse {
@@ -320,6 +334,26 @@ function parseRoute(raw: unknown, field: string): ChatRoute {
   };
 }
 
+/** Diagnostics fields are allowed to be empty strings — the backend uses
+ *  the empty value to mean "not set this turn". */
+function asDiagnosticString(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid ChatResponse: ${field} must be a string`);
+  }
+  return value;
+}
+
+function parseDiagnostics(raw: unknown, field: string): ChatDiagnostics {
+  const obj = asObject(raw, field);
+  return {
+    decision: asDiagnosticString(obj.decision, `${field}.decision`),
+    supervisor_action: asDiagnosticString(
+      obj.supervisor_action,
+      `${field}.supervisor_action`,
+    ),
+  };
+}
+
 function parseState(raw: unknown): ChatState {
   const obj = asObject(raw, 'state');
   return {
@@ -331,6 +365,7 @@ function parseState(raw: unknown): ChatState {
     ),
     message_count: asNumber(obj.message_count, 'state.message_count'),
     route: parseRoute(obj.route, 'state.route'),
+    diagnostics: parseDiagnostics(obj.diagnostics, 'state.diagnostics'),
   };
 }
 

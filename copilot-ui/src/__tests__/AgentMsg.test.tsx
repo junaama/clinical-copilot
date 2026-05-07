@@ -482,3 +482,232 @@ describe('AgentErrorBubble', () => {
     expect(screen.getByText(/Network error/)).toBeInTheDocument();
   });
 });
+
+describe('AgentMsg panel triage failure UI (issue 042)', () => {
+  // The backend produces a panel-unavailable refusal whenever the panel
+  // tool returned ok:false or the synthesizer leaked internal markers
+  // (probe names, raw error tokens, HTTP statuses). The frontend
+  // contract: render the failure cleanly with the panel route badge
+  // (so the route stays advertised), no source chips, and no leaked
+  // technical text in the main answer.
+  const refusalLead =
+    "Panel data is unavailable right now, so I can't rank the patients " +
+    'on your panel. Please retry in a moment, or pick a specific patient ' +
+    'to ask about instead.';
+
+  const refusalBlock = {
+    kind: 'plain' as const,
+    lead: refusalLead,
+    citations: [] as never[],
+    followups: [] as readonly string[],
+  };
+
+  it('renders the panel route badge with the unavailable label', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: refusalBlock,
+      streaming: false,
+      route: { kind: 'panel', label: 'Panel data unavailable' },
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const badge = screen.getByRole('status');
+    // Route kind stays panel — issue 042 contract: failure is a state
+    // of the panel route, not a different route.
+    expect(badge).toHaveAttribute('data-route-kind', 'panel');
+    expect(badge.textContent).toContain('Panel data unavailable');
+    expect(badge.textContent).not.toContain('Cannot ground');
+  });
+
+  it('renders the product-safe lead and no Sources section', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: refusalBlock,
+      streaming: false,
+      route: { kind: 'panel', label: 'Panel data unavailable' },
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/Panel data is unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText('Sources')).not.toBeInTheDocument();
+  });
+
+  it('does not surface internal technical markers in the main answer', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: refusalBlock,
+      streaming: false,
+      route: { kind: 'panel', label: 'Panel data unavailable' },
+    };
+    const { container } = render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const visible = container.textContent ?? '';
+    // Clinical answer must read in product language, not debug language.
+    expect(visible).not.toMatch(/run_panel_triage/);
+    expect(visible).not.toMatch(/list_panel/);
+    expect(visible).not.toMatch(/careteam_denied/);
+    expect(visible).not.toMatch(/HTTP 4\d\d/);
+    expect(visible).not.toMatch(/HTTP 5\d\d/);
+    expect(visible).not.toMatch(/no_active_user/);
+  });
+});
+
+describe('AgentMsg technical details affordance (issue 042)', () => {
+  // The technical-details surface is hidden by default (via the browser's
+  // <details>) so the clinical answer surface stays uncluttered. Tests
+  // assert: the surface renders when debugInfo is provided, the closed
+  // state hides the body, and the body carries the route + diagnostic
+  // fields in identifiable shape so a developer can audit per-turn
+  // routing.
+  const baseRoute = {
+    kind: 'panel' as const,
+    label: 'Panel data unavailable',
+  };
+  const baseDiagnostics = {
+    decision: 'tool_failure',
+    supervisor_action: '',
+  };
+  const debugInfo = {
+    route: baseRoute,
+    workflow_id: 'W-1',
+    classifier_confidence: 0.92,
+    diagnostics: baseDiagnostics,
+  };
+
+  it('renders the Technical details disclosure when debugInfo is provided', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: MOCK_PLAIN_BLOCK,
+      streaming: false,
+      route: baseRoute,
+      debugInfo,
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const surface = screen.getByTestId('agent-technical-details');
+    expect(surface).toBeInTheDocument();
+    // Closed by default — the body is in the DOM but the disclosure
+    // triangle is closed (the browser hides everything except <summary>).
+    expect((surface as HTMLDetailsElement).open).toBe(false);
+    expect(screen.getByText('Technical details')).toBeInTheDocument();
+  });
+
+  it('omits the Technical details disclosure when debugInfo is absent', () => {
+    // Rehydrated turns have no state envelope, so the AgentPanel does not
+    // attach debugInfo. The technical-details surface must not appear in
+    // that case.
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: MOCK_PLAIN_BLOCK,
+      streaming: false,
+      route: baseRoute,
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByTestId('agent-technical-details'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('exposes route, workflow, decision, and supervisor_action fields', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: MOCK_PLAIN_BLOCK,
+      streaming: false,
+      route: baseRoute,
+      debugInfo: {
+        route: baseRoute,
+        workflow_id: 'W-1',
+        classifier_confidence: 0.85,
+        diagnostics: { decision: 'tool_failure', supervisor_action: 'extract' },
+      },
+    };
+    const { container } = render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    // Force-open so we can read the body content (the closed-state test
+    // above pins the hidden-by-default behavior).
+    const surface = screen.getByTestId(
+      'agent-technical-details',
+    ) as HTMLDetailsElement;
+    surface.open = true;
+    // Re-query body after opening so jsdom evaluates child layout.
+    const fields = container.querySelectorAll('[data-field]');
+    const byField = new Map<string, string>();
+    fields.forEach((el) => {
+      const k = el.getAttribute('data-field') ?? '';
+      byField.set(k, el.textContent ?? '');
+    });
+    expect(byField.get('route-kind')).toBe('panel');
+    expect(byField.get('route-label')).toBe('Panel data unavailable');
+    expect(byField.get('workflow-id')).toBe('W-1');
+    expect(byField.get('classifier-confidence')).toBe('0.85');
+    expect(byField.get('decision')).toBe('tool_failure');
+    expect(byField.get('supervisor-action')).toBe('extract');
+  });
+
+  it('hides the Technical details body while streaming', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: MOCK_PLAIN_BLOCK,
+      streaming: true,
+      route: baseRoute,
+      debugInfo,
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    // While the typewriter runs we suppress all body content (citations,
+    // technical details, etc.) so they don't pop in mid-animation.
+    expect(
+      screen.queryByTestId('agent-technical-details'),
+    ).not.toBeInTheDocument();
+  });
+});

@@ -7,17 +7,36 @@
  */
 
 import type { JSX } from 'react';
-import type { Block, ChatRoute, Citation, CitationCard } from '../api/types';
+import type {
+  Block,
+  ChatDiagnostics,
+  ChatRoute,
+  Citation,
+  CitationCard,
+} from '../api/types';
 import { Lead } from './Lead';
 import { CohortBlock } from './CohortBlock';
 import { DeltaGrid } from './DeltaGrid';
 import { Timeline } from './Timeline';
+
+/** Per-turn metadata exposed behind the Technical details ``<details>`` —
+ *  see ``TechnicalDetails`` below. Issue 042. */
+export interface AgentDiagnostics {
+  readonly route: ChatRoute;
+  readonly workflow_id: string;
+  readonly classifier_confidence: number;
+  readonly diagnostics: ChatDiagnostics;
+}
 
 export interface AgentMessage {
   readonly role: 'agent';
   readonly block: Block;
   readonly streaming: boolean;
   readonly route?: ChatRoute;
+  /** Issue 042: optional bag of per-turn diagnostic fields rendered behind
+   *  a collapsed ``Technical details`` affordance. Absent on rehydrated
+   *  turns (no state envelope is stored on the conversation row). */
+  readonly debugInfo?: AgentDiagnostics;
 }
 
 export interface AgentErrorMessage {
@@ -52,6 +71,9 @@ export function AgentMsg({
         {showBody && renderBody(block, onJumpToVitals)}
         {showBody && showCitations && block.citations.length > 0 && (
           <Citations citations={block.citations} onCite={onCite} />
+        )}
+        {showBody && message.debugInfo && (
+          <TechnicalDetails info={message.debugInfo} />
         )}
       </div>
       {showBody && block.followups.length > 0 && (
@@ -136,6 +158,49 @@ function Citations({ citations, onCite }: CitationsProps): JSX.Element {
         </button>
       ))}
     </div>
+  );
+}
+
+interface TechnicalDetailsProps {
+  readonly info: AgentDiagnostics;
+}
+
+/**
+ * Issue 042: collapsed ``<details>`` exposing per-turn route + diagnostic
+ * fields for development and grading. Hidden by default — the disclosure
+ * triangle has to be opened to see anything inside, so the clinical
+ * answer remains uncluttered. The data-testid lets tests assert that the
+ * panel is rendered at all (so peers can later add CSS to hide it
+ * outside dev mode without breaking the contract test).
+ */
+function TechnicalDetails({ info }: TechnicalDetailsProps): JSX.Element {
+  const { route, workflow_id, classifier_confidence, diagnostics } = info;
+  const confidenceText = Number.isFinite(classifier_confidence)
+    ? classifier_confidence.toFixed(2)
+    : '—';
+  return (
+    <details
+      className="agent-tech-details"
+      data-testid="agent-technical-details"
+    >
+      <summary>Technical details</summary>
+      <dl className="agent-tech-details-body">
+        <dt>Route kind</dt>
+        <dd data-field="route-kind">{route.kind}</dd>
+        <dt>Route label</dt>
+        <dd data-field="route-label">{route.label}</dd>
+        <dt>Workflow</dt>
+        <dd data-field="workflow-id">{workflow_id || '—'}</dd>
+        <dt>Classifier confidence</dt>
+        <dd data-field="classifier-confidence">{confidenceText}</dd>
+        <dt>Decision</dt>
+        <dd data-field="decision">{diagnostics.decision || '—'}</dd>
+        <dt>Supervisor action</dt>
+        <dd data-field="supervisor-action">
+          {diagnostics.supervisor_action || '—'}
+        </dd>
+      </dl>
+    </details>
   );
 }
 

@@ -468,6 +468,27 @@ body {
 }
 .agent-route[data-route-kind='refusal'] { color: oklch(0.55 0.14 28); }
 .agent-route[data-route-kind='clarify'] { color: oklch(0.55 0.13 80); }
+.agent-route[data-route-kind='panel'] { color: oklch(0.55 0.13 240); }
+
+/* issue 042: collapsed Technical details affordance — closed by default
+ * (browser default behavior for <details>), visually deemphasized so a
+ * clinician's eye skips past it on the answer surface. */
+.agent-tech-details {
+  margin-top: 10px; padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  font-size: 11px; color: var(--ink-3);
+}
+.agent-tech-details > summary {
+  cursor: pointer; user-select: none;
+  font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase;
+  font-weight: 600; color: var(--ink-3);
+}
+.agent-tech-details-body {
+  display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px;
+  margin: 8px 0 0; padding: 0;
+}
+.agent-tech-details-body dt { font-weight: 600; color: var(--ink-2); }
+.agent-tech-details-body dd { margin: 0; font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
 
 .agent-cites {
   margin-top: 10px; padding-top: 10px;
