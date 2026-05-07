@@ -65,7 +65,7 @@ def write_audit_event(event: AuditEvent, settings: Settings) -> None:
         with _write_lock:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(line)
-    except Exception as exc:  # noqa: BLE001 — never let audit failure break the agent
+    except Exception as exc:
         _log.warning("audit write failed for conversation %s: %s", event.conversation_id, exc)
 
 

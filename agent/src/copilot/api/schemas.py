@@ -7,7 +7,7 @@ the frontend a single source of truth for codegen.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -136,7 +136,7 @@ class PlainBlock(_Frozen):
 
 
 Block = Annotated[
-    Union[TriageBlock, OvernightBlock, PlainBlock],
+    TriageBlock | OvernightBlock | PlainBlock,
     Field(discriminator="kind"),
 ]
 

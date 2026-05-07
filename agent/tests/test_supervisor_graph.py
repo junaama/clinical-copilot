@@ -36,7 +36,11 @@ class _StubStructuredModel:
     ``raise_with`` to simulate transient failures.
     """
 
-    def __init__(self, decision: SupervisorDecision | None = None, raise_with: Exception | None = None) -> None:
+    def __init__(
+        self,
+        decision: SupervisorDecision | None = None,
+        raise_with: Exception | None = None,
+    ) -> None:
         self._decision = decision
         self._raise_with = raise_with
         self.calls: list[list[Any]] = []
@@ -56,7 +60,7 @@ class _StubChatModel:
     def __init__(self, structured: _StubStructuredModel) -> None:
         self._structured = structured
 
-    def with_structured_output(self, schema: Any):  # noqa: ANN401 — match real surface
+    def with_structured_output(self, schema: Any):
         return self._structured
 
 

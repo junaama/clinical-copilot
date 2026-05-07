@@ -20,15 +20,15 @@ reference without copying.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class SupervisorAction(str, Enum):
+class SupervisorAction(StrEnum):
     """Closed set of supervisor decisions.
 
-    ``str`` mixin lets pydantic accept the bare string from a structured-
+    ``StrEnum`` lets pydantic accept the bare string from a structured-
     output LLM response (``"extract"``) and resolve it to the enum.
     """
 

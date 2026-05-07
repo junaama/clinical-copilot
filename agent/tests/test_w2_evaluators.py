@@ -25,7 +25,6 @@ from copilot.eval.w2_evaluators import (
     schema_valid,
 )
 
-
 # ---------------------------------------------------------------------------
 # Threshold pinning — drift here trips a test, by design.
 # ---------------------------------------------------------------------------

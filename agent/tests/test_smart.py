@@ -173,7 +173,11 @@ async def test_exchange_code_for_token_posts_expected_payload() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         for kv in request.content.decode().split("&"):
             k, _, v = kv.partition("=")
-            captured[k] = httpx._utils.unquote(v) if hasattr(httpx, "_utils") else v.replace("%2F", "/")
+            captured[k] = (
+                httpx._utils.unquote(v)
+                if hasattr(httpx, "_utils")
+                else v.replace("%2F", "/")
+            )
         return httpx.Response(
             200,
             json={

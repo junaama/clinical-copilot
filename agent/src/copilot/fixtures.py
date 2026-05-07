@@ -7,6 +7,7 @@ Designed to exercise the UC-2 brief flow.
 
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Any
 
 PATIENT_ID = "fixture-1"
@@ -50,9 +51,9 @@ PHARMACIST_KIM_PANEL = ["fixture-1", "fixture-2", "fixture-3", "fixture-4", "fix
 
 def _ts(hours_ago: int, minutes: int = 0) -> str:
     """Build an ISO timestamp relative to a fixed reference point."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
-    base = datetime.now(timezone.utc)
+    base = datetime.now(UTC)
     moment = base - timedelta(hours=hours_ago, minutes=-minutes)
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 

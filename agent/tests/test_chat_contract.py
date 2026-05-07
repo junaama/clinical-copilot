@@ -264,7 +264,7 @@ def fixture_client(monkeypatch: pytest.MonkeyPatch):
 
     from contextlib import asynccontextmanager
 
-    from copilot import server  # noqa: PLC0415
+    from copilot import server
 
     @asynccontextmanager
     async def _stub_open_checkpointer(_settings):
@@ -313,7 +313,7 @@ def test_chat_response_surfaces_cache_hits_from_state(
     them through under ``state.cache_hits`` so a client can prove the
     extraction was cache-served (issue 030)."""
 
-    from copilot import server  # noqa: PLC0415
+    from copilot import server
 
     class _CacheHitGraph:
         async def ainvoke(

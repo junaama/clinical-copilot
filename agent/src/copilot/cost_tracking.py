@@ -16,8 +16,8 @@ No I/O, no network. Pure functions over dataclasses, easy to unit-test.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Iterable
 
 # USD per 1K tokens — list price as of 2026-Q2. Keys are normalized to
 # lowercase prefix-match so ``"claude-sonnet-4-6"`` matches the

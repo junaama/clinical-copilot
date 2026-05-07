@@ -22,7 +22,6 @@ from scripts.seed.seed_careteam import (
     select_patient_pids,
 )
 
-
 # Deterministic placeholder hash for tests — bcrypt-shaped but doesn't have
 # to verify against any password since we only assert SQL shape.
 _TEST_HASH = "$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"

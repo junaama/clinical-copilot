@@ -14,6 +14,8 @@ the four cases the supervisor is allowed to take.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 from pydantic import ValidationError
 
@@ -96,7 +98,7 @@ def test_handoff_event_is_immutable() -> None:
         timestamp="2026-05-06T12:34:56Z",
         input_summary="patient_id=Patient/abc, document_id=DocumentReference/xyz",
     )
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         event.from_node = "tampered"  # type: ignore[misc]
 
 
