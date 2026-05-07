@@ -204,6 +204,69 @@ describe('AgentMsg guideline citations (issue 027)', () => {
   });
 });
 
+describe('AgentMsg route badge (issue 039)', () => {
+  it('renders the route label as a status badge when route is present', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: MOCK_OVERNIGHT_BLOCK,
+      streaming: false,
+      route: { kind: 'chart', label: 'Reading the patient record' },
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const badge = screen.getByRole('status');
+    expect(badge).toHaveAttribute('data-route-kind', 'chart');
+    expect(badge.textContent).toContain('Reading the patient record');
+  });
+
+  it('omits the route badge when route is absent (rehydrated turns)', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: MOCK_OVERNIGHT_BLOCK,
+      streaming: false,
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('does not assume "Reading the patient record" for a panel route', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: MOCK_TRIAGE_BLOCK,
+      streaming: false,
+      route: { kind: 'panel', label: 'Reviewing your panel' },
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const badge = screen.getByRole('status');
+    expect(badge).toHaveAttribute('data-route-kind', 'panel');
+    expect(badge.textContent).toContain('Reviewing your panel');
+    expect(badge.textContent).not.toContain('Reading');
+  });
+});
+
 describe('AgentErrorBubble', () => {
   it('renders an HTTP status and detail', () => {
     render(<AgentErrorBubble status={502} detail="upstream FHIR timeout" />);

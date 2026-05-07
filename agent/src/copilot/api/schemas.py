@@ -141,6 +141,31 @@ Block = Annotated[
 ]
 
 
+# Closed set of route-metadata kinds. Frontend renders a user-facing label
+# from this value; the kind is the stable wire identifier the UI dispatches
+# on for header copy and badge styling.
+RouteKind = Literal[
+    "chart",
+    "panel",
+    "guideline",
+    "document",
+    "clarify",
+    "refusal",
+]
+
+
+class RouteMetadata(_Frozen):
+    """Structured route transparency carried alongside every chat answer.
+
+    ``kind`` is the closed-set wire identifier (frontend dispatches on it).
+    ``label`` is the user-facing string the UI renders verbatim — never
+    derive it from ``kind`` on the frontend, the backend owns the copy.
+    """
+
+    kind: RouteKind
+    label: str = Field(..., min_length=1)
+
+
 class ChatResponse(_Frozen):
     """Outbound POST /chat body. ``state`` is a free-form bag of metadata."""
 
@@ -148,6 +173,52 @@ class ChatResponse(_Frozen):
     reply: str
     block: Block
     state: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Route derivation
+# ---------------------------------------------------------------------------
+
+
+_REFUSAL_DECISIONS: frozenset[str] = frozenset(
+    {"refused_unsourced", "refused_safety", "tool_failure", "denied_authz", "blocked_baa"}
+)
+
+
+_ROUTE_LABELS: dict[str, str] = {
+    "chart": "Reading the patient record",
+    "panel": "Reviewing your panel",
+    "guideline": "Searching guideline evidence",
+    "document": "Reading the uploaded document",
+    "clarify": "Asking for clarification",
+    "refusal": "Cannot ground this answer",
+}
+
+
+def derive_route_metadata(
+    *,
+    workflow_id: str | None,
+    decision: str | None,
+    supervisor_action: str | None,
+) -> RouteMetadata:
+    """Map graph state to the wire ``RouteMetadata`` shape.
+
+    Decision short-circuits (clarify, refusal) take precedence over workflow
+    so a refusal that originated on a guideline-intent turn is still labeled
+    as a refusal, not a guideline read.
+    """
+
+    if decision == "clarify":
+        return RouteMetadata(kind="clarify", label=_ROUTE_LABELS["clarify"])
+    if decision in _REFUSAL_DECISIONS:
+        return RouteMetadata(kind="refusal", label=_ROUTE_LABELS["refusal"])
+    if workflow_id == "W-EVD" or supervisor_action == "retrieve_evidence":
+        return RouteMetadata(kind="guideline", label=_ROUTE_LABELS["guideline"])
+    if workflow_id == "W-DOC" or supervisor_action == "extract":
+        return RouteMetadata(kind="document", label=_ROUTE_LABELS["document"])
+    if workflow_id == "W-1":
+        return RouteMetadata(kind="panel", label=_ROUTE_LABELS["panel"])
+    return RouteMetadata(kind="chart", label=_ROUTE_LABELS["chart"])
 
 
 # ---------------------------------------------------------------------------

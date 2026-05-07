@@ -114,11 +114,35 @@ export interface ChatRequest {
   readonly smart_access_token: string;
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Route metadata — issue 039
+// The closed set is the wire identifier; the frontend uses it to dispatch on
+// header copy and badge styling. ``label`` is the user-facing string the UI
+// renders verbatim — backend owns the copy.
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const ROUTE_KINDS = [
+  'chart',
+  'panel',
+  'guideline',
+  'document',
+  'clarify',
+  'refusal',
+] as const;
+
+export type RouteKind = (typeof ROUTE_KINDS)[number];
+
+export interface ChatRoute {
+  readonly kind: RouteKind;
+  readonly label: string;
+}
+
 export interface ChatState {
   readonly patient_id: string | null;
   readonly workflow_id: string;
   readonly classifier_confidence: number;
   readonly message_count: number;
+  readonly route: ChatRoute;
 }
 
 export interface ChatResponse {
@@ -172,6 +196,13 @@ function asCitationCard(value: unknown, field: string): CitationCard {
     return value as CitationCard;
   }
   throw new Error(`Invalid ChatResponse: ${field} not a known citation card`);
+}
+
+function asRouteKind(value: unknown, field: string): RouteKind {
+  if (typeof value === 'string' && (ROUTE_KINDS as readonly string[]).includes(value)) {
+    return value as RouteKind;
+  }
+  throw new Error(`Invalid ChatResponse: ${field} not a known route kind`);
 }
 
 function asArray(value: unknown, field: string): readonly unknown[] {
@@ -281,6 +312,14 @@ function parseBlock(raw: unknown): Block {
   throw new Error(`Invalid ChatResponse: unknown block.kind ${String(kind)}`);
 }
 
+function parseRoute(raw: unknown, field: string): ChatRoute {
+  const obj = asObject(raw, field);
+  return {
+    kind: asRouteKind(obj.kind, `${field}.kind`),
+    label: asString(obj.label, `${field}.label`),
+  };
+}
+
 function parseState(raw: unknown): ChatState {
   const obj = asObject(raw, 'state');
   return {
@@ -291,6 +330,7 @@ function parseState(raw: unknown): ChatState {
       'state.classifier_confidence',
     ),
     message_count: asNumber(obj.message_count, 'state.message_count'),
+    route: parseRoute(obj.route, 'state.route'),
   };
 }
 

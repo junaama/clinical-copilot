@@ -5,7 +5,7 @@
  * parent App owns toggle state, SMART context, and Tweaks values.
  */
 
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent, type JSX, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type JSX, type ReactNode } from 'react';
 import { sendChat } from '../api/client';
 import type { ChatResponse, Citation } from '../api/types';
 import { AgentMsg, AgentErrorBubble, type AgentMessage } from './AgentMsg';
@@ -144,7 +144,12 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     const agentMsg: ChatMessage = {
       id: agentId,
       role: 'agent',
-      agent: { role: 'agent', block: result.response.block, streaming: true },
+      agent: {
+        role: 'agent',
+        block: result.response.block,
+        streaming: true,
+        route: result.response.state.route,
+      },
     };
     setMessages((prev) => [...prev, agentMsg]);
     setBusy(false);
@@ -186,6 +191,24 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     onCite({ card: 'vitals', label: 'Vitals', fhir_ref: null });
   }
 
+  // Issue 039: header subtitle reflects the latest route metadata so a
+  // panel / guideline / document / refusal answer is not mislabeled as
+  // "Reading this patient's record". Falls back to the chart-record copy
+  // until the first agent answer carries a route.
+  const latestRouteLabel = useMemo<string | null>(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m?.role === 'agent' && m.agent?.route) {
+        return m.agent.route.label;
+      }
+    }
+    return null;
+  }, [messages]);
+  const subtitle =
+    latestRouteLabel !== null
+      ? `${latestRouteLabel} · FHIR R4`
+      : `Reading ${patientName}'s record · FHIR R4`;
+
   if (!open) return null;
 
   const widthClass =
@@ -211,7 +234,7 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
           </span>
           <div>
             <div className="agent-title">Chart Agent</div>
-            <div className="agent-sub">Reading {patientName}'s record · FHIR R4</div>
+            <div className="agent-sub" data-testid="agent-subtitle">{subtitle}</div>
           </div>
         </div>
         <div className="agent-hd-r">
