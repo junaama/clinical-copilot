@@ -281,3 +281,177 @@ def test_build_citations_drops_unfetched_medication_ref() -> None:
     assert len(citations) == 1
     assert citations[0].fhir_ref == "MedicationRequest/real"
     assert "lisinopril" in citations[0].label
+
+
+# ---------------------------------------------------------------------------
+# Document citation labels (issue 046)
+# ---------------------------------------------------------------------------
+#
+# Issue 046 lands the document source-chip contract for post-upload chat
+# answers. A DocumentReference cite must carry a chip whose label reads
+# as "<filename> · page <n>" when the LLM emitted ``name="<filename>"``
+# and ``page="<n>"`` attributes — and a humanized fallback when those
+# attributes are missing — so a clinician can recognize the uploaded
+# file behind a document-grounded claim without reading the opaque
+# ``DocumentReference/<id>`` resource handle.
+
+
+def test_extract_cite_attributes_returns_page_field_value_for_document() -> None:
+    """The W-DOC path emits ``page`` / ``field`` / ``value`` already.
+
+    Test pins the existing extraction so the documents-side label work
+    can rely on these attributes flowing through.
+    """
+    text = (
+        "LDL is 180 mg/dL "
+        '<cite ref="DocumentReference/d1" name="lab_results.pdf" '
+        'page="1" field="results[0].value" value="180"/>.'
+    )
+    attrs = extract_cite_attributes(text)
+    assert attrs["DocumentReference/d1"] == {
+        "name": "lab_results.pdf",
+        "page": "1",
+        "field": "results[0].value",
+        "value": "180",
+    }
+
+
+def test_build_citations_uses_document_filename_and_page_for_label() -> None:
+    """A document chip surfaces the filename and the page number.
+
+    The chip must read like a clinician-facing source reference, not the
+    opaque ``DocumentReference/<id>`` handle. Filename comes from
+    ``name="<filename>"`` (the LLM is told to copy it from the upload
+    sentinel) and the page from ``page="<n>"`` (already emitted by the
+    W-DOC path; see ``test_w_doc_citation_fail_closed.py``).
+    """
+    citations = build_citations(
+        cited_refs=["DocumentReference/d1"],
+        fetched_refs=["DocumentReference/d1"],
+        cite_attributes={
+            "DocumentReference/d1": {
+                "name": "lab_results.pdf",
+                "page": "1",
+                "field": "results[0].value",
+                "value": "180",
+            },
+        },
+    )
+    assert len(citations) == 1
+    citation = citations[0]
+    assert citation.card == "documents"
+    assert citation.fhir_ref == "DocumentReference/d1"
+    assert "lab_results.pdf" in citation.label
+    assert "page 1" in citation.label.lower()
+
+
+def test_build_citations_uses_document_filename_only_when_page_absent() -> None:
+    """The chip falls back to filename alone when no page hint is present."""
+    citations = build_citations(
+        cited_refs=["DocumentReference/d1"],
+        fetched_refs=["DocumentReference/d1"],
+        cite_attributes={
+            "DocumentReference/d1": {"name": "intake_form.pdf"},
+        },
+    )
+    label = citations[0].label
+    assert "intake_form.pdf" in label
+    assert "page" not in label.lower()
+
+
+def test_build_citations_uses_document_page_only_when_filename_absent() -> None:
+    """Without a filename the chip still names the page so the source is locatable."""
+    citations = build_citations(
+        cited_refs=["DocumentReference/d1"],
+        fetched_refs=["DocumentReference/d1"],
+        cite_attributes={
+            "DocumentReference/d1": {"page": "2"},
+        },
+    )
+    label = citations[0].label
+    assert "Document" in label
+    assert "page 2" in label.lower()
+
+
+def test_build_citations_falls_back_to_humanized_label_for_document() -> None:
+    """No cite attributes → humanized default, not the opaque resource handle."""
+    citations = build_citations(
+        cited_refs=["DocumentReference/d1"],
+        fetched_refs=["DocumentReference/d1"],
+    )
+    label = citations[0].label
+    assert "DocumentReference (documents)" not in label
+    assert "Document" in label
+
+
+def test_build_citations_preserves_absence_marker_in_document_label() -> None:
+    """Absence markers in document cite attributes survive verbatim.
+
+    Mirrors the medication absence-marker preservation: if the LLM
+    surfaces ``page="[not on file]"`` because the source page could not
+    be located, the chip should echo that rather than silently drop it.
+    """
+    citations = build_citations(
+        cited_refs=["DocumentReference/d1"],
+        fetched_refs=["DocumentReference/d1"],
+        cite_attributes={
+            "DocumentReference/d1": {
+                "name": "intake_form.pdf",
+                "page": "[not on file]",
+            },
+        },
+    )
+    label = citations[0].label
+    assert "intake_form.pdf" in label
+    assert "[not on file]" in label
+
+
+def test_plain_block_from_text_forwards_document_citation_to_chip() -> None:
+    """End-to-end: the verifier's plain-block path renders a document chip.
+
+    Mirrors the medication and guideline forwarding tests. A W-DOC
+    answer whose synthesizer emits a DocumentReference cite ends up
+    with the citation surviving onto the ``PlainBlock`` (cite tags
+    stripped from the lead, chip metadata preserved for the frontend).
+    """
+    text = (
+        "The lab report shows LDL of 180 mg/dL "
+        '<cite ref="DocumentReference/d1" name="lab_results.pdf" '
+        'page="1" field="results[0].value" value="180"/>; '
+        "the extractor flagged this value as low-confidence."
+    )
+    citations = build_citations(
+        cited_refs=["DocumentReference/d1"],
+        fetched_refs=["DocumentReference/d1"],
+        cite_attributes=extract_cite_attributes(text),
+    )
+
+    block = plain_block_from_text(text, citations=citations)
+    assert block.kind == "plain"
+    assert "<cite" not in block.lead
+    assert len(block.citations) == 1
+    cite = block.citations[0]
+    assert cite.card == "documents"
+    assert cite.fhir_ref == "DocumentReference/d1"
+    assert "lab_results.pdf" in cite.label
+
+
+def test_build_citations_drops_unfetched_document_ref() -> None:
+    """Defense-in-depth: an uncited (hallucinated) DocumentReference is dropped.
+
+    A document-grounded answer that cites a DocumentReference the agent
+    never fetched in the current turn must not produce a misleading
+    source chip — verifier-level fail-closed (see
+    ``test_w_doc_citation_fail_closed.py``) handles the prose; this
+    pin keeps the chip-construction half honest too.
+    """
+    citations = build_citations(
+        cited_refs=["DocumentReference/real", "DocumentReference/hallucinated"],
+        fetched_refs=["DocumentReference/real"],
+        cite_attributes={
+            "DocumentReference/real": {"name": "real.pdf"},
+        },
+    )
+    assert len(citations) == 1
+    assert citations[0].fhir_ref == "DocumentReference/real"
+    assert "real.pdf" in citations[0].label

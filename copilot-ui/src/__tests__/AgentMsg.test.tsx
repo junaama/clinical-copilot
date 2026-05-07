@@ -711,3 +711,112 @@ describe('AgentMsg technical details affordance (issue 042)', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe('AgentMsg document source chips (issue 046)', () => {
+  // A post-upload chat answer that grounds a clinical statement against
+  // an uploaded document carries a ``DocumentReference`` citation. The
+  // chip label surfaces the filename and source page so a clinician
+  // can locate the value in the file they just uploaded — not the
+  // opaque ``DocumentReference/<id>`` resource handle.
+  const documentPlainBlock = {
+    kind: 'plain' as const,
+    lead:
+      "The lab report shows LDL of 180 mg/dL. The extractor flagged this " +
+      'value as low-confidence; please verify against the source.',
+    citations: [
+      {
+        card: 'documents' as const,
+        label: 'lab_results.pdf · page 1',
+        fhir_ref: 'DocumentReference/d1',
+      },
+    ],
+    followups: [] as readonly string[],
+  };
+
+  it('renders a document source chip with the filename · page label', () => {
+    render(
+      <AgentMsg
+        message={makeMsg(documentPlainBlock)}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    const chip = screen.getByText('lab_results.pdf · page 1');
+    expect(chip).toBeInTheDocument();
+    expect(chip.closest('button')?.dataset['card']).toBe('documents');
+  });
+
+  it('passes the document citation back to onCite on click', async () => {
+    const user = userEvent.setup();
+    const onCite = vi.fn();
+    render(
+      <AgentMsg
+        message={makeMsg(documentPlainBlock)}
+        showCitations
+        onCite={onCite}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByText('lab_results.pdf · page 1'));
+    expect(onCite).toHaveBeenCalledTimes(1);
+    expect(onCite.mock.calls[0]?.[0]).toMatchObject({
+      card: 'documents',
+      fhir_ref: 'DocumentReference/d1',
+    });
+  });
+
+  it('does not render the opaque resource-handle as a chip label', () => {
+    render(
+      <AgentMsg
+        message={makeMsg(documentPlainBlock)}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    // Regression guard: the humanized default must not be the resource
+    // type in parentheses.
+    expect(
+      screen.queryByText('DocumentReference (documents)'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('still hides the chip while the lead is streaming', () => {
+    render(
+      <AgentMsg
+        message={makeMsg(documentPlainBlock, /* streaming */ true)}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByText('lab_results.pdf · page 1'),
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe('AgentMsg document chip click flow (issue 046)', () => {
+  it('routes a document chip through the chart-card path with planCitationClick', async () => {
+    const { planCitationClick } = await import('../api/citations');
+    const effect = planCitationClick({
+      card: 'documents',
+      label: 'lab_results.pdf · page 1',
+      fhir_ref: 'DocumentReference/d1',
+    });
+    // Documents are a real chart card (OpenEMR's documents pane), so a
+    // document chip dispatches through the chart-card flash path the
+    // same way medication chips do — the click takes the clinician to
+    // the document in the chart, not to a guideline corpus chunk.
+    expect(effect).toEqual({
+      kind: 'chart-card',
+      card: 'documents',
+      fhir_ref: 'DocumentReference/d1',
+    });
+  });
+});
