@@ -1142,6 +1142,11 @@ body {
   width: 100%;
   height: auto;
 }
+.extraction-panel__source-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
 .extraction-panel__source-placeholder {
   padding: 24px;
   color: var(--ink-3);
