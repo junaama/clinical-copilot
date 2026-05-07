@@ -246,6 +246,22 @@ def _default_label_for(
         if name:
             return name
 
+    # Issue 046: post-upload document chips surface the uploaded
+    # filename (from ``name="<filename>"``) and the source page (from
+    # ``page="<n>"``) so a clinician can locate the value in the file
+    # they just uploaded. Absence markers (``page="[not on file]"``)
+    # are echoed verbatim — missing source location reads as missing,
+    # not fabricated.
+    if card == "documents":
+        name = (a.get("name") or "").strip()
+        page = (a.get("page") or "").strip()
+        if name and page:
+            return f"{name} · page {page}"
+        if name:
+            return name
+        if page:
+            return f"Document · page {page}"
+
     return _HUMAN_LABEL_BY_CARD.get(card, "Chart source")
 
 

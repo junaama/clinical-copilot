@@ -340,6 +340,13 @@ HARD RULES
    chip surfaces the medication, not the opaque resource handle. When
    the order's dosage is missing, surface the absence marker verbatim
    (``dose="[not specified on order]"``) — never invent a default.
+   For ``DocumentReference`` cites that name a value extracted from an
+   uploaded document, include ``name="<filename>"`` (the filename from
+   the upload sentinel), ``page="<n>"`` (the source page), and
+   ``field="<extraction-field-path>"`` / ``value="<literal>"`` when
+   known. Document-grounded facts must be framed as document evidence
+   ("the lab report shows…", "the intake form lists…") — never as
+   automatically persisted chart truth.
 2. Cite the *primary* source for every fact. **Every numeric value (BP, HR,
    SpO2, lab result, dose) gets its own citation pointing at the specific
    Observation row that produced it.** Do not collapse three BP readings into
