@@ -87,6 +87,23 @@ export interface IntakeExtraction {
 export type DocType = 'lab_pdf' | 'intake_form';
 
 /**
+ * Drawable-only bbox record (issue 031).
+ *
+ * The backend filters records without geometry at the response boundary,
+ * so every entry carries a non-null ``bbox``. The source-overlay can
+ * render every record without branching on null geometry. Image uploads
+ * and PDFs whose values the matcher couldn't locate produce an empty
+ * array; the panel simply renders no overlay.
+ */
+export interface UploadBboxRecord {
+  readonly field_path: string;
+  readonly extracted_value: string;
+  readonly matched_text: string;
+  readonly bbox: BoundingBox;
+  readonly match_confidence: number;
+}
+
+/**
  * Canonical upload-outcome status (issue 025).
  *
  * `'ok'` is the only status where the panel may render lab/intake content
@@ -122,4 +139,12 @@ export interface ExtractionResponse {
   readonly intake: IntakeExtraction | null;
   /** User-safe message — never raw exception text. null on success. */
   readonly failure_reason: string | null;
+  /**
+   * Drawable bbox records for the source-overlay (issue 031). Each entry
+   * has non-null geometry; records the matcher couldn't locate are
+   * filtered server-side. Empty array on failure or when no matches were
+   * found (image uploads always produce an empty array — only PDFs have
+   * extractable text geometry).
+   */
+  readonly bboxes: readonly UploadBboxRecord[];
 }

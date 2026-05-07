@@ -23,6 +23,7 @@ const SAMPLE_RESPONSE: ExtractionResponse = {
   filename: 'labs.pdf',
   lab: null,
   intake: null,
+  bboxes: [],
 };
 
 describe('FileUploadWidget', () => {
@@ -109,6 +110,7 @@ describe('FileUploadWidget', () => {
         filename: 'broken.pdf',
         lab: null,
         intake: null,
+        bboxes: [],
       },
     });
     const onUploaded = vi.fn();

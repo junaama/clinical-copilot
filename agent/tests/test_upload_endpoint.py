@@ -234,6 +234,26 @@ def upload_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server, "_vlm_extract_document", _stub_extract)
     monkeypatch.setattr(server, "_inject_upload_system_message", _stub_inject_message)
 
+    bbox_holder: dict[str, Any] = {}
+
+    def _stub_match_bboxes(
+        extraction: Any,
+        file_data: bytes,
+        *,
+        mimetype: str | None = None,
+        similarity_threshold: float = 0.8,
+    ):
+        # Tests that want to assert bbox response shape inject a list of
+        # ``FieldWithBBox`` here. Default keeps the legacy "no matches"
+        # behavior so happy-path tests written before issue 031 still see
+        # an empty bbox response.
+        override = bbox_holder.get("override")
+        if override is not None:
+            return list(override)
+        return []
+
+    monkeypatch.setattr(server, "match_extraction_to_bboxes", _stub_match_bboxes)
+
     with TestClient(server.app) as client:
         server.app.state.document_client = stub_doc
         server.app.state.extraction_store = stub_store
@@ -242,6 +262,7 @@ def upload_client(monkeypatch: pytest.MonkeyPatch):
         client.stub_store = stub_store  # type: ignore[attr-defined]
         client.system_messages = system_messages  # type: ignore[attr-defined]
         client.extraction_holder = extraction_holder  # type: ignore[attr-defined]
+        client.bbox_holder = bbox_holder  # type: ignore[attr-defined]
         yield client
 
 
@@ -279,6 +300,9 @@ def test_upload_lab_pdf_returns_extraction_response(upload_client: TestClient) -
     assert body["lab"] is not None
     assert body["intake"] is None
     assert body["lab"]["results"][0]["test_name"] == "HbA1c"
+    # Issue 031: bboxes is always present (default empty when the matcher
+    # produced no drawable records — fake PDF bytes here yield no matches).
+    assert body["bboxes"] == []
     # The DocumentClient saw the right call.
     upload_call = upload_client.stub_doc.uploads[0]  # type: ignore[attr-defined]
     assert upload_call["patient_id"] == "patient-eduardo-1"
@@ -636,3 +660,206 @@ def test_upload_happy_path_intake_intake_does_not_trigger_guard(
         data={"patient_id": "p-1", "doc_type": "intake_form"},
     )
     assert response.status_code == 200, response.text
+
+
+# ---------------------------------------------------------------------------
+# Issue 031: drawable-only bbox response contract
+# ---------------------------------------------------------------------------
+
+
+def _drawable_field(
+    field_path: str,
+    extracted_value: str,
+    *,
+    page: int = 1,
+    x: float = 0.1,
+    y: float = 0.2,
+    width: float = 0.05,
+    height: float = 0.02,
+    confidence: float = 0.95,
+):
+    """Helper: build a ``FieldWithBBox`` with drawable geometry."""
+    from copilot.extraction.schemas import BoundingBox, FieldWithBBox
+
+    return FieldWithBBox(
+        field_path=field_path,
+        extracted_value=extracted_value,
+        matched_text=extracted_value,
+        bbox=BoundingBox(page=page, x=x, y=y, width=width, height=height),
+        match_confidence=confidence,
+    )
+
+
+def _no_match_field(field_path: str, extracted_value: str):
+    """Helper: build a ``FieldWithBBox`` whose matcher couldn't locate the value."""
+    from copilot.extraction.schemas import FieldWithBBox
+
+    return FieldWithBBox(
+        field_path=field_path,
+        extracted_value=extracted_value,
+        matched_text="",
+        bbox=None,
+        match_confidence=0.0,
+    )
+
+
+def test_upload_response_includes_bboxes_for_lab_pdf(
+    upload_client: TestClient,
+) -> None:
+    """A successful lab upload returns drawable bbox records keyed off the matcher.
+
+    Asserts the issue-031 contract: each entry has a non-null bbox with a
+    page number and normalized geometry, plus field path, extracted value,
+    matched text, and a match confidence in [0, 1].
+    """
+
+    upload_client.bbox_holder["override"] = [  # type: ignore[attr-defined]
+        _drawable_field("results[0].test_name", "HbA1c"),
+        _drawable_field(
+            "results[0].value", "7.4", x=0.4, y=0.21, width=0.04, height=0.02,
+        ),
+    ]
+
+    pdf_bytes = b"%PDF-1.4\n%fake-pdf-bytes-for-test\n"
+    response = upload_client.post(
+        "/upload",
+        files={"file": ("hba1c.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        data={
+            "patient_id": "patient-eduardo-1",
+            "doc_type": "lab_pdf",
+            "conversation_id": "conv-bbox-1",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "ok"
+    bboxes = body["bboxes"]
+    assert isinstance(bboxes, list)
+    assert len(bboxes) == 2
+
+    first = bboxes[0]
+    assert set(first.keys()) == {
+        "field_path",
+        "extracted_value",
+        "matched_text",
+        "bbox",
+        "match_confidence",
+    }
+    assert first["field_path"] == "results[0].test_name"
+    assert first["extracted_value"] == "HbA1c"
+    assert first["matched_text"] == "HbA1c"
+    assert first["bbox"] is not None
+    assert first["bbox"]["page"] == 1
+    for coord in ("x", "y", "width", "height"):
+        assert 0.0 <= first["bbox"][coord] <= 1.0
+    assert 0.0 <= first["match_confidence"] <= 1.0
+
+
+def test_upload_response_filters_non_drawable_bbox_records(
+    upload_client: TestClient,
+) -> None:
+    """Records without geometry are filtered at the response boundary."""
+
+    upload_client.bbox_holder["override"] = [  # type: ignore[attr-defined]
+        _drawable_field("results[0].test_name", "HbA1c"),
+        _no_match_field("patient_name", "Eduardo Test"),
+        _drawable_field("results[0].value", "7.4"),
+        _no_match_field("lab_name", "Quest"),
+    ]
+
+    pdf_bytes = b"%PDF-1.4\n%fake-pdf-bytes-for-test\n"
+    response = upload_client.post(
+        "/upload",
+        files={"file": ("hba1c.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        data={"patient_id": "p-1", "doc_type": "lab_pdf"},
+    )
+
+    assert response.status_code == 200, response.text
+    bboxes = response.json()["bboxes"]
+    # Only the two drawable entries survive the filter; the no-match entries
+    # never reach the wire.
+    assert len(bboxes) == 2
+    paths = [b["field_path"] for b in bboxes]
+    assert paths == ["results[0].test_name", "results[0].value"]
+    for record in bboxes:
+        assert record["bbox"] is not None
+        assert record["bbox"]["page"] >= 1
+
+
+def test_upload_response_bboxes_default_empty_for_image_uploads(
+    upload_client: TestClient,
+) -> None:
+    """Image uploads have no extractable text geometry → empty bbox list.
+
+    The matcher returns no matches for image inputs (no PDF text layer),
+    so the canonical envelope carries ``bboxes: []``. The panel + overlay
+    degrade gracefully — no boxes drawn, but extraction still renders.
+    """
+
+    png_bytes = b"\x89PNG\r\n\x1a\nstub-png-bytes"
+    response = upload_client.post(
+        "/upload",
+        files={"file": ("intake.png", io.BytesIO(png_bytes), "image/png")},
+        data={"patient_id": "p-9", "doc_type": "intake_form"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["bboxes"] == []
+
+
+def test_upload_response_bboxes_empty_on_failure_envelopes(
+    upload_client: TestClient,
+) -> None:
+    """Canonical failure envelopes carry an empty bboxes array."""
+
+    upload_client.extraction_holder["force_error"] = True  # type: ignore[attr-defined]
+
+    response = upload_client.post(
+        "/upload",
+        files={"file": ("x.pdf", io.BytesIO(b"%PDF-1.4\n"), "application/pdf")},
+        data={"patient_id": "p-1", "doc_type": "lab_pdf"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "extraction_failed"
+    # The model default for ``bboxes`` is ``[]`` — the failure-response
+    # builder doesn't set it explicitly.
+    assert body["bboxes"] == []
+
+
+def test_upload_persists_full_bbox_list_to_cache_unchanged(
+    upload_client: TestClient,
+) -> None:
+    """Cache persistence keeps non-drawable entries; only the response filters them.
+
+    The cache row preserves coverage stats (which fields the matcher
+    couldn't locate) so future cache reads keep that signal. The response
+    contract is narrower: the source-overlay only renders drawable
+    records, but the persistence layer keeps the full list.
+    """
+
+    upload_client.bbox_holder["override"] = [  # type: ignore[attr-defined]
+        _drawable_field("results[0].test_name", "HbA1c"),
+        _no_match_field("patient_name", "Eduardo Test"),
+        _drawable_field("results[0].value", "7.4"),
+    ]
+
+    pdf_bytes = b"%PDF-1.4\n%fake-pdf-bytes-for-test\n"
+    response = upload_client.post(
+        "/upload",
+        files={"file": ("hba1c.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        data={"patient_id": "p-1", "doc_type": "lab_pdf"},
+    )
+
+    assert response.status_code == 200, response.text
+    saves = upload_client.stub_store.lab_saves  # type: ignore[attr-defined]
+    assert len(saves) == 1
+    cached_bboxes = saves[0]["bboxes"]
+    # All three records (including the bbox=None one) reach the cache row.
+    assert len(cached_bboxes) == 3
+    # ...but the response only carries the drawable two.
+    assert len(response.json()["bboxes"]) == 2

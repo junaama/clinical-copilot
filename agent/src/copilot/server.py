@@ -56,7 +56,13 @@ from .conversations import (
 from .extraction.bbox_matcher import match_extraction_to_bboxes
 from .extraction.document_client import UPLOAD_LANDED_ID_LOST, DocumentClient
 from .extraction.persistence import DocumentExtractionStore
-from .extraction.schemas import IntakeExtraction, LabExtraction
+from .extraction.schemas import (
+    DrawableFieldBBox,
+    FieldWithBBox,
+    IntakeExtraction,
+    LabExtraction,
+    filter_drawable_bboxes,
+)
 from .extraction.type_guard import detect_doc_type
 from .extraction.vlm import extract_document as _vlm_extract_document
 from .fhir import FhirClient
@@ -479,6 +485,14 @@ async def chat(
             )
 
     block = _coerce_block_dict(result.get("block"), fallback_text=reply)
+    # Issue 030: per-turn cache-hit signal. Each entry is the ``cache_key``
+    # of an extraction-tool ToolMessage that was cache-served this turn
+    # (``document_id:<id>`` or ``sha256:<hex>``). Empty list when no cache
+    # hit happened — including chat turns that didn't invoke an extraction
+    # tool. The deployed e2e test (test_http_e2e_deployed.py) asserts the
+    # second post-upload chat turn carries a non-empty list to verify the
+    # cache-first branch (issue 023) in production.
+    cache_hits = list(result.get("cache_hits") or [])
     # Frontend reads block.lead for the typewriter; reply is duplicated for
     # plain-text consumers (logs, smoke tests) per the contract.
     return ChatResponse(
@@ -490,6 +504,7 @@ async def chat(
             "workflow_id": result.get("workflow_id"),
             "classifier_confidence": float(result.get("classifier_confidence") or 0.0),
             "message_count": len(messages),
+            "cache_hits": cache_hits,
         },
     )
 
@@ -1083,6 +1098,11 @@ class UploadResponse(BaseModel):
     lab: dict[str, Any] | None = None
     intake: dict[str, Any] | None = None
     failure_reason: str | None = None
+    # Drawable-only bbox records (issue 031). Empty for image uploads, for
+    # PDFs whose extracted values the matcher couldn't locate, and for any
+    # failure outcome — the source-overlay only renders records whose
+    # geometry is non-null.
+    bboxes: list[DrawableFieldBBox] = []
 
 
 def _resolve_upload_document_client(req_app: FastAPI) -> Any:
@@ -1142,12 +1162,37 @@ def _sniff_mimetype(file_data: bytes, fallback: str | None) -> str:
     return fallback or "application/octet-stream"
 
 
-async def _persist_upload_extraction_cache(
-    req_app: FastAPI,
+def _compute_upload_bboxes(
     *,
     extraction: LabExtraction | IntakeExtraction,
     file_data: bytes,
     mimetype: str,
+) -> list[FieldWithBBox]:
+    """Run the bbox matcher once for both cache + response use.
+
+    The matcher is best-effort: a PyMuPDF failure or empty page list
+    yields an empty match list rather than failing the upload, since the
+    source-overlay degrades gracefully (no boxes visible) but the
+    extraction itself is still useful.
+    """
+
+    try:
+        return match_extraction_to_bboxes(
+            extraction,
+            file_data,
+            mimetype=mimetype,
+        )
+    except Exception as exc:  # pragma: no cover - bbox match best-effort
+        _log.warning("upload bbox match failed: %s", exc)
+        return []
+
+
+async def _persist_upload_extraction_cache(
+    req_app: FastAPI,
+    *,
+    extraction: LabExtraction | IntakeExtraction,
+    bboxes: list[FieldWithBBox],
+    file_data: bytes,
     doc_type: str,
     document_id: str,
     patient_id: str,
@@ -1156,15 +1201,6 @@ async def _persist_upload_extraction_cache(
     store = _resolve_upload_extraction_store(req_app)
     if store is None:
         return
-    try:
-        bboxes = match_extraction_to_bboxes(
-            extraction,
-            file_data,
-            mimetype=mimetype,
-        )
-    except Exception as exc:  # pragma: no cover - cache best-effort
-        _log.warning("upload cache bbox match failed: %s", exc)
-        bboxes = []
     content_sha256 = hashlib.sha256(file_data).hexdigest()
     try:
         if isinstance(extraction, LabExtraction):
@@ -1463,11 +1499,21 @@ async def upload(
             document_id=document_id,
         )
 
-    await _persist_upload_extraction_cache(
-        app,
+    # Compute bboxes once: the cache row stores the full list (including
+    # bbox=None entries for fields the matcher couldn't locate, so future
+    # cache reads can preserve coverage stats); the response only carries
+    # the drawable subset (issue 031).
+    all_bboxes = _compute_upload_bboxes(
         extraction=result.extraction,
         file_data=file_data,
         mimetype=mimetype,
+    )
+
+    await _persist_upload_extraction_cache(
+        app,
+        extraction=result.extraction,
+        bboxes=all_bboxes,
+        file_data=file_data,
         doc_type=doc_type,
         document_id=document_id,
         patient_id=patient_id,
@@ -1505,6 +1551,7 @@ async def upload(
         lab=lab_payload,
         intake=intake_payload,
         failure_reason=None,
+        bboxes=filter_drawable_bboxes(all_bboxes),
     )
 
 

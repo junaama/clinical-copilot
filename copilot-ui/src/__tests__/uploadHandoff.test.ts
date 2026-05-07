@@ -24,6 +24,7 @@ function makeOutcome(overrides: Partial<ExtractionResponse>): ExtractionResponse
     filename: overrides.filename ?? 'labs.pdf',
     lab: null,
     intake: null,
+    bboxes: [],
     ...overrides,
   };
 }

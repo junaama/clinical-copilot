@@ -225,6 +225,12 @@ function isExtractionResponse(x: unknown): x is ExtractionResponse {
   ) {
     return false;
   }
+  // ``bboxes`` is the issue-031 drawable-only contract: must be an array
+  // when present. Older builds may omit the field; tolerate that for
+  // forward compatibility with cached frontends rather than rejecting
+  // an otherwise-valid envelope.
+  const bboxes = obj['bboxes'];
+  if (bboxes !== undefined && !Array.isArray(bboxes)) return false;
   return (
     (obj['document_id'] === null || typeof obj['document_id'] === 'string') &&
     (obj['doc_type'] === 'lab_pdf' || obj['doc_type'] === 'intake_form') &&
