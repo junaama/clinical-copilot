@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type JSX, type ReactNode } from 'react';
 import { sendChat } from '../api/client';
 import type { ChatResponse, Citation } from '../api/types';
+import { deriveAgentContext } from '../lib/agentContext';
 import { AgentMsg, AgentErrorBubble, type AgentMessage } from './AgentMsg';
 import { Launcher } from './Launcher';
 import { Thinking } from './Thinking';
@@ -51,6 +52,16 @@ export interface AgentPanelProps {
   readonly userId: string;
   readonly smartAccessToken: string;
   readonly patientName: string;
+  /** Issue 043: id of the currently focused patient (SMART context, panel
+   *  click, or backend-resolved). Empty string means no patient yet. The
+   *  agent context module reads this to decide whether the no-patient,
+   *  panel-capable, or patient-focused gating applies. */
+  readonly focusPatientId: string;
+  /** Issue 043: true when the surrounding shell mounts a panel surface
+   *  (the standalone app's care-team panel). The EHR-launch shell does
+   *  not, so panel-wide prompts are disabled there until a patient is
+   *  resolved. */
+  readonly hasPanelSurface: boolean;
   readonly messages: readonly ChatMessage[];
   readonly setMessages: (
     update: (prev: readonly ChatMessage[]) => readonly ChatMessage[],
@@ -79,6 +90,8 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     userId,
     smartAccessToken,
     patientName,
+    focusPatientId,
+    hasPanelSurface,
     messages,
     setMessages,
     onClose,
@@ -202,10 +215,26 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     onCite({ card: 'vitals', label: 'Vitals', fhir_ref: null });
   }
 
+  // Issue 043: single decision module for no-patient / patient-focused /
+  // panel-capable gating. Drives the welcome copy, suggestion chip
+  // enablement, composer placeholder, and Send button hint so the four
+  // surfaces stay in sync (story 34).
+  const agentContext = useMemo(
+    () =>
+      deriveAgentContext({
+        focusPatientId,
+        hasPanelSurface,
+        focusPatientName: patientName,
+      }),
+    [focusPatientId, hasPanelSurface, patientName],
+  );
+
   // Issue 039: header subtitle reflects the latest route metadata so a
   // panel / guideline / document / refusal answer is not mislabeled as
-  // "Reading this patient's record". Falls back to the chart-record copy
-  // until the first agent answer carries a route.
+  // "Reading this patient's record". Falls back to a context-aware copy
+  // (chart record vs panel-only) until the first agent answer carries
+  // a route — issue 043 made the no-patient subtitle no longer say
+  // "Reading this patient's record".
   const latestRouteLabel = useMemo<string | null>(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const m = messages[i];
@@ -215,10 +244,16 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     }
     return null;
   }, [messages]);
+  const fallbackSubtitleLabel =
+    agentContext.kind === 'patient-focused'
+      ? `Reading ${patientName}'s record`
+      : agentContext.kind === 'panel-capable'
+        ? 'Reviewing your panel'
+        : 'No patient selected';
   const subtitle =
     latestRouteLabel !== null
       ? `${latestRouteLabel} · FHIR R4`
-      : `Reading ${patientName}'s record · FHIR R4`;
+      : `${fallbackSubtitleLabel} · FHIR R4`;
 
   if (!open) return null;
 
@@ -268,7 +303,7 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
 
       <div className="agent-scroll" ref={scrollRef}>
         {messages.length === 0 && (
-          <Welcome patientName={patientName} onPick={(label) => void ask(label)} />
+          <Welcome context={agentContext} onPick={(label) => void ask(label)} />
         )}
         {messages.map((m) => {
           if (m.role === 'user' && m.text !== undefined) {
@@ -304,17 +339,37 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
         <div className="agent-composer-slot">{composerSlot}</div>
       ) : null}
 
-      <form className="agent-input" onSubmit={submit}>
+      <form className="agent-input" onSubmit={submit} data-context-kind={agentContext.kind}>
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask about this patient or your panel…"
+          placeholder={agentContext.composerPlaceholder}
           aria-label="Ask the chart agent"
+          data-testid="agent-input"
         />
-        <button type="submit" aria-label="Send" disabled={draft.trim().length === 0}>
+        <button
+          type="submit"
+          aria-label="Send"
+          disabled={draft.trim().length === 0}
+          title={
+            draft.trim().length === 0
+              ? agentContext.sendDisabledHint
+              : 'Send message'
+          }
+          data-testid="agent-send"
+        >
           ↵
         </button>
       </form>
+      {draft.trim().length === 0 && (
+        <div
+          className="agent-input-hint"
+          data-testid="agent-send-hint"
+          aria-live="polite"
+        >
+          {agentContext.sendDisabledHint}
+        </div>
+      )}
       <div className="agent-foot">
         <span>⌘K to summon · answers cite the chart · read-only</span>
       </div>
