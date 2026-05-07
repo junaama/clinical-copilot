@@ -284,6 +284,41 @@ async def test_upload_recovers_id_after_bool_given_500_with_recent_filename_matc
     assert call_kwargs.get("params") == {"path": "Lab Report"}
 
 
+async def test_upload_recovers_id_from_openemr_standard_docdate_shape(
+    client: DocumentClient,
+) -> None:
+    """OpenEMR Standard API document lists expose upload recency as ``docdate``."""
+
+    upload_response = httpx.Response(
+        500,
+        text="bool given in getResponseForPayload",
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        200,
+        json=[
+            {
+                "id": "real-openemr-doc",
+                "filename": "p04-kowalski-cmp.pdf",
+                "docdate": datetime.now(UTC).isoformat(),
+                "mimetype": "application/pdf",
+            },
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "p04-kowalski-cmp.pdf", "lab_pdf"
+        )
+
+    assert ok is True
+    assert doc_id == "real-openemr-doc"
+    assert err is None
+
+
 async def test_upload_bool_given_500_returns_stable_error_when_recovery_list_5xx(
     client: DocumentClient,
 ) -> None:

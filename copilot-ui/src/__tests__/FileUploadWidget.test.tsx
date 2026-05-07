@@ -137,6 +137,50 @@ describe('FileUploadWidget', () => {
     expect(onUploaded).not.toHaveBeenCalled();
   });
 
+  it('keeps document-reference failures inside the widget with no handoff', async () => {
+    const uploadFn = vi.fn().mockResolvedValue({
+      ok: 'failed',
+      status: 200,
+      outcome: {
+        status: 'doc_ref_failed',
+        requested_type: 'lab_pdf',
+        effective_type: null,
+        discussable: false,
+        failure_reason:
+          "The upload landed but we couldn't confirm the document id. Please re-attach the file.",
+        document_id: null,
+        document_reference: null,
+        doc_type: 'lab_pdf',
+        filename: 'p04-kowalski-cmp.pdf',
+        lab: null,
+        intake: null,
+        bboxes: [],
+      },
+    });
+    const onUploaded = vi.fn();
+
+    render(
+      <FileUploadWidget
+        patientId="pat-1"
+        patientName="Eduardo Perez"
+        onUploaded={onUploaded}
+        uploadFn={uploadFn}
+      />,
+    );
+
+    await userEvent.upload(
+      screen.getByLabelText('choose document') as HTMLInputElement,
+      makeFile({ name: 'p04-kowalski-cmp.pdf' }),
+    );
+
+    const failBlock = await screen.findByTestId('upload-widget-outcome-failed');
+    expect(failBlock).toHaveTextContent(/couldn't confirm the document id/i);
+    expect(failBlock.getAttribute('data-outcome-status')).toBe(
+      'doc_ref_failed',
+    );
+    expect(onUploaded).not.toHaveBeenCalled();
+  });
+
   it('shows a server error when upload returns ok:false', async () => {
     const uploadFn = vi.fn().mockResolvedValue({
       ok: false,

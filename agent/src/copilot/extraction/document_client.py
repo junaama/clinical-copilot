@@ -114,6 +114,7 @@ def _document_id(document: dict[str, Any]) -> str:
 def _parse_document_timestamp(document: dict[str, Any]) -> datetime | None:
     raw = (
         document.get("date")
+        or document.get("docdate")
         or document.get("created_at")
         or document.get("create_date")
         or document.get("created")
