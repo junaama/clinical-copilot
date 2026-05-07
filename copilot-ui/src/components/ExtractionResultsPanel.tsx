@@ -343,14 +343,12 @@ function IntakePanel({
 }): JSX.Element {
   return (
     <div className="extraction-panel__intake">
-      {intake.chief_concern ? (
-        <Section title="Chief concern" defaultOpen>
-          <p className="extraction-panel__cc">
-            {intake.chief_concern}{' '}
-            <SourceCta fieldPath="chief_concern" sourceCtx={sourceCtx} />
-          </p>
-        </Section>
-      ) : null}
+      <Section title="Chief concern" defaultOpen>
+        <p className="extraction-panel__cc">
+          {intake.chief_concern}{' '}
+          <SourceCta fieldPath="chief_concern" sourceCtx={sourceCtx} />
+        </p>
+      </Section>
 
       <Section title="Demographics" defaultOpen>
         <dl className="extraction-panel__meta">
@@ -366,22 +364,28 @@ function IntakePanel({
               </dd>
             </>
           ) : null}
-          {intake.demographics.date_of_birth ? (
+          {intake.demographics.dob ? (
             <>
               <dt>DOB</dt>
               <dd>
-                {intake.demographics.date_of_birth}{' '}
+                {intake.demographics.dob}{' '}
                 <SourceCta
-                  fieldPath="demographics.date_of_birth"
+                  fieldPath="demographics.dob"
                   sourceCtx={sourceCtx}
                 />
               </dd>
             </>
           ) : null}
-          {intake.demographics.sex ? (
+          {intake.demographics.gender ? (
             <>
-              <dt>Sex</dt>
-              <dd>{intake.demographics.sex}</dd>
+              <dt>Gender</dt>
+              <dd>
+                {intake.demographics.gender}{' '}
+                <SourceCta
+                  fieldPath="demographics.gender"
+                  sourceCtx={sourceCtx}
+                />
+              </dd>
             </>
           ) : null}
           {intake.demographics.phone ? (
@@ -394,6 +398,12 @@ function IntakePanel({
             <>
               <dt>Address</dt>
               <dd>{intake.demographics.address}</dd>
+            </>
+          ) : null}
+          {intake.demographics.emergency_contact ? (
+            <>
+              <dt>Emergency contact</dt>
+              <dd>{intake.demographics.emergency_contact}</dd>
             </>
           ) : null}
         </dl>
@@ -441,7 +451,6 @@ function IntakePanel({
                 <span className="extraction-panel__list-primary">
                   {f.relation}: {f.condition}
                 </span>
-                <ConfidenceBadge confidence={f.confidence} />
                 <SourceCta
                   fieldPath={`family_history[${i}].condition`}
                   sourceCtx={sourceCtx}
@@ -455,10 +464,10 @@ function IntakePanel({
       {intake.social_history ? (
         <Section title="Social history">
           <dl className="extraction-panel__meta">
-            {intake.social_history.tobacco ? (
+            {intake.social_history.smoking ? (
               <>
-                <dt>Tobacco</dt>
-                <dd>{intake.social_history.tobacco}</dd>
+                <dt>Smoking</dt>
+                <dd>{intake.social_history.smoking}</dd>
               </>
             ) : null}
             {intake.social_history.alcohol ? (
@@ -467,10 +476,10 @@ function IntakePanel({
                 <dd>{intake.social_history.alcohol}</dd>
               </>
             ) : null}
-            {intake.social_history.substance_use ? (
+            {intake.social_history.drugs ? (
               <>
-                <dt>Other substances</dt>
-                <dd>{intake.social_history.substance_use}</dd>
+                <dt>Drugs</dt>
+                <dd>{intake.social_history.drugs}</dd>
               </>
             ) : null}
             {intake.social_history.occupation ? (
@@ -495,14 +504,15 @@ function MedicationRow({
   readonly fieldPath: string;
   readonly sourceCtx: SourceContext;
 }): JSX.Element {
-  const detail = [med.dose, med.frequency].filter((s) => s).join(' · ');
+  const detail = [med.dose, med.frequency, med.prescriber]
+    .filter((s) => s)
+    .join(' · ');
   return (
     <li>
       <span className="extraction-panel__list-primary">{med.name}</span>
       {detail ? (
         <span className="extraction-panel__list-secondary"> {detail}</span>
       ) : null}
-      <ConfidenceBadge confidence={med.confidence} />
       <SourceCta fieldPath={fieldPath} sourceCtx={sourceCtx} />
     </li>
   );
@@ -524,7 +534,6 @@ function AllergyRow({
       {detail ? (
         <span className="extraction-panel__list-secondary"> {detail}</span>
       ) : null}
-      <ConfidenceBadge confidence={allergy.confidence} />
       <SourceCta fieldPath={fieldPath} sourceCtx={sourceCtx} />
     </li>
   );

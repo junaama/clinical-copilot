@@ -104,10 +104,11 @@ function intakeFixture(): ExtractionResponse {
     intake: {
       demographics: {
         name: 'Maria Chen',
-        date_of_birth: '1972-08-14',
-        sex: 'F',
+        dob: '1972-08-14',
+        gender: 'F',
         phone: '555-0123',
         address: '101 Main St',
+        emergency_contact: 'James Chen 555-9999',
       },
       chief_concern: 'Headache for 3 days',
       current_medications: [
@@ -115,7 +116,7 @@ function intakeFixture(): ExtractionResponse {
           name: 'Lisinopril',
           dose: '20 mg',
           frequency: 'once daily',
-          confidence: 'high',
+          prescriber: 'Dr. Adams',
         },
       ],
       allergies: [
@@ -123,16 +124,15 @@ function intakeFixture(): ExtractionResponse {
           substance: 'Penicillin',
           reaction: 'rash',
           severity: 'moderate',
-          confidence: 'medium',
         },
       ],
       family_history: [
-        { relation: 'Mother', condition: 'Type 2 Diabetes', confidence: 'high' },
+        { relation: 'Mother', condition: 'Type 2 Diabetes' },
       ],
       social_history: {
-        tobacco: 'Never',
+        smoking: 'Never',
         alcohol: 'Occasional',
-        substance_use: null,
+        drugs: null,
         occupation: 'Teacher',
       },
     },
@@ -187,6 +187,191 @@ describe('ExtractionResultsPanel', () => {
     expect(screen.getByText(/Headache for 3 days/i)).toBeInTheDocument();
     expect(screen.getByText('Maria Chen')).toBeInTheDocument();
     expect(screen.getByText('1972-08-14')).toBeInTheDocument();
+  });
+
+  describe('backend-shaped intake rendering (issue 034)', () => {
+    beforeEach(() => {
+      // The "selecting CTA switches to Source" test uses sourceFile, which
+      // needs URL.createObjectURL — jsdom doesn't ship one.
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: vi.fn(() => 'blob:mock-intake-source-url'),
+      });
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        value: vi.fn(),
+      });
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('renders all backend-shaped demographics fields when present', () => {
+      render(<ExtractionResultsPanel extraction={intakeFixture()} />);
+      // dob (backend name) and gender (backend name) replace date_of_birth/sex.
+      expect(screen.getByText('DOB')).toBeInTheDocument();
+      expect(screen.getByText('1972-08-14')).toBeInTheDocument();
+      expect(screen.getByText('Gender')).toBeInTheDocument();
+      expect(screen.getByText('F')).toBeInTheDocument();
+      expect(screen.getByText('Phone')).toBeInTheDocument();
+      expect(screen.getByText('555-0123')).toBeInTheDocument();
+      expect(screen.getByText('Address')).toBeInTheDocument();
+      expect(screen.getByText('101 Main St')).toBeInTheDocument();
+      expect(screen.getByText('Emergency contact')).toBeInTheDocument();
+      expect(screen.getByText('James Chen 555-9999')).toBeInTheDocument();
+    });
+
+    it('renders backend-shaped social history fields (smoking, alcohol, drugs, occupation)', async () => {
+      render(<ExtractionResultsPanel extraction={intakeFixture()} />);
+      await userEvent.click(
+        screen.getByRole('button', { name: /Social history/i }),
+      );
+      expect(screen.getByText('Smoking')).toBeInTheDocument();
+      expect(screen.getByText('Never')).toBeInTheDocument();
+      expect(screen.getByText('Alcohol')).toBeInTheDocument();
+      expect(screen.getByText('Occasional')).toBeInTheDocument();
+      expect(screen.getByText('Occupation')).toBeInTheDocument();
+      expect(screen.getByText('Teacher')).toBeInTheDocument();
+      // drugs is null in the fixture — section should not render the row.
+      expect(screen.queryByText('Drugs')).not.toBeInTheDocument();
+    });
+
+    it('renders medications, allergies, and family history without confidence badges', async () => {
+      render(<ExtractionResultsPanel extraction={intakeFixture()} />);
+      // Open all collapsible sections.
+      await userEvent.click(
+        screen.getByRole('button', { name: /Medications \(1\)/ }),
+      );
+      await userEvent.click(
+        screen.getByRole('button', { name: /Allergies \(1\)/ }),
+      );
+      // No frontend-only confidence badges on intake row entries.
+      const intakeBadges = screen
+        .queryAllByLabelText(/^confidence /)
+        .filter((el) => {
+          // The lab fixture isn't rendered here; any badges would be from intake.
+          const text = el.textContent ?? '';
+          return text === 'high' || text === 'medium' || text === 'low';
+        });
+      expect(intakeBadges).toHaveLength(0);
+    });
+
+    it('renders medication prescriber in the detail line when present', async () => {
+      render(<ExtractionResultsPanel extraction={intakeFixture()} />);
+      await userEvent.click(
+        screen.getByRole('button', { name: /Medications \(1\)/ }),
+      );
+      expect(
+        screen.getByText(/20 mg · once daily · Dr\. Adams/),
+      ).toBeInTheDocument();
+    });
+
+    it('renders chief_concern unconditionally with a source CTA when matched', () => {
+      const fixture = intakeFixture();
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [bbox('chief_concern')],
+      };
+      render(<ExtractionResultsPanel extraction={withBboxes} />);
+      expect(screen.getByText(/Headache for 3 days/i)).toBeInTheDocument();
+      expect(screen.getByTestId('source-cta-chief_concern')).toBeInTheDocument();
+    });
+
+    it('exposes source CTAs on important intake fields when exact paths match', () => {
+      const fixture = intakeFixture();
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [
+          bbox('demographics.name'),
+          bbox('demographics.dob'),
+          bbox('demographics.gender'),
+          bbox('current_medications[0].name'),
+          bbox('allergies[0].substance'),
+          bbox('family_history[0].condition'),
+        ],
+      };
+      render(<ExtractionResultsPanel extraction={withBboxes} />);
+      expect(
+        screen.getByTestId('source-cta-demographics.name'),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId('source-cta-demographics.dob'),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId('source-cta-demographics.gender'),
+      ).toBeInTheDocument();
+    });
+
+    it('hides source CTAs on intake fields without an exact bbox match', () => {
+      const fixture = intakeFixture();
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [bbox('chief_concern')],
+      };
+      render(<ExtractionResultsPanel extraction={withBboxes} />);
+      // Demographics fields without bboxes should not show CTAs.
+      expect(
+        screen.queryByTestId('source-cta-demographics.dob'),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId('source-cta-demographics.gender'),
+      ).not.toBeInTheDocument();
+    });
+
+    it('selecting an intake source CTA switches to Source and marks the matching bbox', async () => {
+      const fixture = intakeFixture();
+      const sourceFile = makeFile({ name: 'intake.png', type: 'image/png' });
+      const withBboxes: ExtractionResponse = {
+        ...fixture,
+        bboxes: [
+          bbox('demographics.dob', {
+            bbox: { page: 1, x: 0.2, y: 0.3, width: 0.2, height: 0.04 },
+            extracted_value: '1972-08-14',
+          }),
+        ],
+      };
+      render(
+        <ExtractionResultsPanel
+          extraction={withBboxes}
+          sourceFile={sourceFile}
+        />,
+      );
+      await userEvent.click(
+        screen.getByTestId('source-cta-demographics.dob'),
+      );
+      expect(
+        screen.getByRole('tab', { name: /source/i }),
+      ).toHaveAttribute('aria-selected', 'true');
+      const selected = screen.getByTestId('source-bbox-selected');
+      expect(selected).toHaveAttribute(
+        'data-field-path',
+        'demographics.dob',
+      );
+    });
+
+    it('still renders chief_concern even when no demographics fields are present', () => {
+      const fixture = intakeFixture();
+      const minimal: ExtractionResponse = {
+        ...fixture,
+        intake: {
+          ...fixture.intake!,
+          demographics: {
+            name: null,
+            dob: null,
+            gender: null,
+            address: null,
+            phone: null,
+            emergency_contact: null,
+          },
+          social_history: null,
+        },
+      };
+      render(<ExtractionResultsPanel extraction={minimal} />);
+      expect(screen.getByText(/Headache for 3 days/i)).toBeInTheDocument();
+      // Demographics dl renders empty, but the section header is present.
+      expect(screen.getByText('Demographics')).toBeInTheDocument();
+    });
   });
 
   it('expands collapsible medication & allergy sections on click', async () => {

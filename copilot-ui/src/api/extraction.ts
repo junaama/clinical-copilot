@@ -40,44 +40,51 @@ export interface LabExtraction {
   readonly results: readonly LabResult[];
 }
 
+/**
+ * Intake-form sub-shapes mirror the backend Pydantic models in
+ * ``agent/src/copilot/extraction/schemas.py`` (issue 034). Fields the
+ * VLM is told to emit "as-is" are nullable strings; required fields are
+ * required because the backend persistence layer cannot write them
+ * blank (medication name, allergy substance, family-history relation
+ * and condition).
+ */
 export interface IntakeMedication {
   readonly name: string;
   readonly dose: string | null;
   readonly frequency: string | null;
-  readonly confidence: Confidence;
+  readonly prescriber: string | null;
 }
 
 export interface IntakeAllergy {
   readonly substance: string;
   readonly reaction: string | null;
   readonly severity: string | null;
-  readonly confidence: Confidence;
 }
 
 export interface IntakeDemographics {
   readonly name: string | null;
-  readonly date_of_birth: string | null;
-  readonly sex: string | null;
-  readonly phone: string | null;
+  readonly dob: string | null;
+  readonly gender: string | null;
   readonly address: string | null;
+  readonly phone: string | null;
+  readonly emergency_contact: string | null;
 }
 
 export interface FamilyHistoryEntry {
   readonly relation: string;
   readonly condition: string;
-  readonly confidence: Confidence;
 }
 
 export interface SocialHistory {
-  readonly tobacco: string | null;
+  readonly smoking: string | null;
   readonly alcohol: string | null;
-  readonly substance_use: string | null;
+  readonly drugs: string | null;
   readonly occupation: string | null;
 }
 
 export interface IntakeExtraction {
   readonly demographics: IntakeDemographics;
-  readonly chief_concern: string | null;
+  readonly chief_concern: string;
   readonly current_medications: readonly IntakeMedication[];
   readonly allergies: readonly IntakeAllergy[];
   readonly family_history: readonly FamilyHistoryEntry[];
