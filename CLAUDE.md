@@ -106,6 +106,18 @@ safety check — lives at
 Run it manually before refreshing the cost/latency numbers; no production
 code change is required.
 
+### W2 submission readiness checklist
+
+Before refreshing the W2 submission, walk
+[agentforge-docs/W2-SUBMISSION-CHECKLIST.md](agentforge-docs/W2-SUBMISSION-CHECKLIST.md).
+That document is the single verification map: every acceptance
+criterion (visual source grounding, cited document summary, guideline
+citations, supervisor trace, 50-case eval gate, graph integration,
+deployed measurement evidence, explicit caveats) maps to the existing
+test, runbook section, or deployed flow that proves it. It is a
+bundle, not a new test tier — running its TL;DR (§1) covers every
+artifact the grader inspects.
+
 ### Data providers: mark as `@codeCoverageIgnore`
 
 PHPUnit data provider methods execute *before* coverage instrumentation

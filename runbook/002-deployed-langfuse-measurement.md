@@ -433,6 +433,11 @@ has a starting list rather than rediscovering them.
 
 * It is not the W2 cost-and-latency report. That lives at
   `agentforge-docs/W2-COST-LATENCY-REPORT.md`.
+* It is not the submission readiness checklist. That lives at
+  `agentforge-docs/W2-SUBMISSION-CHECKLIST.md` and is the single
+  verification map for the eight acceptance criteria of issue 038;
+  this runbook is referenced from that checklist as the AC5 / AC8
+  procedure (Langfuse trace inspection + deployed measurement).
 * It is not an automated regression test. The automated regression
   tier is `agent/tests/test_w2_reliability_live_smoke.py` and
   `agent/tests/test_http_e2e_deployed.py` — both run the same flows
