@@ -291,6 +291,28 @@ on top of the composite.
 """
 
 
+_WDOC_SYNTHESIS_FRAMING = """\
+W-DOC SYNTHESIS (uploaded document / visit prep)
+The user is asking about an uploaded document. Format the answer as
+short sections with blank lines between them:
+
+  ## What changed
+  ## Pay attention
+  ## Evidence and limits
+
+In "What changed", say what the upload newly adds. If prior chart
+values or prior documents were not fetched in this turn, explicitly say
+you can describe what the upload adds but cannot claim a longitudinal
+chart diff. In "Pay attention", surface abnormal, safety-relevant,
+low-confidence, missing, or patient-mismatch signals. In "Evidence and
+limits", separate document evidence from guideline evidence. Cite every
+document-derived value with a DocumentReference citation. If no
+guideline chunks were retrieved in this turn, say guideline evidence
+was not retrieved and do not present a guideline recommendation.
+Avoid one dense paragraph; keep bullets to one or two lines each.
+"""
+
+
 _UNIFIED_BRIEF = """\
 You are Clinical Co-Pilot, an AI assistant for hospitalists rounding on
 admitted patients in OpenEMR. The user is logged in and has a CareTeam
@@ -481,6 +503,7 @@ _WORKFLOW_SYNTHESIS_FRAMING: dict[str, str] = {
     "W-9": _W9_SYNTHESIS_FRAMING,
     "W-10": _W10_SYNTHESIS_FRAMING,
     "W-11": _W11_SYNTHESIS_FRAMING,
+    "W-DOC": _WDOC_SYNTHESIS_FRAMING,
 }
 
 
@@ -507,5 +530,4 @@ def build_system_prompt(
         confidence=float(confidence or 0.0),
         synthesis_framing=select_synthesis_framing(workflow_id),
     )
-
 

@@ -38,7 +38,9 @@ describe('planUploadHandoff', () => {
     if (plan.kind === 'render-and-discuss') {
       expect(plan.extraction.filename).toBe('cbc.pdf');
       expect(plan.promptText).toContain('cbc.pdf');
-      expect(plan.promptText).toMatch(/walk me through what's notable/i);
+      expect(plan.promptText).toMatch(/what changed/i);
+      expect(plan.promptText).toMatch(/pay attention/i);
+      expect(plan.promptText).toMatch(/source evidence backs it up/i);
     }
   });
 
@@ -48,8 +50,9 @@ describe('planUploadHandoff', () => {
     );
     expect(plan.kind).toBe('render-and-discuss');
     if (plan.kind === 'render-and-discuss') {
-      expect(plan.promptText).toMatch(/summarize the intake form/i);
-      expect(plan.promptText).not.toMatch(/walk me through/i);
+      expect(plan.promptText).toMatch(/summarize what changed/i);
+      expect(plan.promptText).toMatch(/pay attention/i);
+      expect(plan.promptText).not.toMatch(/recommendation/i);
     }
   });
 
@@ -67,7 +70,7 @@ describe('planUploadHandoff', () => {
     );
     expect(plan.kind).toBe('render-and-discuss');
     if (plan.kind === 'render-and-discuss') {
-      expect(plan.promptText).toMatch(/summarize the intake form/i);
+      expect(plan.promptText).toMatch(/summarize what changed/i);
     }
   });
 
