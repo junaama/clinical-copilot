@@ -7,6 +7,7 @@ without any setup.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -18,6 +19,17 @@ from dotenv import load_dotenv
 # would. ``override=False`` keeps real env vars dominant in CI.
 _AGENT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_AGENT_ROOT / ".env", override=False)
+
+# Evals are deterministic by design (README §"Eval tiers"): they run against
+# the in-memory FIXTURE_BUNDLE so cases are reproducible across machines and
+# don't depend on a live OpenEMR being reachable. Without this guard, a
+# ``.env`` file that omits ``USE_FIXTURE_FHIR=1`` (the local default) silently
+# routes the gate to the live API, every CareTeam search returns ``no_token``,
+# and every smoke case fails with "I don't see this patient on your panel" —
+# which historically masqueraded as agent regressions but was an env wiring
+# bug. Set it here so eval invocations always pin fixture mode regardless of
+# local config.
+os.environ.setdefault("USE_FIXTURE_FHIR", "1")
 
 from copilot.config import get_settings  # noqa: E402
 from copilot.eval.case import Case, CaseResult, load_cases_in_dir  # noqa: E402
