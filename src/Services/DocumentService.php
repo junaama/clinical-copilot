@@ -126,7 +126,7 @@ class DocumentService extends BaseService
     /**
      * @param array{tmp_name: string, name: string} $fileData
      */
-    public function insertAtPath($pid, $path, $fileData, $eid)
+    public function insertAtPath($pid, $path, $fileData, $eid = null)
     {
         // Ensure filetype is allowed
         if (OEGlobalsBag::getInstance()->getBoolean('secure_upload') && !isWhiteFile($fileData["tmp_name"])) {
