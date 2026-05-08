@@ -1,5 +1,5 @@
 {
-  "notes": "W2 fixture-based eval gate baseline. Regenerate with `python -m copilot.eval.w2_baseline_cli --write` after intentionally adjusting cases.",
+  "notes": "W2 fixture-based eval gate baseline. Regenerate with `python -m copilot.eval.w2_baseline_cli --write`.",
   "rubrics": {
     "citation_present": 1.0,
     "factually_consistent": 1.0,
