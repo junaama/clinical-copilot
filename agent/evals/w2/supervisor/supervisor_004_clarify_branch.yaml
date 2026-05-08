@@ -4,6 +4,7 @@ description: >
   Ambiguous request — supervisor returns ``clarify`` action. Response is
   a clarifying question, no clinical claim. Tests that the citation
   rubric is not over-eager.
+mode: validator_unit
 fixture_response: |
   Could you tell me whether you want me to extract the document or ground a recommendation against the guidelines? Let me know which path to take.
 expected:

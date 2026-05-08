@@ -3,6 +3,7 @@ category: intake_extraction
 description: >
   Chen intake form — clean extraction with cited values for chief concern
   and active medications. Positive sample for every rubric.
+mode: validator_unit
 schema: IntakeExtraction
 fixture_extraction_path: ../fixtures/intake_chen.json
 fixture_response: |

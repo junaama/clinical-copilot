@@ -1,11 +1,22 @@
 id: w2-regression-002
 category: regression_w1
 description: >
-  Week 1 panel-triage shape — every ranked patient carries an
-  Encounter-class FHIR citation. Confirms multi-patient FHIR responses
-  remain compatible with the rubric.
-fixture_response: |
-  Top of panel today: Hayes (sepsis flag, BP 90/60 mmHg) <cite ref="Encounter/enc-hayes-current"/>, Cooper (new admission, fever 39.1°C) <cite ref="Encounter/enc-cooper-current"/>, Smith (post-op day 2) <cite ref="Encounter/enc-smith-current"/>.
+  Week 1 panel-triage shape — agent should rank patients on the user's
+  panel (or refuse cleanly when panel data isn't reachable). Live
+  invocation confirms the W2 rubrics don't reject either outcome:
+  citations on a successful triage are FHIR refs, the refusal-path
+  ("panel data is unavailable") makes no clinical claim and so passes
+  citation_present trivially.
+mode: live
+prompt: "Triage my panel for this morning's rounds — who needs attention first?"
+patient_id: ""
+user_id: dr_lopez
+care_team_includes:
+  - fixture-1
+  - fixture-2
+  - fixture-3
+  - fixture-4
+  - fixture-5
 expected:
   schema_valid: true
   citation_present: true

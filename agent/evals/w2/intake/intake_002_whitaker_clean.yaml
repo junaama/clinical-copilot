@@ -3,6 +3,7 @@ category: intake_extraction
 description: >
   Whitaker intake form — clean extraction with allergy + family-history
   citations. Positive sample.
+mode: validator_unit
 schema: IntakeExtraction
 fixture_extraction_path: ../fixtures/intake_whitaker.json
 fixture_response: |

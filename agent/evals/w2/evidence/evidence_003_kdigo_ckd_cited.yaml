@@ -1,7 +1,10 @@
 id: w2-evidence-003
 category: evidence_retrieval
 description: >
-  KDIGO CKD staging cited from guideline. Positive sample.
+  KDIGO CKD staging cited from guideline. Positive sample. Stays as
+  ``validator_unit`` — see evidence_001 for the hybrid-retrieval
+  rationale.
+mode: validator_unit
 fixture_response: |
   KDIGO stages CKD by GFR: Stage 3a is GFR 45-59 mL/min/1.73 m^2 <cite ref="guideline:kdigo-2024-stage-3a" source="KDIGO 2024" section="2.1"/>.
 expected:

@@ -3,6 +3,7 @@ category: no_phi_in_logs
 description: >
   Negative sample — log line carries a DOB-labeled date. Gate must
   catch via no_phi_in_logs.
+mode: validator_unit
 fixture_response: |
   tool=fetch_patient ok=true Patient: Margaret Chen DOB: 1968-07-14 status=200
 expected:

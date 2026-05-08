@@ -3,6 +3,7 @@ category: supervisor_routing
 description: >
   Evidence-intent question — supervisor routed correctly to retrieval
   worker. Response cites a guideline chunk.
+mode: validator_unit
 fixture_response: |
   ADA recommends an A1C target of <7.0% for most non-pregnant adults <cite ref="guideline:ada-2024-section-6" source="ADA 2024" section="6"/>. Routed to W-EVD.
 expected:

@@ -3,6 +3,7 @@ category: citation_contract
 description: >
   Mixed citation paragraph: document ref + guideline ref in the same
   sentence. Tests that the rubric accepts both shapes.
+mode: validator_unit
 schema: LabExtraction
 fixture_extraction_path: ../fixtures/lab_reyes_hba1c.json
 fixture_response: |

@@ -1,9 +1,15 @@
 """CLI used by the W2 pre-push gate (issue 010).
 
-Loads every fixture YAML under ``agent/evals/w2/``, scores the five
-boolean rubrics, compares the result against ``.eval_baseline.json`` at
-the repo root, and exits non-zero if any rubric drops below floor or
+Loads every YAML under ``agent/evals/w2/``, scores the five boolean
+rubrics, compares the result against ``.eval_baseline.json`` at the
+repo root, and exits non-zero if any rubric drops below floor or
 regresses more than 5%.
+
+Validator-unit cases score the static ``fixture_response`` against
+the rubrics directly. Live cases (``mode: live``) invoke the real
+agent and score its actual response. The CLI dispatches both kinds
+through ``score_w2_cases_async`` when at least one live case is
+present.
 
 Two operating modes:
 
@@ -11,8 +17,9 @@ Two operating modes:
   the pre-push hook. Prints a one-shot report and exits 0 / 1.
 * ``python -m copilot.eval.w2_baseline_cli --write`` — regenerates
   ``.eval_baseline.json`` from the current pass rates. Use this when
-  the case set legitimately changed (added cases, deliberate baseline
-  raise) and the new rates should become the bar.
+  the case set legitimately changed (added cases, flipped a case to
+  live mode, deliberate baseline raise) and the new rates should become
+  the bar.
 
 The CLI is deliberately thin — all rubric / runner / baseline logic
 lives in the existing modules so the hook stays trivial.
@@ -21,15 +28,19 @@ lives in the existing modules so the hook stays trivial.
 from __future__ import annotations
 
 import argparse
+import asyncio
+import os
 import sys
 from pathlib import Path
 
 from .baseline import detect_regression, load_baseline, render_report, write_baseline
 from .w2_runner import (
+    MODE_LIVE,
     compute_pass_rates,
     load_w2_cases_in_dir,
     register_schema,
     score_w2_cases,
+    score_w2_cases_async,
 )
 from .w2_schemas import register_w2_eval_schemas
 
@@ -43,9 +54,17 @@ def _baseline_path(repo_root: Path) -> Path:
 
 
 def _run(repo_root: Path) -> tuple[dict[str, float], int]:
+    # Live cases route through the agent's fixture-FHIR path the same
+    # way smoke/golden do (see ``evals/conftest.py``). Without this the
+    # live W2 personas (dr_lopez etc.) hit live OpenEMR and the
+    # CareTeam gate denies every call before the agent can answer.
+    os.environ.setdefault("USE_FIXTURE_FHIR", "1")
     register_w2_eval_schemas(register_schema)
     cases = load_w2_cases_in_dir(_eval_dir(repo_root))
-    results = score_w2_cases(cases)
+    if any(c.mode == MODE_LIVE for c in cases):
+        results = asyncio.run(score_w2_cases_async(cases))
+    else:
+        results = score_w2_cases(cases)
     rates = compute_pass_rates(results)
     case_failures = [r for r in results if not r.case_passed]
     return rates, len(case_failures)

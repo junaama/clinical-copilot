@@ -3,6 +3,7 @@ category: lab_extraction
 description: >
   Negative sample — Kowalski CMP narrative leaves the BUN claim uncited.
   Gate must catch via citation_present.
+mode: validator_unit
 schema: LabExtraction
 fixture_extraction_path: ../fixtures/lab_kowalski_cmp.json
 fixture_response: |

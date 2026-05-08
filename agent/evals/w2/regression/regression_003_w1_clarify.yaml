@@ -1,11 +1,21 @@
 id: w2-regression-003
 category: regression_w1
 description: >
-  Week 1 clarify branch — agent asks for disambiguation rather than
-  guessing. No clinical claim is asserted, so citation_present should
-  not over-fire.
-fixture_response: |
-  Could you tell me which Hayes you mean — the one born in 1965 or the one born in 1972? Let me know and I'll brief.
+  Week 1 clarify branch — agent should ask for disambiguation rather
+  than guessing when the patient context is empty. Live invocation
+  with no active patient and an ambiguous prompt; the response is a
+  clarifying question, no clinical claim is asserted, so
+  citation_present must not over-fire on UI prose.
+mode: live
+prompt: "Tell me about the patient."
+patient_id: ""
+user_id: dr_lopez
+care_team_includes:
+  - fixture-1
+  - fixture-2
+  - fixture-3
+  - fixture-4
+  - fixture-5
 expected:
   schema_valid: true
   citation_present: true

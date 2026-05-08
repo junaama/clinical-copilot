@@ -3,6 +3,7 @@ category: lab_extraction
 description: >
   Negative sample — agent reported a lab value without a citation. Gate
   must catch via citation_present.
+mode: validator_unit
 schema: LabExtraction
 fixture_extraction_path: ../fixtures/lab_chen_lipid.json
 fixture_response: |

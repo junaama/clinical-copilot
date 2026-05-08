@@ -2,6 +2,7 @@ id: w2-intake-003
 category: intake_extraction
 description: >
   Reyes intake form — clean extraction citing chief concern + allergy.
+mode: validator_unit
 schema: IntakeExtraction
 fixture_extraction_path: ../fixtures/intake_reyes.json
 fixture_response: |

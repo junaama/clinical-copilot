@@ -1,13 +1,15 @@
 """End-to-end regression test for the W2 eval gate (issue 010).
 
 Proves the gate catches a regression introduced into a fixture case:
-copies the live case set into a tmp dir, mutates one positive case to
-strip its citation, and asserts the runner now reports a sub-100%
-``citation_present`` rate AND the baseline comparator returns
-``passed=False`` against a 100%-baseline.
+copies the validator-unit case set into a tmp dir, mutates one
+positive case to strip its citation, and asserts the runner now
+reports a sub-100% ``citation_present`` rate AND the baseline
+comparator returns ``passed=False`` against a 100%-baseline.
 
 This is the "introducing a deliberate regression causes the hook to
-fail" acceptance criterion in the PRD.
+fail" acceptance criterion in the PRD. Live cases are filtered out
+of the mutation copy because their pass rate depends on a real LLM
+call — the regression assertion has to be deterministic.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import pytest
 from copilot.eval.baseline import detect_regression
 from copilot.eval.w2_evaluators import GATE_THRESHOLDS_W2
 from copilot.eval.w2_runner import (
+    MODE_LIVE,
     compute_pass_rates,
     load_w2_cases_in_dir,
     register_schema,
@@ -29,6 +32,16 @@ from copilot.eval.w2_schemas import register_w2_eval_schemas
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = REPO_ROOT / "agent" / "evals" / "w2"
+
+
+def _validator_unit_cases(directory: Path):
+    """Return only the validator_unit cases under ``directory``.
+
+    The regression suite's gate-catching assertions are deterministic
+    by construction; live cases would drag a network call into the
+    test, which is wrong scope for the unit-style regression proof.
+    """
+    return [c for c in load_w2_cases_in_dir(directory) if c.mode != MODE_LIVE]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -70,7 +83,7 @@ def test_gate_catches_stripped_citation_regression(tmp_path: Path) -> None:
     assert target.exists(), "expected positive sample missing"
     _strip_all_citations(target)
 
-    cases = load_w2_cases_in_dir(eval_dir)
+    cases = _validator_unit_cases(eval_dir)
     results = score_w2_cases(cases)
     rates = compute_pass_rates(results)
 
@@ -102,7 +115,7 @@ def test_gate_catches_below_floor_regression(tmp_path: Path) -> None:
             if "citation_present: true" in text and "<cite" in text:
                 _strip_all_citations(path)
 
-    cases = load_w2_cases_in_dir(eval_dir)
+    cases = _validator_unit_cases(eval_dir)
     results = score_w2_cases(cases)
     rates = compute_pass_rates(results)
     # Drop should be deep enough to fall below the 0.90 floor.
@@ -120,7 +133,7 @@ def test_gate_catches_below_floor_regression(tmp_path: Path) -> None:
 def test_gate_passes_on_unmutated_copy(tmp_path: Path) -> None:
     """Sanity: copying the eval dir without mutation reproduces 100%."""
     eval_dir = _copy_eval_dir(tmp_path)
-    cases = load_w2_cases_in_dir(eval_dir)
+    cases = _validator_unit_cases(eval_dir)
     results = score_w2_cases(cases)
     rates = compute_pass_rates(results)
     for name, threshold in GATE_THRESHOLDS_W2.items():

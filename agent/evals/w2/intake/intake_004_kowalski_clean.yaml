@@ -2,6 +2,7 @@ id: w2-intake-004
 category: intake_extraction
 description: >
   Kowalski intake form — clean extraction citing meds + family history.
+mode: validator_unit
 schema: IntakeExtraction
 fixture_extraction_path: ../fixtures/intake_kowalski.json
 fixture_response: |
