@@ -117,7 +117,7 @@ class DocumentRestController
         ],
         security: [['openemr_auth' => []]]
     )]
-    public function postWithPath($pid, $path, $fileData, $eid)
+    public function postWithPath($pid, $path, $fileData, $eid = null)
     {
         $serviceResult = $this->documentService->insertAtPath($pid, $path, $fileData, $eid);
         return RestControllerHelper::responseHandler($serviceResult, null, 200);
