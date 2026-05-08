@@ -37,7 +37,7 @@ export function planUploadHandoff(
   const effectiveType: DocType = response.effective_type ?? response.doc_type;
   const promptText =
     effectiveType === 'lab_pdf'
-      ? `I just uploaded ${response.filename}. Walk me through what's notable.`
-      : `I just uploaded ${response.filename}. Summarize the intake form.`;
+      ? `I just uploaded ${response.filename}. In short sections, tell me what changed, what I should pay attention to, and what source evidence backs it up.`
+      : `I just uploaded ${response.filename}. In short sections, summarize what changed, what I should pay attention to, and what source evidence backs it up.`;
   return { kind: 'render-and-discuss', extraction: response, promptText };
 }

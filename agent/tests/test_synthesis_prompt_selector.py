@@ -19,6 +19,8 @@ synthesis prompt selector picks framing tuned to the workflow:
   with the renal/hepatic/anticoagulant lens.
 * ``W-11`` (antibiotic stewardship) — single-patient abx review, lens on
   the active abx + culture + WBC + duration / de-escalation.
+* ``W-DOC`` (uploaded document / visit prep) — short-section framing
+  for what changed, what needs attention, and source evidence.
 * anything else — falls through to the default framing.
 
 These tests exercise the selector through ``build_system_prompt`` (the
@@ -348,6 +350,37 @@ def test_w10_prompt_does_not_include_w11_framing() -> None:
     assert "W-11 SYNTHESIS" not in prompt
 
 
+def test_wdoc_prompt_includes_document_visit_prep_framing() -> None:
+    """W-DOC framing should make uploaded-document answers easy to scan
+    during the live demo and map directly to the Week 2 scenario.
+    """
+    prompt = _build("W-DOC")
+    assert "W-DOC SYNTHESIS" in prompt
+    assert "## What changed" in prompt
+    assert "## Pay attention" in prompt
+    assert "## Evidence and limits" in prompt
+    lowered = prompt.lower()
+    assert "documentreference" in lowered
+    assert "guideline evidence" in lowered
+    assert "not retrieved" in lowered
+    assert "longitudinal" in lowered
+    assert "chart diff" in lowered
+
+
+def test_wdoc_prompt_does_not_include_other_framings() -> None:
+    """The selector must not double-include framings for document upload."""
+    prompt = _build("W-DOC")
+    assert "W-1 SYNTHESIS" not in prompt
+    assert "W-2 SYNTHESIS" not in prompt
+    assert "W-3 SYNTHESIS" not in prompt
+    assert "W-4 SYNTHESIS" not in prompt
+    assert "W-5 SYNTHESIS" not in prompt
+    assert "W-8 SYNTHESIS" not in prompt
+    assert "W-9 SYNTHESIS" not in prompt
+    assert "W-10 SYNTHESIS" not in prompt
+    assert "W-11 SYNTHESIS" not in prompt
+
+
 def test_w7_prompt_uses_default_framing() -> None:
     """A workflow without a dedicated framing falls through cleanly: no
     W-1, W-2, W-3, W-4, W-5, W-8, W-9, W-10, or W-11 framing appears in
@@ -364,6 +397,7 @@ def test_w7_prompt_uses_default_framing() -> None:
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
     assert "W-11 SYNTHESIS" not in prompt
+    assert "W-DOC SYNTHESIS" not in prompt
 
 
 def test_unclear_workflow_uses_default_framing() -> None:
@@ -377,6 +411,7 @@ def test_unclear_workflow_uses_default_framing() -> None:
     assert "W-9 SYNTHESIS" not in prompt
     assert "W-10 SYNTHESIS" not in prompt
     assert "W-11 SYNTHESIS" not in prompt
+    assert "W-DOC SYNTHESIS" not in prompt
 
 
 def test_default_framing_preserves_hard_rules() -> None:

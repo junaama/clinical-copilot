@@ -146,6 +146,20 @@ def test_prompt_keeps_decision_support_framing() -> None:
     )
 
 
+def test_prompt_formats_uploaded_document_answers_as_short_sections() -> None:
+    """The document worker should answer the Week 2 visit-prep question in
+    reviewer-scannable sections instead of one dense paragraph.
+    """
+    text = INTAKE_EXTRACTOR_SYSTEM
+    assert "## What changed" in text
+    assert "## Pay attention" in text
+    assert "## Evidence and limits" in text
+    lowered = text.lower()
+    assert "blank lines" in lowered
+    assert "longitudinal chart diff" in lowered
+    assert "guideline evidence was not retrieved" in lowered
+
+
 # ---------------------------------------------------------------------------
 # Rubric coverage for the issue-035 scenarios
 #
