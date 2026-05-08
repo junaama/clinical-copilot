@@ -15,7 +15,6 @@ namespace OpenEMR\RestControllers;
 use OpenApi\Attributes as OA;
 use OpenEMR\RestControllers\RestControllerHelper;
 use OpenEMR\Services\DocumentService;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\Session\SessionInterface;
 
@@ -157,22 +156,27 @@ class DocumentRestController
     {
         $results = $this->documentService->getFile($pid, $did);
 
-        if (!empty($results)) {
-            $response = new BinaryFileResponse($results['file'], Response::HTTP_OK, [], true);
-            $response->setContentDisposition('attachment', $results['filename']);
-            // we no longer use pre-check and post-check headers as they are not needed and microsoft even discourages
-            // their use at this point.
-            $response->setCache([
-                'must_revalidate' => true
-            ]);
-            // this used to be Expires: 0 but that is not recommended anymore, we set it to be 1 hour ago so that
-            // the browser will not cache the file.
-            $response->setExpires(new \DateTimeImmutable("-1 HOUR"));
-            return $response;
-        } else {
+        if (empty($results)) {
             // TODO: @adunsulag we should return a 404 here if the file does not exist... but prior behavior was to return a 400
             return new Response(null, Response::HTTP_BAD_REQUEST);
         }
+
+        // ``getFile()`` returns the decoded file *bytes* (via
+        // ``C_Document::retrieve_action(..., disable_exit=true)``), not a
+        // path. Symfony's BinaryFileResponse treats a string argument as a
+        // filesystem path and 500s on raw bytes — use a plain Response
+        // with the bytes as body instead.
+        $headers = [
+            'Content-Type' => $results['mimetype'] ?? 'application/octet-stream',
+            'Content-Disposition' => sprintf(
+                'attachment; filename="%s"',
+                str_replace('"', '', (string)($results['filename'] ?? 'document'))
+            ),
+            'Content-Length' => (string)strlen((string)$results['file']),
+            'Cache-Control' => 'must-revalidate, no-cache, no-store',
+            'Expires' => (new \DateTimeImmutable('-1 HOUR'))->format('D, d M Y H:i:s') . ' GMT',
+        ];
+        return new Response((string)$results['file'], Response::HTTP_OK, $headers);
     }
 
     public function setSession(SessionInterface $getSession)
