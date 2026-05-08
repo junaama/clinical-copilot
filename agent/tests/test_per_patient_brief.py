@@ -70,12 +70,12 @@ async def test_run_per_patient_brief_returns_envelope_for_authorized_patient() -
     assert isinstance(result["latency_ms"], int)
 
 
-async def test_run_per_patient_brief_fans_out_six_resource_types() -> None:
+async def test_run_per_patient_brief_fans_out_brief_resource_types() -> None:
     """The composite must surface rows from every fan-out branch.
 
     Fan-out: Patient (demographics), Condition (active), MedicationRequest
     (active), Observation (vital-signs), Observation (laboratory),
-    Encounter (recent window).
+    Encounter (recent window), DocumentReference (clinical notes).
     """
     set_active_user_id(PRACTITIONER_DR_SMITH)
     tool = _tool()
@@ -88,6 +88,7 @@ async def test_run_per_patient_brief_fans_out_six_resource_types() -> None:
     assert "MedicationRequest" in resource_types
     assert "Observation" in resource_types
     assert "Encounter" in resource_types
+    assert "DocumentReference" in resource_types
 
 
 async def test_run_per_patient_brief_sources_checked_includes_categories() -> None:
@@ -104,6 +105,7 @@ async def test_run_per_patient_brief_sources_checked_includes_categories() -> No
     assert "Observation (vital-signs)" in sources
     assert "Observation (laboratory)" in sources
     assert "Encounter" in sources
+    assert "DocumentReference" in sources
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +116,8 @@ async def test_run_per_patient_brief_sources_checked_includes_categories() -> No
 async def test_run_per_patient_brief_runs_fanout_in_parallel() -> None:
     """Wall-clock latency ≈ one slow call, not sum of all calls.
 
-    With 6 nested calls each sleeping 50ms, a serial implementation would
-    take ~300ms. Parallel fan-out via ``asyncio.gather`` should finish
+    With 7 nested calls each sleeping 50ms, a serial implementation would
+    take ~350ms. Parallel fan-out via ``asyncio.gather`` should finish
     in ~50ms with overhead. We allow a generous 200ms ceiling to accommodate
     CI jitter while still failing loudly on a serial implementation.
     """
@@ -145,10 +147,10 @@ async def test_run_per_patient_brief_runs_fanout_in_parallel() -> None:
         elapsed = time.monotonic() - started
 
     assert result["ok"] is True
-    # Sum-of-six = 0.30s; parallel = ~0.05s. Generous ceiling at 0.20s.
+    # Sum-of-seven = 0.35s; parallel = ~0.05s. Generous ceiling at 0.20s.
     assert elapsed < 0.20, (
         f"composite tool ran serially: elapsed={elapsed:.3f}s "
-        f"(expected ~0.05s parallel; serial would be ~0.30s)"
+        f"(expected ~0.05s parallel; serial would be ~0.35s)"
     )
 
 

@@ -105,7 +105,7 @@ def make_composite_tools(
     async def run_per_patient_brief(
         patient_id: str, hours: int = 24
     ) -> dict[str, Any]:
-        """Composite tool: fan out the six per-patient brief reads in parallel."""
+        """Composite tool: fan out the per-patient brief reads in parallel."""
         if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
 
@@ -117,6 +117,7 @@ def make_composite_tools(
             get_recent_vitals(patient_id, hours),
             get_recent_labs(patient_id, hours),
             get_recent_encounters(patient_id, hours),
+            get_clinical_notes(patient_id, hours),
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
 
@@ -246,11 +247,12 @@ def make_composite_tools(
             description=(
                 "Composite per-patient brief: fans out demographics, active "
                 "problems, active medications, recent vitals (24h), recent "
-                "labs (24h), and recent encounters (24h) in PARALLEL and "
+                "labs (24h), recent encounters (24h), and clinical notes "
+                "(24h) in PARALLEL and "
                 "returns one merged envelope. Prefer this tool over the "
                 "granular reads whenever the user asks for an overview, a "
                 "brief, a quick picture, or 'what happened to <patient>' — "
-                "it is materially faster than chaining the six granular "
+                "it is materially faster than chaining the granular "
                 "calls. Returns the same envelope shape (rows, "
                 "sources_checked, latency_ms, error, ok) so citation "
                 "verification is unchanged. For a single targeted question "

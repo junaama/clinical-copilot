@@ -394,6 +394,61 @@ async def test_uncited_sweep_one_clinical_claim_flagged_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_uncited_sweep_drops_claims_from_cited_sentences() -> None:
+    """Same-sentence cited claims belong to the per-citation grounding pass,
+    not the uncited-claim sweep.
+    """
+    text = (
+        "Patient is on lisinopril "
+        '<cite ref="MedicationRequest/med-lisinopril"/>.'
+    )
+    stub = _StubJudgeLLM(
+        verdicts_by_ref={
+            "MedicationRequest/med-lisinopril": {
+                "supported": True,
+                "reasoning": "medication request documents lisinopril",
+            }
+        },
+        sweep_response={
+            "uncited_claims": ["Patient is on lisinopril"]
+        },
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, _resources())
+
+    assert result.uncited_claims == []
+    assert result.passed is True
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_drops_cited_claim_with_decimal_before_cite() -> None:
+    text = (
+        "Morning lisinopril was held due to hypotension and creatinine 1.8 "
+        '<cite ref="MedicationRequest/med-lisinopril"/>.'
+    )
+    stub = _StubJudgeLLM(
+        verdicts_by_ref={
+            "MedicationRequest/med-lisinopril": {
+                "supported": True,
+                "reasoning": "medication request documents lisinopril",
+            }
+        },
+        sweep_response={
+            "uncited_claims": [
+                "Morning lisinopril was held due to hypotension and creatinine 1.8"
+            ]
+        },
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, _resources())
+
+    assert result.uncited_claims == []
+    assert result.passed is True
+
+
+@pytest.mark.asyncio
 async def test_uncited_sweep_hedging_and_questions_not_flagged() -> None:
     """Hedging/clarification text (no clinical claim) keeps the case passing.
 

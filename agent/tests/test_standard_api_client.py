@@ -294,7 +294,12 @@ async def test_methods_strip_fhir_prefix_from_patient_id(
         request=httpx.Request("POST", "http://test/"),
     )
     method = getattr(client, method_name)
-    with patch.object(client._client, "post", new_callable=AsyncMock, return_value=response) as mock_post:
+    with patch.object(
+        client._client,
+        "post",
+        new_callable=AsyncMock,
+        return_value=response,
+    ) as mock_post:
         await method(*args)
 
     called_url = mock_post.call_args.args[0]
