@@ -85,6 +85,18 @@ def test_routes_to_agent_on_high_confidence_workflow() -> None:
     ) == "agent"
 
 
+def test_routes_panel_triage_to_agent_even_below_general_threshold() -> None:
+    """Panel-triage prompts have no active patient by design. Once the
+    classifier has identified W-1, route to the agent so it can call the
+    panel composite instead of asking for a patient name."""
+    assert _route_after_classifier(
+        workflow_id="W-1",
+        confidence=CLASSIFIER_CONFIDENCE_THRESHOLD - 0.2,
+        patient_id="",
+        focus_pid="",
+    ) == "agent"
+
+
 def test_empty_string_patient_id_treated_as_unbound() -> None:
     """The eval runner passes ``patient_id=""`` for panel-spanning UC-1 cases
     so the gate sees "no active patient". An empty string must not falsely
