@@ -51,10 +51,16 @@ fi
 PATCHES_DEST="${CTX}/patches"
 rm -rf "${PATCHES_DEST}"
 mkdir -p "${PATCHES_DEST}"
-cp -a "${REPO_ROOT}/src"       "${PATCHES_DEST}/src"
-cp -a "${REPO_ROOT}/library"   "${PATCHES_DEST}/library"
-cp -a "${REPO_ROOT}/apis"      "${PATCHES_DEST}/apis"
-cp -a "${REPO_ROOT}/interface" "${PATCHES_DEST}/interface"
+cp -a "${REPO_ROOT}/src"         "${PATCHES_DEST}/src"
+cp -a "${REPO_ROOT}/library"     "${PATCHES_DEST}/library"
+cp -a "${REPO_ROOT}/apis"        "${PATCHES_DEST}/apis"
+cp -a "${REPO_ROOT}/interface"   "${PATCHES_DEST}/interface"
+# controllers/ ships the legacy procedural classes (C_Document.class.php
+# etc.) that call into src/. The local fork updated the SessionWrapperFactory
+# API away from upstream's getWrapper() to getInstance()->getActiveSession().
+# Without shipping controllers/, the upstream C_Document.class.php gets
+# paired with our local SessionWrapperFactory and 500s on getWrapper().
+cp -a "${REPO_ROOT}/controllers" "${PATCHES_DEST}/controllers"
 echo "==> Staged forked trees: $(find "${PATCHES_DEST}" -type f | wc -l | tr -d ' ') file(s) ($(du -sh "${PATCHES_DEST}" | cut -f1))"
 
 echo "==> Deploying openemr from ${CTX}"
