@@ -102,6 +102,37 @@ describe('AgentPanel composer placeholder + Send button (issue 043)', () => {
   });
 });
 
+describe('AgentPanel evidence slot', () => {
+  it('renders extraction evidence inside the chat scroll region', () => {
+    const { container } = render(
+      <AgentPanel
+        open={true}
+        surface="panel"
+        density="regular"
+        showCitations={true}
+        accent="#4abfac"
+        conversationId="conv-1"
+        patientId="pat-1"
+        userId="u-1"
+        smartAccessToken=""
+        patientName="Robert Hayes"
+        focusPatientId="pat-1"
+        hasPanelSurface={true}
+        messages={[]}
+        setMessages={() => {}}
+        onClose={() => {}}
+        onCite={() => {}}
+        evidenceSlot={<section aria-label="uploaded extraction">Lab results</section>}
+      />,
+    );
+
+    const scroll = container.querySelector('.agent-scroll');
+    const evidence = screen.getByLabelText('uploaded extraction');
+    expect(scroll).not.toBeNull();
+    expect(scroll?.contains(evidence)).toBe(true);
+  });
+});
+
 describe('AgentPanel header subtitle (issue 043 + 039)', () => {
   it('does not say "Reading this patient" when no patient is selected', () => {
     render(<PanelHarness focusPatientId="" hasPanelSurface={true} />);

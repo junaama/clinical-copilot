@@ -373,6 +373,16 @@ function StandaloneApp(): JSX.Element {
               navigateToRoot();
             }}
             onCite={() => {}}
+            evidenceSlot={
+              <ExtractionResultsPanel
+                extraction={extraction}
+                sourceFile={extractionSourceFile}
+                onDismiss={() => {
+                  setExtraction(null);
+                  setExtractionSourceFile(null);
+                }}
+              />
+            }
             composerSlot={
               <FileUploadWidget
                 patientId={focusPatient?.id ?? ''}
@@ -385,14 +395,6 @@ function StandaloneApp(): JSX.Element {
                 onUploaded={handleUploaded}
               />
             }
-          />
-          <ExtractionResultsPanel
-            extraction={extraction}
-            sourceFile={extractionSourceFile}
-            onDismiss={() => {
-              setExtraction(null);
-              setExtractionSourceFile(null);
-            }}
           />
         </div>
         <aside className="standalone-aside" aria-label="care team panel">

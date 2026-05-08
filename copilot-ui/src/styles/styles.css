@@ -980,6 +980,15 @@ body {
 .agent-composer-slot {
   padding: 8px 12px 0 12px;
 }
+.agent-evidence-slot {
+  margin-top: 14px;
+}
+.agent-evidence-slot:empty {
+  display: none;
+}
+.agent-evidence-slot .extraction-panel {
+  box-shadow: 0 12px 32px -24px rgba(31, 31, 50, 0.42);
+}
 .agent-composer-slot .upload-widget {
   border: 1px dashed var(--line-2);
   border-radius: 8px;
@@ -1294,4 +1303,3 @@ body {
   font-size: 11px;
   color: var(--ink-3);
 }
-
