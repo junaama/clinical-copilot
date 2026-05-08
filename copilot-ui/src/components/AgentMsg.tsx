@@ -68,6 +68,12 @@ export function AgentMsg({
       <div className="agent-bubble agent">
         {message.route && <RouteBadge route={message.route} />}
         <Lead text={block.lead} streaming={streaming} />
+        {showBody && message.debugInfo && (
+          <ReviewerTrace
+            info={message.debugInfo}
+            citations={block.citations}
+          />
+        )}
         {showBody && renderBody(block, onJumpToVitals)}
         {showBody && showCitations && block.citations.length > 0 && (
           <Citations citations={block.citations} onCite={onCite} />
@@ -145,18 +151,88 @@ interface CitationsProps {
 function Citations({ citations, onCite }: CitationsProps): JSX.Element {
   return (
     <div className="agent-cites">
-      <span className="agent-cites-lbl">Sources</span>
+      <span className="agent-cites-lbl">Citations</span>
       {citations.map((c, i) => (
         <button
           key={`${i}-${c.card}-${c.label}`}
           className="agent-cite"
           onClick={() => onCite(c)}
           data-card={c.card}
+          title={citationTitle(c)}
         >
           <span className="agent-cite-dot" />
-          {c.label}
+          <span className="agent-cite-label">{c.label}</span>
+          <span className="agent-cite-card">{formatCitationCard(c.card)}</span>
+          {c.fhir_ref ? (
+            <span className="agent-cite-ref">{shortRef(c.fhir_ref)}</span>
+          ) : null}
         </button>
       ))}
+    </div>
+  );
+}
+
+function citationTitle(citation: Citation): string {
+  const ref = citation.fhir_ref ? ` · ${citation.fhir_ref}` : '';
+  return `${formatCitationCard(citation.card)} · ${citation.label}${ref}`;
+}
+
+function formatCitationCard(card: CitationCard): string {
+  if (card === 'guideline') return 'guideline';
+  if (card === 'documents') return 'document';
+  return card.replace(/_/g, ' ');
+}
+
+function shortRef(ref: string): string {
+  const guidelinePrefix = 'guideline:';
+  if (ref.startsWith(guidelinePrefix)) {
+    return ref.slice(guidelinePrefix.length);
+  }
+  const slash = ref.lastIndexOf('/');
+  if (slash >= 0 && slash < ref.length - 1) {
+    return ref.slice(slash + 1);
+  }
+  return ref;
+}
+
+interface ReviewerTraceProps {
+  readonly info: AgentDiagnostics;
+  readonly citations: readonly Citation[];
+}
+
+function ReviewerTrace({ info, citations }: ReviewerTraceProps): JSX.Element {
+  const { route, workflow_id, diagnostics } = info;
+  const sourceTypes = Array.from(new Set(citations.map((c) => c.card)));
+  const sourceText =
+    citations.length === 0
+      ? '0 sources'
+      : `${citations.length} source${citations.length === 1 ? '' : 's'}: ${sourceTypes
+          .map(formatCitationCard)
+          .join(', ')}`;
+  const decision = diagnostics.decision || '—';
+  const supervisor = diagnostics.supervisor_action || '—';
+  return (
+    <div
+      className="agent-trace"
+      data-testid="agent-reviewer-trace"
+      aria-label={`Reviewer trace: route ${route.kind}, workflow ${workflow_id || 'not set'}, decision ${decision}, supervisor ${supervisor}, ${sourceText}`}
+    >
+      <span className="agent-trace-kicker">Trace</span>
+      <span className="agent-trace-pill" data-trace="route">
+        route {route.kind}
+      </span>
+      <span className="agent-trace-pill" data-trace="workflow">
+        {workflow_id || 'workflow —'}
+      </span>
+      <span className="agent-trace-pill" data-trace="decision">
+        decision {decision}
+      </span>
+      <span className="agent-trace-pill" data-trace="supervisor">
+        {supervisor}
+      </span>
+      <span className="agent-trace-pill" data-trace="sources">
+        {sourceText}
+      </span>
     </div>
   );
 }
