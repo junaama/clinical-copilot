@@ -1,4 +1,5 @@
 import type { PatientDashboardConfig } from './types';
+import PatientHeader from './components/PatientHeader';
 
 function getConfig(): PatientDashboardConfig | null {
   return window.__OPENEMR_PATIENT_DASHBOARD__ ?? null;
@@ -30,8 +31,12 @@ export default function App() {
         </nav>
       </header>
 
+      <PatientHeader
+        fhirBaseUrl={config.fhirBaseUrl}
+        patientUuid={config.patientUuid}
+      />
+
       <main className="dashboard-main">
-        <p>Patient ID: {config.pid}</p>
         <p>Loading clinical data...</p>
       </main>
     </div>
