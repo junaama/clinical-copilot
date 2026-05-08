@@ -61,8 +61,13 @@ class C_Document extends Controller
         $this->assign("FORM_ACTION", OEGlobalsBag::getInstance()->get('webroot') . "/controller.php?" . attr($_SERVER['QUERY_STRING'] ?? ''));
         $this->assign("CURRENT_ACTION", OEGlobalsBag::getInstance()->get('webroot') . "/controller.php?" . "document&");
 
-        if (php_sapi_name() !== 'cli') {
-            // skip when this is being called via command line for the ccda importing
+        if (php_sapi_name() !== 'cli' && $session->get('csrf_private_key', null)) {
+            // Skip when called via CLI (ccda importing) or via the OAuth/API
+            // dispatch path (no CSRF private key in the session — API auth
+            // is bearer-token, CSRF is a UI-form concern). Without this
+            // guard, CsrfUtils::collectCsrfToken() throws RuntimeException
+            // "OpenEMR is potentially not secure because CSRF key is empty"
+            // and 500s every Standard-API document download.
             $this->assign("CSRF_TOKEN_FORM", CsrfUtils::collectCsrfToken($session));
         }
 
