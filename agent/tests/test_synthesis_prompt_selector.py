@@ -87,6 +87,26 @@ def test_w2_prompt_includes_overnight_brief_framing() -> None:
     assert "24" in prompt or "overnight" in prompt.lower() or "since" in prompt.lower()
 
 
+def test_w2_prompt_requires_immediate_atomic_citations() -> None:
+    prompt = _build("W-2")
+    lowered = prompt.lower()
+    assert "cite each atomic assertion immediately" in lowered
+    assert "several clinical claims" in lowered
+    assert "repeat citations inline" in lowered
+    assert "hypotensive event" in lowered
+    assert "bp value with its observation" in lowered
+    assert "cite the intervention" in lowered
+    assert "2-4 event bullets" in lowered
+    assert "directly explain the overnight" in lowered
+    assert "medication-status claims" in lowered
+
+
+def test_w2_prompt_points_to_per_patient_composite() -> None:
+    prompt = _build("W-2")
+    assert "run_per_patient_brief" in prompt
+    assert "chaining the granular reads" in prompt
+
+
 def test_w3_prompt_includes_acuity_framing() -> None:
     """W-3 framing emphasizes acuity, current threats, the next 90 seconds."""
     prompt = _build("W-3")

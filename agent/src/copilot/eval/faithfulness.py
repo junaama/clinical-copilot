@@ -276,6 +276,42 @@ def _build_sweep_user_prompt(response_text: str) -> str:
     )
 
 
+def _drop_claims_from_cited_sentences(
+    response_text: str,
+    uncited_claims: list[str],
+) -> list[str]:
+    """Remove sweep false positives that already sit in a cited sentence.
+
+    The uncited sweep is intentionally a backstop for claims with no citation
+    tag at all. If the flagged text appears in a sentence that contains a
+    ``<cite ...>`` tag, the per-citation grounding pass is the right judge for
+    support; counting it again as "uncited" creates noisy failures.
+    """
+    if not uncited_claims:
+        return []
+
+    kept: list[str] = []
+    lower_response = response_text.lower()
+    for claim in uncited_claims:
+        needle = claim.strip().lower()
+        if not needle:
+            continue
+        start = lower_response.find(needle)
+        if start == -1:
+            kept.append(claim)
+            continue
+
+        line_start = lower_response.rfind("\n", 0, start)
+        line_start = 0 if line_start == -1 else line_start + 1
+        line_end = lower_response.find("\n", start)
+        line_end = len(response_text) if line_end == -1 else line_end
+        line_after_claim = response_text[start:line_end]
+        if _CITE_PATTERN.search(line_after_claim):
+            continue
+        kept.append(claim)
+    return kept
+
+
 def _parse_sweep_json(raw: str) -> tuple[list[str], str | None]:
     """Parse the sweep judge's JSON reply.
 
@@ -472,6 +508,7 @@ class FaithfulnessJudge:
             raw_content = str(raw_content or "")
         sweep_response_text = raw_content
         claims, parse_error = _parse_sweep_json(raw_content)
+        claims = _drop_claims_from_cited_sentences(response_text, claims)
         _emit_sweep_langfuse_span(
             langfuse,
             sweep_prompt=sweep_prompt,

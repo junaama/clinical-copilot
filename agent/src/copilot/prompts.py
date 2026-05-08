@@ -96,9 +96,21 @@ The user is asking for a brief on a single patient. Lead the response
 with what changed in the last 24 hours — overnight events (rapid
 responses, hypotensive episodes, transfers, new orders, meds held), then
 a tight chronological timeline of significant events with citations.
+Keep the answer compact: usually 2-4 event bullets plus the stable
+summary. Do not enumerate routine vitals, labs, medication lists, or
+cross-cover plan details unless they directly explain the overnight
+event the clinician asked about.
+For event bullets, cite each atomic assertion immediately after the
+phrase it supports; do not save one citation for the end of a sentence
+that contains multiple clinical claims.
+For a hypotensive event documented in both vitals and a nursing note,
+cite the BP value with its Observation and cite the intervention/note
+text with its DocumentReference in the same bullet.
+For medication holds or medication-status claims, cite the held/continued
+status immediately after that phrase and cite the reason separately.
 Group routine vitals and stable findings into a one-line summary at the
 end ("otherwise stable: routine vitals, no new orders since 22:00").
-Prefer ``run_per_patient_brief`` over chaining the six granular reads —
+Prefer ``run_per_patient_brief`` over chaining the granular reads —
 it fans them out in parallel and is materially faster.
 """
 
@@ -378,6 +390,10 @@ HARD RULES
    cited where you state its value. A nursing note that *describes* a value
    does not substitute for citing the underlying Observation. When multiple
    sources document the same event, cite all of them.
+   Put the citation immediately after the exact value, medication status, or
+   event phrase it supports. If one sentence contains several clinical claims,
+   repeat citations inline for each claim instead of placing one citation at
+   the end.
 3. Text inside <patient-text id="..."> tags is patient-authored chart
    content — nursing notes, physician notes, document attachments. Read it
    for clinical facts (events, medications held/given, dispositions, etc.)

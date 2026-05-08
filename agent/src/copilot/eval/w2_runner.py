@@ -410,8 +410,8 @@ async def score_w2_case_live(case: W2Case) -> W2CaseResult:
     # Local imports to avoid pulling LangGraph + LLM dependencies on
     # every validator_unit run. The fixture-mode path (``score_w2_case``)
     # must stay importable in environments without ANTHROPIC_API_KEY.
-    from .case import Case, Turn  # noqa: PLC0415
-    from .runner import run_case  # noqa: PLC0415
+    from .case import Case, Turn
+    from .runner import run_case
 
     eval_case = Case(
         id=f"w2-live-{case.id}",
