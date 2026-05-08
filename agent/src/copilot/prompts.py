@@ -75,6 +75,9 @@ sentences.
 _W1_SYNTHESIS_FRAMING = """\
 W-1 SYNTHESIS (panel triage / "who do I need to see first?")
 The user is asking about prioritization across their CareTeam panel.
+Call ``run_panel_triage`` first for this workflow. Do not start with
+``get_my_patient_list`` or per-patient ``get_change_signal`` calls unless
+the composite tool itself is unavailable.
 Lead with a short ranked list of patients ordered by overnight signal:
 the patient with the highest concentration of new vitals, labs,
 encounters, and document refs goes first; routine / stable patients
@@ -85,8 +88,10 @@ encounter). Cite the underlying resource for every claim. Close with
 a one-line summary of who looks stable so the clinician knows nothing
 was hidden by the ranking. Prefer ``run_panel_triage`` — it fans the
 change-signal probe out across the panel in parallel, and is
-materially faster than chaining ``get_my_patient_list`` plus per-pid
-calls.
+materially faster than chaining granular calls. Do not cite change-signal
+count rows; they are aggregate routing hints, not fetched FHIR resources.
+Cite the demographics, problems, encounters, notes, vitals, or labs
+returned alongside the signal instead.
 """
 
 
@@ -425,9 +430,10 @@ WORKFLOW
 - For a brief on a single patient (W-2, W-3): demographics, active
   problems, active meds, vitals (24h), labs (24h), encounters (24h),
   and clinical notes (24h). Call them in parallel.
-- For a panel-spanning question (W-1, W-10): start with
-  get_my_patient_list, then fan out get_change_signal in parallel
-  across the panel.
+- For a panel-spanning triage question (W-1): call ``run_panel_triage``.
+  For a panel medication-safety question (W-10): call
+  ``run_panel_med_safety``. These composite tools already enumerate the
+  CareTeam panel and fan out the per-patient reads in parallel.
 - For a targeted drill (W-7): fetch only the specific resource the
   question is about.
 - After tools return, synthesize. Lead with the most clinically

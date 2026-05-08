@@ -980,7 +980,11 @@ def _extract_resources_from_tool_message(msg: ToolMessage) -> dict[str, dict[str
     try:
         payload = json.loads(content)
     except (TypeError, ValueError):
-        return {ref: {} for ref in _FHIR_REF_PATTERN.findall(content)}
+        return {
+            ref: {}
+            for ref in _FHIR_REF_PATTERN.findall(content)
+            if evaluators._is_resolvable_citation_ref(ref)
+        }
 
     return {ref: body for ref, body in _walk_for_rows(payload)}
 
@@ -994,7 +998,7 @@ def _walk_for_rows(node: Any):
     """
     if isinstance(node, dict):
         ref = node.get("fhir_ref")
-        if isinstance(ref, str) and ref:
+        if isinstance(ref, str) and evaluators._is_resolvable_citation_ref(ref):
             # Pass a shallow projection (drop the ref itself so it doesn't
             # echo back into the judge prompt as noise).
             body = {k: v for k, v in node.items() if k != "fhir_ref"}

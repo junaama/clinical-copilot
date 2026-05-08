@@ -355,7 +355,9 @@ def make_granular_tools(
                 last_err = err
             rows_list.append(
                 Row(
-                    fhir_ref=f"{resource_type}/_summary=count?patient={patient_id}",
+                    fhir_ref=(
+                        f"count-summary:{resource_type}:{patient_id}:{channel_name}"
+                    ),
                     resource_type=resource_type,
                     fields={
                         "channel": channel_name,

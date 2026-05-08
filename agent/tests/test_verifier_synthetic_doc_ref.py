@@ -12,7 +12,7 @@ gate.
 
 from __future__ import annotations
 
-from copilot.graph import _scrub_synthetic_doc_refs
+from copilot.graph import _scrub_unresolvable_refs
 
 
 def test_scrub_synthetic_doc_refs_removes_openemr_upload_prefix() -> None:
@@ -22,7 +22,7 @@ def test_scrub_synthetic_doc_refs_removes_openemr_upload_prefix() -> None:
         "Observation/obs-1",
         "guideline:abc-123",
     }
-    scrubbed = _scrub_synthetic_doc_refs(fetched)
+    scrubbed = _scrub_unresolvable_refs(fetched)
     assert "DocumentReference/openemr-upload-deadbeef" not in scrubbed
     assert scrubbed == {
         "DocumentReference/real-42",
@@ -36,8 +36,24 @@ def test_scrub_synthetic_doc_refs_preserves_non_synthetic_refs() -> None:
         "DocumentReference/lab-001",
         "DocumentReference/upload-2",  # 'upload-' alone is not synthetic
     }
-    assert _scrub_synthetic_doc_refs(fetched) == fetched
+    assert _scrub_unresolvable_refs(fetched) == fetched
 
 
 def test_scrub_synthetic_doc_refs_empty_input() -> None:
-    assert _scrub_synthetic_doc_refs(set()) == set()
+    assert _scrub_unresolvable_refs(set()) == set()
+
+
+def test_scrub_unresolvable_refs_removes_query_shaped_fhir_refs() -> None:
+    fetched = {
+        "Observation/_summary=count?patient=fixture-3",
+        "Observation/obs-bp-1",
+        "Encounter/_search?patient=fixture-1",
+        "DocumentReference/doc-1",
+    }
+
+    scrubbed = _scrub_unresolvable_refs(fetched)
+
+    assert scrubbed == {
+        "Observation/obs-bp-1",
+        "DocumentReference/doc-1",
+    }

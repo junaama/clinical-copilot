@@ -20,7 +20,7 @@ value regardless of trailing attributes.
 from __future__ import annotations
 
 from copilot.blocks import _CITE_PATTERN as BLOCKS_CITE_PATTERN
-from copilot.eval.evaluators import extract_citations
+from copilot.eval.evaluators import citation_resolution, extract_citations
 from copilot.eval.faithfulness import _CITE_PATTERN as FAITHFULNESS_CITE_PATTERN
 from copilot.graph import _extract_citations
 
@@ -75,3 +75,12 @@ def test_evaluators_extract_citations_handles_extra_attributes() -> None:
         "DocumentReference/lab-001",
         "guideline:abc",
     ]
+
+
+def test_citation_resolution_rejects_query_shaped_refs_even_if_fetched() -> None:
+    ref = "Observation/_summary=count?patient=fixture-3"
+
+    result = citation_resolution([ref], {ref})
+
+    assert result["score"] == 0.0
+    assert result["unresolved"] == [ref]

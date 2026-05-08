@@ -97,6 +97,19 @@ async def test_run_panel_triage_fans_out_three_resource_types_per_pid() -> None:
     assert "DocumentReference" in resource_types
 
 
+async def test_run_panel_triage_change_counts_are_marked_non_citeable() -> None:
+    """Change-signal count rows guide ranking but are not fetched FHIR
+    resources, so they must not look like citeable ResourceType/id refs."""
+    set_active_user_id(PRACTITIONER_DR_SMITH)
+    tool = _tool()
+
+    result = await tool.ainvoke({})
+
+    refs = [row["fhir_ref"] for row in result["rows"]]
+    assert not any("/_summary=" in ref or "?" in ref for ref in refs)
+    assert any(ref.startswith("count-summary:") for ref in refs)
+
+
 # ---------------------------------------------------------------------------
 # Panel-bounded scoping
 # ---------------------------------------------------------------------------

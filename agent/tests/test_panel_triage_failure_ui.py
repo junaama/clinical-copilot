@@ -130,6 +130,64 @@ def test_panel_triage_failed_recognizes_med_safety_too() -> None:
     assert _panel_triage_failed(state) is True
 
 
+def test_panel_triage_summary_from_rows_surfaces_careteam_names_without_cites() -> None:
+    from copilot.graph import _panel_triage_summary_from_rows
+
+    summary = _panel_triage_summary_from_rows(
+        [
+            {
+                "fhir_ref": "count-summary:Observation:fixture-1:vital-signs",
+                "resource_type": "Observation",
+                "fields": {
+                    "patient_id": "fixture-1",
+                    "channel": "vital-signs",
+                    "count": 6,
+                },
+            },
+            {
+                "fhir_ref": "Patient/fixture-1",
+                "resource_type": "Patient",
+                "fields": {"given_name": "Eduardo", "family_name": "Perez"},
+            },
+            {
+                "fhir_ref": "Condition/cond-chf",
+                "resource_type": "Condition",
+                "fields": {"code": "Congestive heart failure"},
+            },
+            {
+                "fhir_ref": "count-summary:Observation:fixture-3:vital-signs",
+                "resource_type": "Observation",
+                "fields": {
+                    "patient_id": "fixture-3",
+                    "channel": "vital-signs",
+                    "count": 2,
+                },
+            },
+            {
+                "fhir_ref": "Patient/fixture-3",
+                "resource_type": "Patient",
+                "fields": {"given_name": "Robert", "family_name": "Hayes"},
+            },
+            {
+                "fhir_ref": "Condition/cond-chf-robert",
+                "resource_type": "Condition",
+                "fields": {"code": "Acute on chronic heart failure"},
+            },
+            {
+                "fhir_ref": "Patient/fixture-4",
+                "resource_type": "Patient",
+                "fields": {"given_name": "Linda", "family_name": "Park"},
+            },
+        ]
+    )
+
+    assert summary is not None
+    assert "Perez" in summary
+    assert "Hayes" in summary
+    assert "Park" in summary
+    assert "<cite" not in summary
+
+
 # ---------------------------------------------------------------------------
 # Verifier behavior — panel triage failure path.
 # ---------------------------------------------------------------------------
@@ -348,6 +406,7 @@ async def test_panel_triage_success_still_routes_through(
     assert result.get("decision") == "allow"
     final = _final_message(result)
     assert isinstance(final, AIMessage)
+    assert "Eduardo Perez" in str(final.content)
 
 
 # ---------------------------------------------------------------------------

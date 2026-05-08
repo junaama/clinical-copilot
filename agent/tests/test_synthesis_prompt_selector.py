@@ -63,6 +63,10 @@ def test_w1_prompt_includes_panel_triage_framing() -> None:
         or "prioritiz" in lowered
     )
     assert "run_panel_triage" in prompt
+    assert "do not cite change-signal" in lowered
+    assert "count rows" in lowered
+    assert "do not start with" in lowered
+    assert "get_my_patient_list" in lowered
 
 
 def test_w1_prompt_does_not_include_w2_or_w3_framing() -> None:

@@ -76,6 +76,33 @@ def test_extract_resources_from_tool_message_round_trip() -> None:
     assert set(extracted.keys()) == {"Observation/obs-1", "Condition/cond-1"}
 
 
+def test_extract_resources_from_tool_message_ignores_query_shaped_refs() -> None:
+    payload = {
+        "ok": True,
+        "rows": [
+            {
+                "fhir_ref": "Observation/_summary=count?patient=fixture-3",
+                "resource_type": "Observation",
+                "fields": {"count": 2},
+            },
+            {
+                "fhir_ref": "Observation/obs-bp-1",
+                "resource_type": "Observation",
+                "fields": {"value": "90/60"},
+            },
+        ],
+    }
+    msg = ToolMessage(
+        content=json.dumps(payload),
+        tool_call_id="tc-1",
+    )
+
+    extracted = _extract_resources_from_tool_message(msg)
+
+    assert "Observation/_summary=count?patient=fixture-3" not in extracted
+    assert "Observation/obs-bp-1" in extracted
+
+
 def test_extract_resources_falls_back_to_regex_on_non_json() -> None:
     """Older / non-standard tool outputs may not be JSON. The regex
     fallback still pulls refs (with empty bodies) so citation_resolution
@@ -87,6 +114,21 @@ def test_extract_resources_falls_back_to_regex_on_non_json() -> None:
     extracted = _extract_resources_from_tool_message(msg)
     assert "Observation/obs-x" in extracted
     assert extracted["Observation/obs-x"] == {}
+
+
+def test_extract_resources_regex_fallback_ignores_query_shaped_refs() -> None:
+    msg = ToolMessage(
+        content=(
+            'counts "fhir_ref": "Observation/_summary=count?patient=fixture-3" '
+            'real "fhir_ref": "Observation/obs-x"'
+        ),
+        tool_call_id="tc-1",
+    )
+
+    extracted = _extract_resources_from_tool_message(msg)
+
+    assert "Observation/_summary=count?patient=fixture-3" not in extracted
+    assert extracted == {"Observation/obs-x": {}}
 
 
 def test_extract_resources_empty_content_returns_empty_dict() -> None:

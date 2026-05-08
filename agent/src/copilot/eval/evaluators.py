@@ -22,6 +22,20 @@ _CITE_PATTERN = re.compile(
     r'<cite\s+ref\s*=\s*["“”‘’]([^"“”‘’]+)["“”‘’][^>]*/?\s*>',
     flags=re.IGNORECASE,
 )
+_FHIR_RESOURCE_REF_PATTERN = re.compile(
+    r"^[A-Z][A-Za-z]+/[A-Za-z0-9\-.]{1,64}$"
+)
+_SYNTHETIC_DOC_REF_PREFIX = "DocumentReference/openemr-upload-"
+
+
+def _is_resolvable_citation_ref(ref: str) -> bool:
+    if not ref:
+        return False
+    if ref.startswith("guideline:"):
+        return bool(ref.removeprefix("guideline:").strip())
+    if ref.startswith(_SYNTHETIC_DOC_REF_PREFIX):
+        return False
+    return bool(_FHIR_RESOURCE_REF_PATTERN.fullmatch(ref))
 
 
 def extract_citations(response_text: str) -> list[str]:
@@ -42,7 +56,14 @@ def citation_resolution(citations: list[str], fetched_refs: set[str]) -> dict[st
     """
     if not citations:
         return {"score": 1.0, "unresolved": [], "total": 0}
-    unresolved = [c for c in citations if c not in fetched_refs]
+    resolvable_fetched_refs = {
+        ref for ref in fetched_refs if _is_resolvable_citation_ref(ref)
+    }
+    unresolved = [
+        c
+        for c in citations
+        if not _is_resolvable_citation_ref(c) or c not in resolvable_fetched_refs
+    ]
     score = (len(citations) - len(unresolved)) / len(citations)
     return {"score": score, "unresolved": unresolved, "total": len(citations)}
 
