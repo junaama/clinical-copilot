@@ -148,8 +148,13 @@ class ServerConfig
     public function getPublicRestKey()
     {
         // TODO: @adunsulag we have redundancy here in OAuth2KeyConfig and ServerConfig.  We should probably merge these.
-        $site = $this->getSiteId() ?? "default";
-        $webServerRoot = $this->getWebServerRoot() ?? OEGlobalsBag::getInstance()->getProjectDir();
+        // Use ?: rather than ?? — getSiteId() is typed `string` and the
+        // constructor falls back to '' when the session has no site_id,
+        // so the value is empty-string (not null) on /apis/ requests.
+        // ?? would never fire and we'd build a malformed path with a
+        // double slash like .../sites//documents/... .
+        $site = $this->getSiteId() ?: "default";
+        $webServerRoot = $this->getWebServerRoot() ?: OEGlobalsBag::getInstance()->getProjectDir();
         // if we can't get the web server root then we can't get the public key
         if (empty($webServerRoot)) {
             throw new \RuntimeException("Unable to determine web server root");
