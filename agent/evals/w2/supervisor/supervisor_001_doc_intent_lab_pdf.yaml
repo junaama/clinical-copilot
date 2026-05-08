@@ -3,6 +3,7 @@ category: supervisor_routing
 description: >
   Document upload narrative — supervisor routed correctly to extract
   worker. Response cites the lab PDF. Positive sample.
+mode: validator_unit
 fixture_response: |
   I extracted Chen's lipid panel: total cholesterol 220 mg/dL <cite ref="DocumentReference/lab-chen-lipid" page="1" field="results[0]" value="220"/>. Routed to W-DOC.
 expected:

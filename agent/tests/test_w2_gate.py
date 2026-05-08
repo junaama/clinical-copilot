@@ -1,16 +1,28 @@
 """W2 push-gate test (issue 010).
 
-Loads every fixture YAML under ``agent/evals/w2/``, scores all five
-boolean rubrics, asserts every case meets its declared ``expected``
-verdict, and compares the per-rubric pass rates against the committed
+Loads every YAML under ``agent/evals/w2/``, scores all five boolean
+rubrics, asserts every case meets its declared ``expected`` verdict,
+and compares the per-rubric pass rates against the committed
 ``.eval_baseline.json`` at the repo root via ``detect_regression``.
 
-This is the test the pre-push hook runs. With 50 fixture cases and
-no live LLM calls, the suite executes in well under 30 s.
+Validator-unit cases (the default, used for cases whose precondition
+isn't reproducible against the agent's fixture data) score the static
+``fixture_response`` against the rubrics. Live cases (``mode: live``)
+invoke the real agent and score its actual response. Both modes share
+the same rubric functions so a regression in either mode trips the
+same code; the gate's pass rates aggregate over both.
+
+The validator-unit subset is fast (<1s, no I/O). Live cases are gated
+on ``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY`` and call the LLM, so the
+gate is opt-in via env when the test runner doesn't have a key. With
+the keys present, full gate runs cost on the order of cents per run
+(small prompts, small responses, gpt-4o-mini default).
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
 from pathlib import Path
 
 import pytest
@@ -18,16 +30,28 @@ import pytest
 from copilot.eval.baseline import detect_regression, load_baseline, render_report
 from copilot.eval.w2_evaluators import GATE_THRESHOLDS_W2, RUBRIC_NAMES
 from copilot.eval.w2_runner import (
+    MODE_LIVE,
     compute_pass_rates,
     load_w2_cases_in_dir,
     register_schema,
     score_w2_cases,
+    score_w2_cases_async,
 )
 from copilot.eval.w2_schemas import register_w2_eval_schemas
+
+# Force fixture-FHIR mode for the gate run the same way ``evals/conftest.py``
+# does for smoke/golden — without it, live W2 cases route to live OpenEMR
+# and fail closed on every CareTeam check (W2 personas exist as fixture
+# users only). ``setdefault`` keeps real env vars dominant in CI.
+os.environ.setdefault("USE_FIXTURE_FHIR", "1")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = REPO_ROOT / "agent" / "evals" / "w2"
 BASELINE_PATH = REPO_ROOT / ".eval_baseline.json"
+
+_LIVE_LLM_KEY_PRESENT = bool(
+    os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY")
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -36,13 +60,24 @@ def _register_schemas() -> None:
     register_w2_eval_schemas(register_schema)
 
 
+def _has_live_cases(cases) -> bool:
+    return any(c.mode == MODE_LIVE for c in cases)
+
+
 @pytest.fixture(scope="module")
 def _scored_cases():
     cases = load_w2_cases_in_dir(EVAL_DIR)
     assert len(cases) == 50, (
-        f"expected 50 W2 fixture cases, found {len(cases)} — "
+        f"expected 50 W2 cases, found {len(cases)} — "
         f"see PRD acceptance criteria"
     )
+    if _has_live_cases(cases) and not _LIVE_LLM_KEY_PRESENT:
+        pytest.skip(
+            "W2 gate has live cases but no ANTHROPIC_API_KEY/OPENAI_API_KEY in env; "
+            "set one to run the live tier or run validator-unit cases only"
+        )
+    if _has_live_cases(cases):
+        return asyncio.run(score_w2_cases_async(cases))
     return score_w2_cases(cases)
 
 

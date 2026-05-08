@@ -2,9 +2,19 @@ id: w2-regression-001
 category: regression_w1
 description: >
   Week 1 per-patient brief shape — FHIR-only citations, no W2 sources.
-  Confirms the W2 rubric does not break the W1 brief contract.
-fixture_response: |
-  Hayes is on lisinopril 10 mg daily <cite ref="MedicationRequest/med-hayes-1"/> and metformin 500 mg twice daily <cite ref="MedicationRequest/med-hayes-2"/>. Last A1C 7.2% from 2026-04-10 <cite ref="Observation/obs-hayes-a1c-2026-04"/>.
+  Live invocation against fixture-1 (Eduardo Perez) confirms the W2
+  rubric does not break the W1 brief contract; the agent's actual
+  response is scored against the rubrics.
+mode: live
+prompt: "Give me a quick brief on this patient."
+patient_id: fixture-1
+user_id: dr_lopez
+care_team_includes:
+  - fixture-1
+  - fixture-2
+  - fixture-3
+  - fixture-4
+  - fixture-5
 expected:
   schema_valid: true
   citation_present: true

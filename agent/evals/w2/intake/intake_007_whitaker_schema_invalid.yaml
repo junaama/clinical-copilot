@@ -3,6 +3,7 @@ category: intake_extraction
 description: >
   Negative sample — intake fixture omits the required ``chief_concern``
   field. Gate must catch via schema_valid.
+mode: validator_unit
 schema: IntakeExtraction
 fixture_extraction:
   demographics:

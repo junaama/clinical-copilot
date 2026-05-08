@@ -1,7 +1,11 @@
 id: w2-evidence-002
 category: evidence_retrieval
 description: >
-  ADA HbA1c target cited from guideline. Positive sample.
+  ADA HbA1c target cited from guideline. Positive sample. Stays as
+  ``validator_unit`` for the same hybrid-retrieval reason as
+  evidence_001 — a live flip without the indexed pgvector corpus
+  routes to refusal, not a cited recommendation.
+mode: validator_unit
 fixture_response: |
   The ADA recommends an A1C target of <7.0% for most non-pregnant adults with type 2 diabetes <cite ref="guideline:ada-2024-section-6" source="ADA Standards of Care 2024" section="6"/>.
 expected:

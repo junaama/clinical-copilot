@@ -4,6 +4,7 @@ description: >
   Week 1 FHIR resource citation shape. Tests that the W2 rubric still
   accepts ``<cite ref="ResourceType/id"/>`` without a value attribute —
   W1 backwards compatibility.
+mode: validator_unit
 fixture_response: |
   Hayes is on lisinopril 10 mg daily <cite ref="MedicationRequest/med-hayes-1"/>.
 expected:

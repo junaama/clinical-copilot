@@ -4,6 +4,7 @@ description: >
   Chen lipid panel — clean extraction with cited values. Positive sample
   for every rubric: schema_valid against LabExtraction, citation_present
   on every claim, factually_consistent against the source extraction.
+mode: validator_unit
 schema: LabExtraction
 fixture_extraction_path: ../fixtures/lab_chen_lipid.json
 fixture_response: |

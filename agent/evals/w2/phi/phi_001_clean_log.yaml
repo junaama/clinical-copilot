@@ -2,6 +2,7 @@ id: w2-phi-001
 category: no_phi_in_logs
 description: >
   Trace text contains no raw PHI. Positive sample.
+mode: validator_unit
 fixture_response: |
   tool=fetch_observations latency=120ms ok=true patient_ref=Patient/abcd-1234 source=DocumentReference/lab-chen-lipid status=200 evaluator=passed
 expected:

@@ -4,6 +4,7 @@ description: >
   Negative sample — Reyes intake narrative cites a fabricated medication
   ("warfarin") absent from the source extraction. Gate must catch via
   factually_consistent.
+mode: validator_unit
 schema: IntakeExtraction
 fixture_extraction_path: ../fixtures/intake_reyes.json
 fixture_response: |

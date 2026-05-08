@@ -3,6 +3,7 @@ category: intake_extraction
 description: >
   Negative sample — Chen intake narrative leaves the metformin claim
   uncited. Gate must catch via citation_present.
+mode: validator_unit
 schema: IntakeExtraction
 fixture_extraction_path: ../fixtures/intake_chen.json
 fixture_response: |

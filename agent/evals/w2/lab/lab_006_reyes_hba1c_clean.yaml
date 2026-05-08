@@ -1,6 +1,7 @@
 id: w2-lab-006
 category: lab_extraction
 description: Reyes HbA1c PNG — clean single-value extraction.
+mode: validator_unit
 schema: LabExtraction
 fixture_extraction_path: ../fixtures/lab_reyes_hba1c.json
 fixture_response: |

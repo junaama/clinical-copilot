@@ -3,6 +3,7 @@ category: lab_extraction
 description: >
   Negative sample — extraction has wrong type for ``value`` (should be
   numeric string). Gate must catch via schema_valid.
+mode: validator_unit
 schema: LabExtraction
 fixture_extraction:
   patient_name: "Whitaker, James"

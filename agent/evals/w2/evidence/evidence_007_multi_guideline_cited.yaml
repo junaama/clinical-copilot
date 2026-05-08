@@ -3,7 +3,9 @@ category: evidence_retrieval
 description: >
   Two guideline citations on a multi-source recommendation. Tests that
   citation_present accepts more than one guideline ref in the same
-  paragraph.
+  paragraph. Stays as ``validator_unit`` for the same hybrid-retrieval
+  rationale as evidence_001-003.
+mode: validator_unit
 fixture_response: |
   ADA recommends metformin first-line for type 2 diabetes <cite ref="guideline:ada-2024-section-9" source="ADA 2024" section="9"/>, with intensification when A1C remains >7.0% per AACE consensus <cite ref="guideline:aace-2024-section-3" source="AACE 2024" section="3"/>.
 expected:

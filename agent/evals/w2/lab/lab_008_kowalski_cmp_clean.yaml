@@ -4,6 +4,7 @@ description: >
   Kowalski CMP — clean extraction with cited values. Positive sample for
   every rubric, exercises the multi-row CMP shape (5 results) so the gate
   is not biased toward 4-row lipid panels.
+mode: validator_unit
 schema: LabExtraction
 fixture_extraction_path: ../fixtures/lab_kowalski_cmp.json
 fixture_response: |

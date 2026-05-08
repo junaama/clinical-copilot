@@ -2,7 +2,14 @@ id: w2-evidence-001
 category: evidence_retrieval
 description: >
   JNC 8 hypertension target is cited with a guideline ref. Positive
-  sample for citation_present on a non-document source.
+  sample for citation_present on a non-document source. Stays as
+  ``validator_unit`` because reproducing a clean cited recommendation
+  live requires the hybrid retrieval stack (Cohere + pgvector index
+  populated from ``data/guidelines/``); the local dev env without
+  ``CHECKPOINTER_DSN`` cannot run the hybrid SQL query, so a live
+  flip would route to the agent's no-grounding refusal path
+  (covered by the live evidence_005 / evidence_006 cases).
+mode: validator_unit
 fixture_response: |
   JNC 8 recommends a blood pressure target of <140/90 mmHg for adults under 60 with hypertension <cite ref="guideline:jnc8-2014-section-4" source="JNC 8" section="4"/>.
 expected:

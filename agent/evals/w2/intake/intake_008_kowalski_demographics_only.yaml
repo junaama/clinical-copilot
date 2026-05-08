@@ -6,6 +6,7 @@ description: >
   is summarizing form structure rather than asserting a finding. Tests
   that the citation_present rubric does not over-fire on prose without
   a numeric / lab / med assertion.
+mode: validator_unit
 schema: IntakeExtraction
 fixture_extraction_path: ../fixtures/intake_kowalski.json
 fixture_response: |
