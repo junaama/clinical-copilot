@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import App from '../App';
 import type { PatientDashboardConfig } from '../types';
-import type { FhirPatient } from '../fhir-types';
+import type { FhirPatient, FhirBundle } from '../fhir-types';
 
 const FIXTURE_CONFIG: PatientDashboardConfig = {
   pid: 1,
@@ -35,11 +35,29 @@ const FIXTURE_PATIENT: FhirPatient = {
   ],
 };
 
+const EMPTY_BUNDLE: FhirBundle<unknown> = {
+  resourceType: 'Bundle',
+  type: 'searchset',
+};
+
+/** Route-aware fetch mock: Patient read → patient fixture, search → empty bundle. */
 function mockFetchSuccess(): void {
-  vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-    ok: true,
-    json: () => Promise.resolve(FIXTURE_PATIENT),
-  } as Response);
+  vi.spyOn(globalThis, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input.toString();
+
+    if (url.includes('/Patient/') && !url.includes('?')) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(FIXTURE_PATIENT),
+      } as Response);
+    }
+
+    // All search endpoints return empty bundles
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve(EMPTY_BUNDLE),
+    } as Response);
+  });
 }
 
 describe('App', () => {
@@ -96,5 +114,21 @@ describe('App', () => {
     expect(screen.getByTestId('patient-dob')).toHaveTextContent('1965-04-23');
     expect(screen.getByTestId('patient-sex')).toHaveTextContent('Male');
     expect(screen.getByTestId('patient-mrn')).toHaveTextContent('MRN-10042');
+  });
+
+  it('renders the five clinical cards including encounter history', async () => {
+    window.__OPENEMR_PATIENT_DASHBOARD__ = FIXTURE_CONFIG;
+    mockFetchSuccess();
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('card-allergies')).toBeInTheDocument();
+    });
+
+    expect(screen.getByTestId('card-problem-list')).toBeInTheDocument();
+    expect(screen.getByTestId('card-medications')).toBeInTheDocument();
+    expect(screen.getByTestId('card-prescriptions')).toBeInTheDocument();
+    expect(screen.getByTestId('card-encounter-history')).toBeInTheDocument();
   });
 });

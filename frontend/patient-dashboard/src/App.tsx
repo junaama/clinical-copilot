@@ -1,5 +1,9 @@
 import type { PatientDashboardConfig } from './types';
 import PatientHeader from './components/PatientHeader';
+import AllergyCard from './components/AllergyCard';
+import ProblemListCard from './components/ProblemListCard';
+import MedicationCard from './components/MedicationCard';
+import EncounterHistoryCard from './components/EncounterHistoryCard';
 
 function getConfig(): PatientDashboardConfig | null {
   return window.__OPENEMR_PATIENT_DASHBOARD__ ?? null;
@@ -37,7 +41,35 @@ export default function App() {
       />
 
       <main className="dashboard-main">
-        <p>Loading clinical data...</p>
+        <div className="dashboard-cards">
+          <AllergyCard
+            fhirBaseUrl={config.fhirBaseUrl}
+            patientUuid={config.patientUuid}
+            webRoot={config.webRoot}
+          />
+          <ProblemListCard
+            fhirBaseUrl={config.fhirBaseUrl}
+            patientUuid={config.patientUuid}
+            webRoot={config.webRoot}
+          />
+          <MedicationCard
+            title="Medications"
+            fhirBaseUrl={config.fhirBaseUrl}
+            patientUuid={config.patientUuid}
+            webRoot={config.webRoot}
+          />
+          <MedicationCard
+            title="Prescriptions"
+            fhirBaseUrl={config.fhirBaseUrl}
+            patientUuid={config.patientUuid}
+            webRoot={config.webRoot}
+          />
+          <EncounterHistoryCard
+            fhirBaseUrl={config.fhirBaseUrl}
+            patientUuid={config.patientUuid}
+            webRoot={config.webRoot}
+          />
+        </div>
       </main>
     </div>
   );
