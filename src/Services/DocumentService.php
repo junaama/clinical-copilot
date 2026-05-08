@@ -150,9 +150,16 @@ class DocumentService extends BaseService
             return false;
         }
 
-        // Store the document in OpenEMR
+        // Store the document in OpenEMR.
+        //
+        // Note: we deliberately do NOT pass `eid: $eid` here. The local
+        // Document.class.php has an extra $eid parameter that the upstream
+        // image (which is what's deployed) lacks. Passing it via named-arg
+        // raises "Unknown named parameter $eid" at runtime. Encounter
+        // linkage is dropped on this code path until library/classes is
+        // shipped via patches/.
         $doc = new \Document();
-        $ret = $doc->createDocument($pid, $categoryId, $fileData["name"], mime_content_type($fileData["tmp_name"]), $file, eid: $eid);
+        $ret = $doc->createDocument($pid, $categoryId, $fileData["name"], mime_content_type($fileData["tmp_name"]), $file);
         if (!empty($ret)) {
             error_log("OpenEMR API Error: There was an error in attempt to upload a patient document");
             return false;
