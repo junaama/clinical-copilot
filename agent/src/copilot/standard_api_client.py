@@ -24,6 +24,17 @@ from .config import Settings
 _HTTPX_RETRY_TRANSPORT = httpx.AsyncHTTPTransport(retries=3)
 
 
+def strip_fhir_prefix(reference: str) -> str:
+    """Return the bare ID from a FHIR-style reference like ``Patient/<uuid>``.
+
+    OpenEMR's Standard REST API path expects bare IDs, but the agent's
+    conversation state and tool inputs frequently carry the FHIR-style
+    ``<Type>/<id>`` form. Slotting that into a URL produces
+    ``.../patient/Patient/<uuid>/...`` which 404s. Idempotent on bare IDs.
+    """
+    return reference.split("/", 1)[1] if "/" in reference else reference
+
+
 class StandardApiClient:
     """Async wrapper around OpenEMR's Standard REST API for write operations."""
 
@@ -65,7 +76,7 @@ class StandardApiClient:
         if not token:
             return False, None, "no_token", int((time.monotonic() - started) * 1000)
 
-        url = f"{self._base_url}/patient/{patient_id}/document"
+        url = f"{self._base_url}/patient/{strip_fhir_prefix(patient_id)}/document"
         headers = self._headers(token)
         files = {"document": (filename, file_data)}
         data = {"category": category}
@@ -108,7 +119,7 @@ class StandardApiClient:
         if not token:
             return False, None, "no_token", int((time.monotonic() - started) * 1000)
 
-        url = f"{self._base_url}/patient/{patient_id}/allergy"
+        url = f"{self._base_url}/patient/{strip_fhir_prefix(patient_id)}/allergy"
         headers = {**self._headers(token), "Content-Type": "application/json"}
 
         try:
@@ -149,7 +160,7 @@ class StandardApiClient:
         if not token:
             return False, None, "no_token", int((time.monotonic() - started) * 1000)
 
-        url = f"{self._base_url}/patient/{patient_id}/medication"
+        url = f"{self._base_url}/patient/{strip_fhir_prefix(patient_id)}/medication"
         headers = {**self._headers(token), "Content-Type": "application/json"}
 
         try:
@@ -189,7 +200,7 @@ class StandardApiClient:
         if not token:
             return False, None, "no_token", int((time.monotonic() - started) * 1000)
 
-        url = f"{self._base_url}/patient/{patient_id}/medical_problem"
+        url = f"{self._base_url}/patient/{strip_fhir_prefix(patient_id)}/medical_problem"
         headers = {**self._headers(token), "Content-Type": "application/json"}
 
         try:

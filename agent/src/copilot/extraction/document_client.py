@@ -40,6 +40,7 @@ from typing import Any
 import httpx
 
 from copilot.config import Settings
+from copilot.standard_api_client import strip_fhir_prefix
 
 _log = logging.getLogger(__name__)
 
@@ -306,7 +307,7 @@ class DocumentClient:
         if not token:
             return False, None, "no_token", int((time.monotonic() - started) * 1000)
 
-        url = f"{self._base_url}/patient/{patient_id}/document"
+        url = f"{self._base_url}/patient/{strip_fhir_prefix(patient_id)}/document"
         headers = self._headers(token)
         files = {"document": (filename, file_data)}
         # OpenEMR reads the destination category from ``?path=`` (query
@@ -415,7 +416,7 @@ class DocumentClient:
         if not token:
             return False, [], "no_token", int((time.monotonic() - started) * 1000)
 
-        url = f"{self._base_url}/patient/{patient_id}/document"
+        url = f"{self._base_url}/patient/{strip_fhir_prefix(patient_id)}/document"
         # OpenEMR's GET route reads the category from ``?path=`` (same
         # contract as POST). Map ``doc_type``-style values to known
         # default categories; pass through anything else (lets callers
@@ -474,9 +475,10 @@ class DocumentClient:
                 int((time.monotonic() - started) * 1000),
             )
 
-        bare_pid = patient_id.split("/", 1)[1] if "/" in patient_id else patient_id
-        bare_did = document_id.split("/", 1)[1] if "/" in document_id else document_id
-        url = f"{self._base_url}/patient/{bare_pid}/document/{bare_did}"
+        url = (
+            f"{self._base_url}/patient/{strip_fhir_prefix(patient_id)}"
+            f"/document/{strip_fhir_prefix(document_id)}"
+        )
 
         try:
             response = await self._client.get(url, headers=self._headers(token))

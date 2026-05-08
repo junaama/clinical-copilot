@@ -248,3 +248,55 @@ async def test_create_medical_problem_no_token(client: StandardApiClient) -> Non
 
 async def test_base_url_construction(client: StandardApiClient) -> None:
     assert client._base_url == "http://localhost:8300/apis/default/api"
+
+
+# ---------------------------------------------------------------------------
+# FHIR-prefix stripping — guards against re-introducing the bug where
+# Patient/<uuid> ended up double-nested in URLs (.../patient/Patient/<uuid>/
+# allergy 404'd from OpenEMR's Standard API).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args", "expected_suffix"),
+    [
+        (
+            "upload_document",
+            ("Patient/abc-123", b"%PDF-1.4 ...", "x.pdf"),
+            "/patient/abc-123/document",
+        ),
+        (
+            "create_allergy",
+            ("Patient/abc-123", {"title": "penicillin"}),
+            "/patient/abc-123/allergy",
+        ),
+        (
+            "create_medication",
+            ("Patient/abc-123", {"title": "metformin"}),
+            "/patient/abc-123/medication",
+        ),
+        (
+            "create_medical_problem",
+            ("Patient/abc-123", {"title": "diabetes"}),
+            "/patient/abc-123/medical_problem",
+        ),
+    ],
+)
+async def test_methods_strip_fhir_prefix_from_patient_id(
+    client: StandardApiClient,
+    method_name: str,
+    args: tuple,
+    expected_suffix: str,
+) -> None:
+    response = httpx.Response(
+        201,
+        json={"id": "1"},
+        request=httpx.Request("POST", "http://test/"),
+    )
+    method = getattr(client, method_name)
+    with patch.object(client._client, "post", new_callable=AsyncMock, return_value=response) as mock_post:
+        await method(*args)
+
+    called_url = mock_post.call_args.args[0]
+    assert called_url.endswith(expected_suffix), called_url
+    assert "Patient/" not in called_url
