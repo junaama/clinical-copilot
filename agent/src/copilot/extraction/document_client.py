@@ -455,6 +455,10 @@ class DocumentClient:
     ) -> tuple[bool, bytes | None, str | None, str | None, int]:
         """Fetch raw document bytes plus mimetype.
 
+        Accepts either bare IDs or FHIR-style references — callers
+        upstream pass ``Patient/<uuid>`` and ``DocumentReference/<id>``,
+        and the OpenEMR Standard API URL needs the bare IDs only.
+
         Returns ``(ok, file_bytes, mimetype, error, latency_ms)``. ``mimetype``
         is the bare media type (``application/pdf``) with any ``charset=``
         suffix stripped — the VLM dispatcher keys off the bare type.
@@ -470,7 +474,9 @@ class DocumentClient:
                 int((time.monotonic() - started) * 1000),
             )
 
-        url = f"{self._base_url}/patient/{patient_id}/document/{document_id}"
+        bare_pid = patient_id.split("/", 1)[1] if "/" in patient_id else patient_id
+        bare_did = document_id.split("/", 1)[1] if "/" in document_id else document_id
+        url = f"{self._base_url}/patient/{bare_pid}/document/{bare_did}"
 
         try:
             response = await self._client.get(url, headers=self._headers(token))

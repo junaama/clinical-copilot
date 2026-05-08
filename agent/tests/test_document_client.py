@@ -654,6 +654,32 @@ async def test_download_success(client: DocumentClient) -> None:
     assert err is None
 
 
+async def test_download_strips_fhir_reference_prefix(client: DocumentClient) -> None:
+    """``Patient/<uuid>`` / ``DocumentReference/<id>`` come from the
+    agent's conversation state; OpenEMR's Standard API expects the bare
+    IDs in the URL path. Verify the GET targets ``.../patient/<uuid>/
+    document/<id>`` and not ``.../patient/Patient/<uuid>/document/
+    DocumentReference/<id>``."""
+    response = httpx.Response(
+        200,
+        content=PDF_BYTES,
+        headers={"content-type": "application/pdf"},
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with patch.object(client._client, "get", new_callable=AsyncMock, return_value=response) as mock_get:
+        ok, _data, _mt, err, _ms = await client.download(
+            "Patient/a1b9dcb6-5efd-4640-a14c-205d53992dc0",
+            "DocumentReference/2163",
+        )
+
+    assert ok is True and err is None
+    called_url = mock_get.call_args.args[0]
+    assert called_url.endswith(
+        "/patient/a1b9dcb6-5efd-4640-a14c-205d53992dc0/document/2163"
+    ), called_url
+    assert "Patient/" not in called_url and "DocumentReference/" not in called_url
+
+
 async def test_download_strips_charset_from_mimetype(client: DocumentClient) -> None:
     response = httpx.Response(
         200,
