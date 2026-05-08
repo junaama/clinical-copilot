@@ -82,8 +82,17 @@ UPLOAD_LANDED_ID_LOST = "upload_landed_id_lost"
 # token, session wrapper API) into the API path and 500s. While that's
 # being fixed upstream-of-us, we keep the bytes from the upload step and
 # serve them to the very-next ``extract_document`` call without a round
-# trip. Single-replica agent → instance-level dict is fine; capped LRU
-# bounds memory.
+# trip.
+#
+# **Cache is module-level on purpose.** ``server.py``'s ``/upload`` route
+# resolves a DocumentClient on ``app.state.document_client`` (one instance
+# per app); ``tools/__init__.py``'s ``_build_extraction_tools`` builds a
+# *separate* DocumentClient when it wires the extraction tools into the
+# chat graph. Without a shared module-level cache, the upload populates
+# instance A's cache, the extract reads from instance B's empty cache,
+# and we still 500 through the broken OpenEMR path. Module-level dict is
+# safe here because the agent runs single-replica and CPython dict ops
+# are atomic across coroutines on the same loop.
 _UPLOAD_CACHE_MAX_ENTRIES: int = 8
 _UPLOAD_CACHE_TTL_SECONDS: float = 60 * 60  # 1 hour
 
@@ -93,6 +102,9 @@ class _UploadCacheEntry:
     file_bytes: bytes
     mimetype: str
     cached_at: float
+
+
+_UPLOAD_BYTES_CACHE: OrderedDict[str, _UploadCacheEntry] = OrderedDict()
 
 
 def _infer_mimetype(file_data: bytes) -> str:
@@ -289,7 +301,6 @@ class DocumentClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client = httpx.AsyncClient(timeout=30.0, transport=_HTTPX_RETRY_TRANSPORT)
-        self._upload_cache: OrderedDict[str, _UploadCacheEntry] = OrderedDict()
 
     @staticmethod
     def _cache_key(patient_id: str, document_id: str) -> str:
@@ -304,22 +315,22 @@ class DocumentClient:
             mimetype=_infer_mimetype(file_bytes),
             cached_at=time.monotonic(),
         )
-        self._upload_cache[key] = entry
-        self._upload_cache.move_to_end(key)
-        while len(self._upload_cache) > _UPLOAD_CACHE_MAX_ENTRIES:
-            self._upload_cache.popitem(last=False)
+        _UPLOAD_BYTES_CACHE[key] = entry
+        _UPLOAD_BYTES_CACHE.move_to_end(key)
+        while len(_UPLOAD_BYTES_CACHE) > _UPLOAD_CACHE_MAX_ENTRIES:
+            _UPLOAD_BYTES_CACHE.popitem(last=False)
 
     def _cache_get(
         self, patient_id: str, document_id: str
     ) -> _UploadCacheEntry | None:
         key = self._cache_key(patient_id, document_id)
-        entry = self._upload_cache.get(key)
+        entry = _UPLOAD_BYTES_CACHE.get(key)
         if entry is None:
             return None
         if time.monotonic() - entry.cached_at > _UPLOAD_CACHE_TTL_SECONDS:
-            self._upload_cache.pop(key, None)
+            _UPLOAD_BYTES_CACHE.pop(key, None)
             return None
-        self._upload_cache.move_to_end(key)
+        _UPLOAD_BYTES_CACHE.move_to_end(key)
         return entry
 
     def _resolve_token(self) -> str:
