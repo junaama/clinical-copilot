@@ -62,6 +62,7 @@ from .conversations import (
 )
 from .extraction.bbox_matcher import match_extraction_to_bboxes
 from .extraction.document_client import UPLOAD_LANDED_ID_LOST, DocumentClient
+from .extraction.migrate import ensure_schema as ensure_extraction_schema
 from .extraction.persistence import DocumentExtractionStore
 from .extraction.schemas import (
     DrawableFieldBBox,
@@ -144,6 +145,15 @@ def _maybe_build_title_summarizer(
 async def lifespan(app: FastAPI):
     settings = get_settings()
     app.state.settings = settings
+    # Apply Postgres schema migrations before any DB-touching code runs.
+    # The migrate module is idempotent (every statement uses IF NOT EXISTS
+    # / ADD COLUMN IF NOT EXISTS), so it's safe to invoke on every boot.
+    # Skipped in dev/in-memory mode (no DSN) — that path doesn't use the
+    # document_extractions table. If the migration fails, let the
+    # exception propagate so the container fails its healthcheck rather
+    # than serving requests against an outdated schema.
+    if settings.checkpointer_dsn:
+        await ensure_extraction_schema(settings.checkpointer_dsn)
     # open_checkpointer falls back to MemorySaver when CHECKPOINTER_DSN is
     # unset, so this same path serves dev (no DSN) and production (Postgres).
     async with open_checkpointer(settings) as checkpointer:

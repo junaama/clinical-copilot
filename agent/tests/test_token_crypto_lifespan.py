@@ -55,11 +55,17 @@ def _stub_lifespan_deps(monkeypatch: pytest.MonkeyPatch) -> None:
 
         yield _StubStore()
 
+    async def _no_extraction_migrate(_dsn):
+        # No-op so the encryption-key validation path runs without
+        # opening a real Postgres connection for migrations.
+        return None
+
     monkeypatch.setattr(server_mod, "open_checkpointer", _no_checkpointer)
     monkeypatch.setattr(server_mod, "open_session_store", _no_session_store)
     monkeypatch.setattr(server_mod, "open_conversation_store", _no_conv_store)
     monkeypatch.setattr(server_mod, "open_conversation_turn_store", _no_turn_store)
     monkeypatch.setattr(server_mod, "build_graph", lambda *_a, **_kw: None)
+    monkeypatch.setattr(server_mod, "ensure_extraction_schema", _no_extraction_migrate)
     # Strip any pre-existing app state from a previous test.
     for attr in (
         "session_gateway",
