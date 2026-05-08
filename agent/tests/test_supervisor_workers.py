@@ -44,6 +44,7 @@ def test_intake_extractor_allowlist_matches_prd() -> None:
             "list_patient_documents",
             "extract_document",
             "get_patient_demographics",
+            "run_per_patient_brief",
         }
     )
 
@@ -67,6 +68,17 @@ def test_filter_tools_keeps_only_allowed() -> None:
     filtered = _filter_tools(tools, WORKER_TOOL_ALLOWLIST["intake_extractor"])
     names = {t.name for t in filtered}
     assert names == {"attach_document", "get_patient_demographics"}
+
+
+def test_filter_tools_allows_patient_brief_for_document_diff() -> None:
+    tools = [
+        _stub_tool("extract_document"),
+        _stub_tool("run_per_patient_brief"),
+        _stub_tool("retrieve_evidence"),  # NOT in intake allowlist
+    ]
+    filtered = _filter_tools(tools, WORKER_TOOL_ALLOWLIST["intake_extractor"])
+    names = {t.name for t in filtered}
+    assert names == {"extract_document", "run_per_patient_brief"}
 
 
 def test_filter_tools_tolerates_missing_tools() -> None:

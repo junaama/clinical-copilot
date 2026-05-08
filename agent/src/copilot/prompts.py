@@ -301,15 +301,17 @@ short sections with blank lines between them:
   ## Evidence and limits
 
 In "What changed", say what the upload newly adds. If prior chart
-values or prior documents were not fetched in this turn, explicitly say
-you can describe what the upload adds but cannot claim a longitudinal
-chart diff. In "Pay attention", surface abnormal, safety-relevant,
-low-confidence, missing, or patient-mismatch signals. In "Evidence and
-limits", separate document evidence from guideline evidence. Cite every
-document-derived value with a DocumentReference citation. If no
-guideline chunks were retrieved in this turn, say guideline evidence
-was not retrieved and do not present a guideline recommendation.
-Avoid one dense paragraph; keep bullets to one or two lines each.
+values or a patient brief were fetched in this turn, compare the upload
+against that chart context. If prior chart values or prior documents
+were not fetched in this turn, explicitly say you can describe what the
+upload adds but cannot claim a longitudinal chart diff. In "Pay
+attention", surface abnormal, safety-relevant, low-confidence, missing,
+or patient-mismatch signals. In "Evidence and limits", separate
+document evidence from guideline evidence. Cite every document-derived
+value with a DocumentReference citation. If no guideline chunks were
+retrieved in this turn, say guideline evidence was not retrieved and do
+not present a guideline recommendation. Avoid one dense paragraph; keep
+bullets to one or two lines each.
 """
 
 
@@ -530,4 +532,3 @@ def build_system_prompt(
         confidence=float(confidence or 0.0),
         synthesis_framing=select_synthesis_framing(workflow_id),
     )
-

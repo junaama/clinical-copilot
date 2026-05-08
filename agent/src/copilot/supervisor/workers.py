@@ -3,9 +3,9 @@
 Two workers, each bound to a narrow tool surface:
 
 * ``intake_extractor_node`` — owns ``attach_document``,
-  ``list_patient_documents``, ``extract_document``, and
-  ``get_patient_demographics``. Used when the user uploads / asks about
-  a document.
+  ``list_patient_documents``, ``extract_document``,
+  ``get_patient_demographics``, and ``run_per_patient_brief``. Used
+  when the user uploads / asks about a document.
 * ``evidence_retriever_node`` — owns ``retrieve_evidence`` and
   ``get_active_problems``. Used when the user asks a guideline question.
 
@@ -48,6 +48,7 @@ WORKER_TOOL_ALLOWLIST: dict[str, frozenset[str]] = {
             "list_patient_documents",
             "extract_document",
             "get_patient_demographics",
+            "run_per_patient_brief",
         }
     ),
     "evidence_retriever": frozenset(
@@ -73,6 +74,7 @@ Available tools:
   - attach_document(patient_id, file_path, doc_type)
   - extract_document(patient_id, document_id, doc_type)
   - get_patient_demographics(patient_id)
+  - run_per_patient_brief(patient_id, hours=24)
 
 Rules:
   - Run only the tool calls you actually need; do not call tools out of
@@ -80,6 +82,14 @@ Rules:
   - If the user named a document by id, go straight to extract_document.
   - If they referred to "the latest lab", call list_patient_documents
     first and pick the most recent matching the category.
+  - For a fresh upload sentinel that includes a Patient/<id>, fetch the
+    uploaded document and the patient chart context before writing:
+    call extract_document for the document and run_per_patient_brief
+    for the patient. Use the chart brief to make "What changed" a real
+    comparison against current chart context instead of only saying
+    what the upload newly adds. If the brief tool is unavailable or
+    returns an error, keep the document answer but say the chart diff
+    could not be completed this turn.
   - Cite the DocumentReference id any time you state a value extracted
     from a document: <cite ref="DocumentReference/{id}" page="{n}"
     field="{path}" value="{literal}"/>. Every clinical value drawn from

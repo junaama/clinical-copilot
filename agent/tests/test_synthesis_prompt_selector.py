@@ -365,6 +365,7 @@ def test_wdoc_prompt_includes_document_visit_prep_framing() -> None:
     assert "not retrieved" in lowered
     assert "longitudinal" in lowered
     assert "chart diff" in lowered
+    assert "chart context" in lowered
 
 
 def test_wdoc_prompt_does_not_include_other_framings() -> None:
