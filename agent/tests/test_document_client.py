@@ -666,7 +666,9 @@ async def test_download_strips_fhir_reference_prefix(client: DocumentClient) -> 
         headers={"content-type": "application/pdf"},
         request=httpx.Request("GET", "http://test/"),
     )
-    with patch.object(client._client, "get", new_callable=AsyncMock, return_value=response) as mock_get:
+    with patch.object(
+        client._client, "get", new_callable=AsyncMock, return_value=response
+    ) as mock_get:
         ok, _data, _mt, err, _ms = await client.download(
             "Patient/a1b9dcb6-5efd-4640-a14c-205d53992dc0",
             "DocumentReference/2163",
@@ -745,3 +747,146 @@ async def test_download_transport_error(client: DocumentClient) -> None:
 
 async def test_base_url_construction(client: DocumentClient) -> None:
     assert client._base_url == "http://localhost:8300/apis/default/api"
+
+
+# ---------------------------------------------------------------------------
+# In-process upload-bytes cache: short-circuits download() for documents
+# we just uploaded, so a broken OpenEMR Standard-API GET path doesn't
+# stall the very-next extract_document call.
+# ---------------------------------------------------------------------------
+
+
+async def test_download_serves_cached_bytes_after_successful_upload(
+    client: DocumentClient,
+) -> None:
+    upload_response = httpx.Response(
+        201,
+        json={"id": "9001"},
+        request=httpx.Request("POST", "http://test/"),
+    )
+    with patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response):
+        ok, doc_id, _err, _ms = await client.upload(
+            "patient-1", PDF_BYTES, "lab.pdf", "lab_pdf"
+        )
+    assert ok is True and doc_id == "9001"
+
+    download_mock = AsyncMock()
+    with patch.object(client._client, "get", download_mock):
+        ok, file_bytes, mimetype, err, _ms = await client.download(
+            "patient-1", "9001"
+        )
+
+    assert ok is True
+    assert file_bytes == PDF_BYTES
+    assert mimetype == "application/pdf"
+    assert err is None
+    download_mock.assert_not_called()
+
+
+async def test_download_strips_fhir_prefix_for_cache_lookup(
+    client: DocumentClient,
+) -> None:
+    """Caller passes ``Patient/<uuid>`` and ``DocumentReference/<id>``;
+    cache key normalization must strip the ref prefix so the just-uploaded
+    bytes are returned instead of falling through to a real HTTP fetch."""
+    upload_response = httpx.Response(
+        201,
+        json={"id": "9002"},
+        request=httpx.Request("POST", "http://test/"),
+    )
+    with patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response):
+        await client.upload("patient-2", PDF_BYTES, "lab.pdf", "lab_pdf")
+
+    download_mock = AsyncMock()
+    with patch.object(client._client, "get", download_mock):
+        ok, file_bytes, _mimetype, _err, _ms = await client.download(
+            "Patient/patient-2", "DocumentReference/9002"
+        )
+
+    assert ok is True
+    assert file_bytes == PDF_BYTES
+    download_mock.assert_not_called()
+
+
+async def test_download_falls_back_to_http_on_cache_miss(
+    client: DocumentClient,
+) -> None:
+    response = httpx.Response(
+        200,
+        content=b"%PDF-from-server",
+        headers={"content-type": "application/pdf"},
+        request=httpx.Request("GET", "http://test/"),
+    )
+    download_mock = AsyncMock(return_value=response)
+    with patch.object(client._client, "get", download_mock):
+        ok, file_bytes, mimetype, err, _ms = await client.download(
+            "patient-cold", "9999"
+        )
+
+    assert ok is True
+    assert file_bytes == b"%PDF-from-server"
+    assert mimetype == "application/pdf"
+    assert err is None
+    download_mock.assert_called_once()
+
+
+async def test_download_caches_result_from_real_http_fetch(
+    client: DocumentClient,
+) -> None:
+    """A successful network download populates the cache so a subsequent
+    request for the same document is served locally."""
+    response = httpx.Response(
+        200,
+        content=b"%PDF-network",
+        headers={"content-type": "application/pdf"},
+        request=httpx.Request("GET", "http://test/"),
+    )
+    download_mock = AsyncMock(return_value=response)
+    with patch.object(client._client, "get", download_mock):
+        await client.download("patient-3", "7777")
+        await client.download("patient-3", "7777")
+
+    download_mock.assert_called_once()
+
+
+async def test_download_recovers_cached_bytes_after_bool_true_upload(
+    client: DocumentClient,
+) -> None:
+    """The bool-true / bool-given recovery paths swap the upload's id via
+    a list call. The cache must still get populated with the *uploaded*
+    bytes against the *recovered* id, since the file the user just
+    handed us is the source of truth."""
+    upload_response = httpx.Response(
+        200,
+        json=True,
+        request=httpx.Request("POST", "http://test/"),
+    )
+    list_response = httpx.Response(
+        200,
+        json=[
+            {
+                "id": "8001",
+                "name": "lab.pdf",
+                "date": datetime.now(UTC).isoformat(),
+            }
+        ],
+        request=httpx.Request("GET", "http://test/"),
+    )
+    with (
+        patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response),
+        patch.object(client._client, "get", new_callable=AsyncMock, return_value=list_response),
+    ):
+        ok, doc_id, _err, _ms = await client.upload(
+            "patient-4", PDF_BYTES, "lab.pdf", "lab_pdf"
+        )
+    assert ok is True and doc_id == "8001"
+
+    # Now download — must come from cache, no extra HTTP call.
+    download_mock = AsyncMock()
+    with patch.object(client._client, "get", download_mock):
+        ok, file_bytes, _mimetype, _err, _ms = await client.download(
+            "patient-4", "8001"
+        )
+    assert ok is True
+    assert file_bytes == PDF_BYTES
+    download_mock.assert_not_called()
