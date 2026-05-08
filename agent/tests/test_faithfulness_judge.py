@@ -584,3 +584,136 @@ async def test_uncited_sweep_malformed_json_treated_as_no_claims() -> None:
     assert result.sweep_error is not None
     assert "parse" in result.sweep_error.lower() or "decode" in result.sweep_error.lower()
     assert result.passed is True
+
+
+# ---------------------------------------------------------------------------
+# Restatement filter (secondary deterministic filter)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_drops_medication_count_restating_cited_content() -> None:
+    """A summary sentence counting medications that were individually cited
+    should be dropped as a restatement, not flagged as uncited."""
+    text = (
+        "- **Furosemide** 40 mg PO twice daily "
+        '<cite ref="MedicationRequest/med-furosemide"/>\n'
+        "- **Lisinopril** 10 mg PO daily "
+        '<cite ref="MedicationRequest/med-lisinopril"/>\n'
+        "- **Metoprolol** 25 mg PO daily "
+        '<cite ref="MedicationRequest/med-metoprolol"/>\n'
+        "\n"
+        "The patient is currently on three active medications."
+    )
+    resources = {
+        **_resources(),
+        "MedicationRequest/med-furosemide": {
+            "medication": "furosemide 40 mg",
+            "lifecycle_status": "active",
+        },
+        "MedicationRequest/med-metoprolol": {
+            "medication": "metoprolol 25 mg",
+            "lifecycle_status": "active",
+        },
+    }
+    stub = _StubJudgeLLM(
+        verdicts_by_ref={
+            "MedicationRequest/med-furosemide": {
+                "supported": True,
+                "reasoning": "ok",
+            },
+            "MedicationRequest/med-lisinopril": {
+                "supported": True,
+                "reasoning": "ok",
+            },
+            "MedicationRequest/med-metoprolol": {
+                "supported": True,
+                "reasoning": "ok",
+            },
+        },
+        sweep_response={
+            "uncited_claims": [
+                "The patient is currently on three active medications."
+            ]
+        },
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, resources)
+
+    assert result.uncited_claims == []
+    assert result.passed is True
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_drops_medication_name_restatement() -> None:
+    """A closing sentence that restates a medication name already cited above
+    should be dropped as a restatement."""
+    text = (
+        "- **Furosemide** 40 mg PO twice daily "
+        '<cite ref="MedicationRequest/med-furosemide"/>\n'
+        "- **Lisinopril** 10 mg PO daily "
+        '<cite ref="MedicationRequest/med-lisinopril"/>\n'
+        "\n"
+        "He is currently on Furosemide, which may be relevant given his "
+        "renal status."
+    )
+    resources = {
+        **_resources(),
+        "MedicationRequest/med-furosemide": {
+            "medication": "furosemide 40 mg",
+            "lifecycle_status": "active",
+        },
+    }
+    stub = _StubJudgeLLM(
+        verdicts_by_ref={
+            "MedicationRequest/med-furosemide": {
+                "supported": True,
+                "reasoning": "ok",
+            },
+            "MedicationRequest/med-lisinopril": {
+                "supported": True,
+                "reasoning": "ok",
+            },
+        },
+        sweep_response={
+            "uncited_claims": ["He is currently on Furosemide"]
+        },
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, resources)
+
+    assert result.uncited_claims == []
+    assert result.passed is True
+
+
+@pytest.mark.asyncio
+async def test_uncited_sweep_keeps_genuinely_new_clinical_claim() -> None:
+    """A claim mentioning a lab value NOT present in any cited line should
+    NOT be dropped by the restatement filter."""
+    text = (
+        "- **Furosemide** 40 mg PO twice daily "
+        '<cite ref="MedicationRequest/med-furosemide"/>\n'
+        "\n"
+        "The patient's potassium was 5.8 mEq/L this morning."
+    )
+    stub = _StubJudgeLLM(
+        verdicts_by_ref={
+            "MedicationRequest/med-furosemide": {
+                "supported": True,
+                "reasoning": "ok",
+            },
+        },
+        sweep_response={
+            "uncited_claims": [
+                "potassium was 5.8 mEq/L this morning"
+            ]
+        },
+    )
+    judge = FaithfulnessJudge(llm_factory=lambda: stub)
+
+    result = await judge.judge(text, _resources())
+
+    assert result.uncited_claims == ["potassium was 5.8 mEq/L this morning"]
+    assert result.passed is False
