@@ -76,6 +76,8 @@ export interface AgentPanelProps {
   /** Optional element rendered just above the chat composer — used by the
    *  shell to embed the document-upload affordance inside the chat window. */
   readonly composerSlot?: ReactNode;
+  /** Optional evidence/result surface rendered inside the chat scroll. */
+  readonly evidenceSlot?: ReactNode;
 }
 
 export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
@@ -100,6 +102,7 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     onPendingMessageHandled,
     onResponse,
     composerSlot,
+    evidenceSlot,
   } = props;
 
   const [draft, setDraft] = useState<string>('');
@@ -333,6 +336,9 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
           return null;
         })}
         {busy && <Thinking />}
+        {evidenceSlot ? (
+          <div className="agent-evidence-slot">{evidenceSlot}</div>
+        ) : null}
       </div>
 
       {composerSlot ? (
