@@ -116,7 +116,7 @@ describe('App', () => {
     expect(screen.getByTestId('patient-mrn')).toHaveTextContent('MRN-10042');
   });
 
-  it('renders the five clinical cards including encounter history', async () => {
+  it('renders the six clinical cards including encounter history and care team', async () => {
     window.__OPENEMR_PATIENT_DASHBOARD__ = FIXTURE_CONFIG;
     mockFetchSuccess();
 
@@ -130,5 +130,6 @@ describe('App', () => {
     expect(screen.getByTestId('card-medications')).toBeInTheDocument();
     expect(screen.getByTestId('card-prescriptions')).toBeInTheDocument();
     expect(screen.getByTestId('card-encounter-history')).toBeInTheDocument();
+    expect(screen.getByTestId('card-care-team')).toBeInTheDocument();
   });
 });
