@@ -55,35 +55,37 @@ Each clinical claim in the answer carries a `guideline:<chunk_id>` citation so y
 
 The 8 PDFs in [`example-documents/`](example-documents/) (Chen lipid panel, Whitaker CBC, Reyes A1c, Kowalski CMP, plus 4 intake forms) are the same fixtures the eval suite runs against, so behavior on these is well-tested.
 
-### Week 2 eval results — 2026-05-06
+### Week 2 eval results — 2026-05-08 (honest re-baseline)
+
+The W2 gate as previously documented (the 100%-across-every-dimension snapshot dated 2026-05-06) was a tautology: every case carried a hand-authored `fixture_response` string in its YAML, and the runner only scored the rubric functions against those static strings — no agent invocation, no LLM call. That was useful as a unit test of the validators but was misrepresented as a behavioral eval. The runner is being re-flipped to live mode (real `run_case` agent output → rubric scoring) and this section will be updated with the live baseline once that lands.
 
 ```
 $ cd agent && uv run python -m copilot.eval.w2_baseline_cli check
-
-W2 eval gate: PASSED (5 categories OK)
-
-  [PASS] schema_valid:         100.0% (baseline 100.0%; ≥ floor 95%)
-  [PASS] citation_present:     100.0% (baseline 100.0%; ≥ floor 90%)
-  [PASS] factually_consistent: 100.0% (baseline 100.0%; ≥ floor 90%)
-  [PASS] safe_refusal:         100.0% (baseline 100.0%; ≥ floor 95%)
-  [PASS] no_phi_in_logs:       100.0% (baseline 100.0%; ≥ floor 100%)
+# (output deliberately not shown until the live re-baseline lands)
 ```
 
-**50/50 cases pass their declared verdicts. Gate runs in <1s wall time** (PRD budget: <30s).
+What the validator-as-unit-test layer DID confirm and what it didn't:
 
-| Category | Cases | Pass | Focus |
+| Layer | What 100% confirmed | What it can't confirm |
+|---|---|---|
+| Citation-tag grammar (`<cite ref="..." page="..." field="..." value="..."/>`) | The parser accepts well-formed tags and rejects malformed ones | Whether the agent produces well-formed tags under live conditions |
+| Schema validation (`LabExtraction`, `IntakeExtraction`) | Pydantic v2 schemas accept canonical structures and reject mutated ones | Whether the VLM's extraction conforms to those schemas at runtime |
+| Refusal-phrase detection | The detector matches known refusal templates | Whether the agent actually uses those templates when it should refuse |
+| PHI detection over fixture identifiers | The scanner catches every fixture DOB/SSN/MRN string | Whether the agent's real responses contain PHI under prompt-injection or normal load |
+
+The 50 cases (8 categories) listed below remain in the repo and are still valid for the things the validator-tier *can* prove. Issues `010` (TBD post-flip) tracks landing the live baseline.
+
+| Category | Cases | Validator pass | Live status |
 |---|---:|---:|---|
-| Lab PDF extraction | 10 | 10 | Schema validation, abnormal flags, multi-page, low-confidence flagging, fabricated-value detection |
-| Intake form extraction | 8 | 8 | Demographics + allergies + medications + medical problems, missing fields, schema-invalid catches |
-| Evidence retrieval | 8 | 8 | Correct guideline cited (JNC 8 / ADA / KDIGO), uncited-claim detection, no-results refusal |
-| Citation contract | 6 | 6 | DocumentReference + guideline + FHIR refs, value-attr mismatch, missing `<cite>` tag |
-| Supervisor routing | 6 | 6 | doc / evidence / W1-preserved / clarify branches, misroute caught |
-| Safe refusal | 6 | 6 | Off-panel patient, unknown patient, no-evidence refusal, unsafe dose, missing refusal phrasing |
-| Regression (W1) | 3 | 3 | W1 brief, panel triage, clarify — verifies Week 1 paths are unchanged |
-| No-PHI-in-logs | 3 | 3 | Trace scanned for known fixture identifiers (DOB, SSN), zero leaks |
-| **Total** | **50** | **50** | — |
-
-The gate is sensitive enough to catch a single-case regression in any boolean category — a 1/10 lab-extraction failure is a 10% drop, which trips the >5% per-category threshold. The grader's "introduce a regression and confirm CI fails" test is wired against this same gate.
+| Lab PDF extraction | 10 | 10 | Awaiting live re-baseline |
+| Intake form extraction | 8 | 8 | Awaiting live re-baseline |
+| Evidence retrieval | 8 | 8 | Awaiting live re-baseline |
+| Citation contract | 6 | 6 | Awaiting live re-baseline |
+| Supervisor routing | 6 | 6 | Awaiting live re-baseline |
+| Safe refusal | 6 | 6 | Awaiting live re-baseline |
+| Regression (W1) | 3 | 3 | Awaiting live re-baseline |
+| No-PHI-in-logs | 3 | 3 | Awaiting live re-baseline |
+| **Total** | **50** | **50 (validator-only)** | — |
 
 The `make eval-full` tier (live VLM on fixture documents) remains available for catching extraction drift; it is not run from the pre-push hook.
 
@@ -186,16 +188,26 @@ Numbers tighten with cache hits (1-hour cache for the long static system prompt 
 
 ## Eval results
 
-Three tiers — smoke (every PR), golden (nightly + on-demand), adversarial (pre-release). Run against the same `create_agent` LangGraph the production `/chat` endpoint uses, with fixture FHIR data so cases are reproducible (`USE_FIXTURE_FHIR=1`). Cases live in `agent/evals/{smoke,golden,adversarial}/*.yaml`; runner is `agent/evals/conftest.py` + `pytest evals/`.
+Three tiers — smoke (every PR), golden (nightly + on-demand), adversarial (pre-release). Run against the same `create_agent` LangGraph the production `/chat` endpoint uses, with fixture FHIR data so cases are reproducible (`USE_FIXTURE_FHIR=1`, now pinned in `agent/evals/conftest.py` so a stripped local `.env` can't silently route the gate at the live API). Cases live in `agent/evals/{smoke,golden,adversarial}/*.yaml`; runner is `agent/evals/conftest.py` + `pytest evals/`.
 
-**Latest run (2026-05-05, `gpt-4o-mini` across classifier/planner/synth):** 12 passed / 32 total. The headline is 37.5%. The per-axis breakdown — and the difference between *blocker* and *quality* failures — is the actual story.
+**Smoke re-run on 2026-05-08:** 3/6 passed (50%) after the conftest pin. That's down from the 2026-05-05 baseline below. Three named regressions were uncovered by the re-run and are tracked as separate issues:
+
+| Case | Failure | Issue |
+|---|---|---|
+| `smoke-002-active-meds` | Required-fact + citation-completeness misses on the medication list path | [`issues/007-restore-smoke-002-active-medications.md`](issues/007-restore-smoke-002-active-medications.md) |
+| `smoke-003-overnight-event` | Misses `DocumentReference/doc-overnight-note` citation in the canonical UC-2 brief | [`issues/008-restore-smoke-003-overnight-event.md`](issues/008-restore-smoke-003-overnight-event.md) |
+| `smoke-004-triage-panel` | Agent skips `run_panel_triage` and fabricates `Observation/_summary=count?...` citations — verifier let the malformed ref through | [`issues/009-restore-smoke-004-triage-panel.md`](issues/009-restore-smoke-004-triage-panel.md) |
+
+Golden + adversarial tiers were not re-run on 2026-05-08; the 2026-05-05 numbers below are stale and likely show similar regressions until the smoke fixes land and the broader tiers are re-run.
+
+**2026-05-05 reference run (`gpt-4o-mini` across classifier/planner/synth):** 12 passed / 32 total. The headline is 37.5%. The per-axis breakdown — and the difference between *blocker* and *quality* failures — is the actual story.
 
 | Tier | Pass | Fail | Total | Pass rate | Gate |
 |---|---:|---:|---:|---:|---|
-| Smoke | 5 | 1 | 6 | 83.3% | 100% (PR-block) |
+| Smoke (2026-05-05) | 5 | 1 | 6 | 83.3% | 100% (PR-block) |
+| Smoke (2026-05-08, post-conftest-pin) | 3 | 3 | 6 | **50.0%** | 100% (PR-block) — currently red |
 | Golden | 4 | 10 | 14 | 28.6% | 80% (release-block) |
 | Adversarial | 3 | 9 | 12 | 25.0% | 0 blockers, 75% quality |
-| **Total** | **12** | **20** | **32** | **37.5%** | — |
 
 ### The per-axis breakdown is what to read
 
