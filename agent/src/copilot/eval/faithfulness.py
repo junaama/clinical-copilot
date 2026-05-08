@@ -234,6 +234,17 @@ _SWEEP_SYSTEM_PROMPT = (
     "are orientation, not independent clinical claims)\n"
     "  - Summary/closing sentences that synthesize already-cited content "
     "(e.g. 'overall the imaging shows stable findings')\n"
+    "  - Counts or totals of items that were already individually cited "
+    "(e.g. 'four active medications', 'three abnormal lab values', "
+    "'the patient is currently on four active medications')\n"
+    "  - Restatements of medication names, lab values, or clinical findings "
+    "that were already individually cited with <cite> tags in earlier lines "
+    "of the response (e.g. if 'Furosemide 40 mg' was cited above, a later "
+    "sentence saying 'He is currently on Furosemide' is a restatement, "
+    "not a new uncited claim)\n"
+    "  - Requests or suggestions for the clinician to verify, review, or "
+    "check something in the chart (e.g. 'Please verify the dosage', "
+    "'additional lab results should be reviewed')\n"
     "  - Claims that are paired with a `<cite ref=\"...\"/>` tag (already "
     "cited claims are out of scope; this sweep only flags UNCITED ones)\n"
     "Reply ONLY with a JSON object of the form "
@@ -308,6 +319,107 @@ def _drop_claims_from_cited_sentences(
         line_after_claim = response_text[start:line_end]
         if _CITE_PATTERN.search(line_after_claim):
             continue
+        kept.append(claim)
+
+    # Second pass: drop claims that restate entities already cited elsewhere
+    # in the response, or that are count/total summaries of cited items.
+    if kept:
+        kept = _drop_claims_restating_cited_entities(response_text, kept)
+    return kept
+
+
+# Regex to split response text into sentence-level segments. Uses both
+# newlines and sentence terminators (". ", "! ", "? ") as boundaries.
+# Sentence-level splitting is critical: a single-line response may mix
+# cited and uncited content (e.g. "BP 90/60 <cite/>. Potassium was 5.8.")
+# and line-level splitting would incorrectly treat all words as "cited".
+_SEGMENT_SPLIT = re.compile(r"\n|(?<=[.!?])\s+")
+
+
+# Common long English words (≥6 chars) that should NOT count as clinical
+# entities for the restatement filter. These appear in clinical prose but
+# are not drug names, lab names, condition names, or other discriminating
+# medical entities. Kept deliberately narrow: better to occasionally miss
+# a restatement (prompt fix catches it) than to drop a real uncited claim.
+_COMMON_LONG_WORDS = frozenset({
+    "active", "additional", "appear", "around", "before", "change",
+    "called", "currently", "during", "either", "follow", "given",
+    "however", "including", "listed", "medications", "normal",
+    "number", "otherwise", "patient", "patients", "please", "recent",
+    "relevant", "report", "result", "results", "review", "showed",
+    "should", "specified", "status", "verified", "verify", "within",
+    "without",
+})
+
+
+# Pattern matching count/total summaries of clinical items. These sentences
+# say "the patient is on N active medications" or "three abnormal labs" etc.
+# The pattern requires a number word/digit followed by a clinical plural noun.
+_COUNT_SUMMARY_RE = re.compile(
+    r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    r"|\d+)\b"
+    r"[^.]{0,40}"
+    r"\b(?:medication|problem|condition|allergi|prescription|lab|vital"
+    r"|abnormal|finding)",
+    re.IGNORECASE,
+)
+
+
+def _entity_words(text: str) -> set[str]:
+    """Extract clinical entity words (≥6 chars, not common English) from text.
+
+    Strips cite tags and markdown bold markers before tokenizing.
+    """
+    cleaned = _CITE_PATTERN.sub("", text).replace("**", "")
+    return {
+        w
+        for w in re.findall(r"[a-zA-Z]+", cleaned.lower())
+        if len(w) >= 6 and w not in _COMMON_LONG_WORDS
+    }
+
+
+def _drop_claims_restating_cited_entities(
+    response_text: str,
+    uncited_claims: list[str],
+) -> list[str]:
+    """Drop flagged claims that restate already-cited content.
+
+    Two complementary heuristics:
+
+    1. **Entity overlap**: Extract clinical entity words (long, non-common words
+       like drug names and lab names) from *cited sentences* — sentences that
+       contain a ``<cite>`` tag. If all entity words in the flagged claim are a
+       subset of cited entity words, the claim restates cited content.
+    2. **Count summary**: If the claim matches a "N active medications" / "three
+       abnormal labs" pattern and the response has multiple cited segments, the
+       claim is a synthesis count.
+
+    Uses sentence-level splitting (not line-level) to correctly handle
+    single-line text where cited and uncited content share one line.
+    """
+    segments = _SEGMENT_SPLIT.split(response_text)
+
+    cited_entity_words: set[str] = set()
+    n_cited_segments = 0
+    for seg in segments:
+        if _CITE_PATTERN.search(seg):
+            n_cited_segments += 1
+            cited_entity_words |= _entity_words(seg)
+
+    if n_cited_segments == 0:
+        return uncited_claims
+
+    kept: list[str] = []
+    for claim in uncited_claims:
+        # Heuristic 1: entity overlap
+        claim_entities = _entity_words(claim)
+        if claim_entities and claim_entities <= cited_entity_words:
+            continue
+
+        # Heuristic 2: count/total summary when multiple items were cited
+        if n_cited_segments >= 2 and _COUNT_SUMMARY_RE.search(claim):
+            continue
+
         kept.append(claim)
     return kept
 
