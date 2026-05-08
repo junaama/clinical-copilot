@@ -34,6 +34,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -72,6 +74,41 @@ _HTTPX_RETRY_TRANSPORT = httpx.AsyncHTTPTransport(retries=3)
 
 _RECOVERY_WINDOW_SECONDS = 60.0
 UPLOAD_LANDED_ID_LOST = "upload_landed_id_lost"
+
+# In-process bytes cache used to short-circuit ``download()`` for documents
+# we *just* uploaded in the same process. Motivation: OpenEMR's Standard-
+# API GET ``/api/patient/{pid}/document/{did}`` route runs through the
+# legacy C_Document UI controller, which leaks UI-side concerns (CSRF
+# token, session wrapper API) into the API path and 500s. While that's
+# being fixed upstream-of-us, we keep the bytes from the upload step and
+# serve them to the very-next ``extract_document`` call without a round
+# trip. Single-replica agent → instance-level dict is fine; capped LRU
+# bounds memory.
+_UPLOAD_CACHE_MAX_ENTRIES: int = 8
+_UPLOAD_CACHE_TTL_SECONDS: float = 60 * 60  # 1 hour
+
+
+@dataclass(frozen=True)
+class _UploadCacheEntry:
+    file_bytes: bytes
+    mimetype: str
+    cached_at: float
+
+
+def _infer_mimetype(file_data: bytes) -> str:
+    """Map a known magic-byte signature to its IANA media type.
+
+    Mirrors the magic-byte check in ``_is_supported_document`` so the
+    download cache returns the same content-type the VLM dispatcher would
+    have inferred from a real OpenEMR response.
+    """
+    if file_data.startswith(_PDF_MAGIC):
+        return "application/pdf"
+    if file_data.startswith(_PNG_MAGIC):
+        return "image/png"
+    if file_data.startswith(_JPEG_MAGIC):
+        return "image/jpeg"
+    return "application/octet-stream"
 
 
 def _is_supported_document(file_data: bytes) -> bool:
@@ -252,6 +289,38 @@ class DocumentClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._client = httpx.AsyncClient(timeout=30.0, transport=_HTTPX_RETRY_TRANSPORT)
+        self._upload_cache: OrderedDict[str, _UploadCacheEntry] = OrderedDict()
+
+    @staticmethod
+    def _cache_key(patient_id: str, document_id: str) -> str:
+        return f"{strip_fhir_prefix(patient_id)}:{strip_fhir_prefix(document_id)}"
+
+    def _cache_set(self, patient_id: str, document_id: str, file_bytes: bytes) -> None:
+        if not document_id:
+            return
+        key = self._cache_key(patient_id, document_id)
+        entry = _UploadCacheEntry(
+            file_bytes=file_bytes,
+            mimetype=_infer_mimetype(file_bytes),
+            cached_at=time.monotonic(),
+        )
+        self._upload_cache[key] = entry
+        self._upload_cache.move_to_end(key)
+        while len(self._upload_cache) > _UPLOAD_CACHE_MAX_ENTRIES:
+            self._upload_cache.popitem(last=False)
+
+    def _cache_get(
+        self, patient_id: str, document_id: str
+    ) -> _UploadCacheEntry | None:
+        key = self._cache_key(patient_id, document_id)
+        entry = self._upload_cache.get(key)
+        if entry is None:
+            return None
+        if time.monotonic() - entry.cached_at > _UPLOAD_CACHE_TTL_SECONDS:
+            self._upload_cache.pop(key, None)
+            return None
+        self._upload_cache.move_to_end(key)
+        return entry
 
     def _resolve_token(self) -> str:
         # Lazy import mirrors StandardApiClient — ``copilot.tools`` imports
@@ -340,6 +409,7 @@ class DocumentClient:
             if _is_bool_given_upload_serializer_failure(response):
                 return await self._recover_landed_upload_id(
                     patient_id=patient_id,
+                    file_data=file_data,
                     category=category,
                     filename=filename,
                     attempted_at=attempted_at,
@@ -354,6 +424,7 @@ class DocumentClient:
         if body is True:
             return await self._recover_landed_upload_id(
                 patient_id=patient_id,
+                file_data=file_data,
                 category=category,
                 filename=filename,
                 attempted_at=attempted_at,
@@ -363,12 +434,15 @@ class DocumentClient:
             return False, None, f"unexpected_response: {type(body).__name__}", latency
 
         doc_id = str(body.get("id") or body.get("pid") or "")
+        if doc_id:
+            self._cache_set(patient_id, doc_id, file_data)
         return True, doc_id or None, None, latency
 
     async def _recover_landed_upload_id(
         self,
         *,
         patient_id: str,
+        file_data: bytes,
         category: str,
         filename: str,
         attempted_at: datetime,
@@ -384,6 +458,7 @@ class DocumentClient:
         )
         total_latency = int((time.monotonic() - started) * 1000)
         if recovered_id:
+            self._cache_set(patient_id, recovered_id, file_data)
             return True, recovered_id, None, total_latency
         _log_upload_recovery_failure(
             patient_id=patient_id,
@@ -465,6 +540,20 @@ class DocumentClient:
         suffix stripped — the VLM dispatcher keys off the bare type.
         """
         started = time.monotonic()
+
+        # Short-circuit on cache hit: skips a broken OpenEMR Standard-API
+        # round trip for documents we *just* uploaded (see _UPLOAD_CACHE
+        # rationale on the module-level constants).
+        cached = self._cache_get(patient_id, document_id)
+        if cached is not None:
+            return (
+                True,
+                cached.file_bytes,
+                cached.mimetype,
+                None,
+                int((time.monotonic() - started) * 1000),
+            )
+
         token = self._resolve_token()
         if not token:
             return (
@@ -497,4 +586,8 @@ class DocumentClient:
 
         raw_ct = response.headers.get("content-type", "application/octet-stream")
         mimetype = raw_ct.split(";", 1)[0].strip()
+        # Populate the cache from a real round trip too — same-conversation
+        # re-extracts (e.g. user re-asks about the same document) avoid a
+        # second hit even before any upload-side path put the bytes there.
+        self._cache_set(patient_id, document_id, response.content)
         return True, response.content, mimetype, None, latency
