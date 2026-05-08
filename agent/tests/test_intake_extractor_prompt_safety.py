@@ -160,6 +160,19 @@ def test_prompt_formats_uploaded_document_answers_as_short_sections() -> None:
     assert "guideline evidence was not retrieved" in lowered
 
 
+def test_prompt_fetches_chart_brief_for_real_document_diff() -> None:
+    """Fresh upload turns should include chart context so "what changed"
+    can be a comparison, not merely a disclaimer.
+    """
+    text = INTAKE_EXTRACTOR_SYSTEM
+    assert "run_per_patient_brief" in text
+    lowered = text.lower()
+    assert "fresh upload sentinel" in lowered
+    assert "chart context" in lowered
+    assert "real" in lowered
+    assert "comparison" in lowered
+
+
 # ---------------------------------------------------------------------------
 # Rubric coverage for the issue-035 scenarios
 #
