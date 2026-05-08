@@ -4,6 +4,7 @@ import AllergyCard from './components/AllergyCard';
 import ProblemListCard from './components/ProblemListCard';
 import MedicationCard from './components/MedicationCard';
 import EncounterHistoryCard from './components/EncounterHistoryCard';
+import CareTeamCard from './components/CareTeamCard';
 
 function getConfig(): PatientDashboardConfig | null {
   return window.__OPENEMR_PATIENT_DASHBOARD__ ?? null;
@@ -68,6 +69,14 @@ export default function App() {
             fhirBaseUrl={config.fhirBaseUrl}
             patientUuid={config.patientUuid}
             webRoot={config.webRoot}
+          />
+          <CareTeamCard
+            fhirBaseUrl={config.fhirBaseUrl}
+            patientUuid={config.patientUuid}
+            webRoot={config.webRoot}
+            csrfToken={config.csrfToken}
+            saveUrl={config.modernDashboardUrl}
+            editConfig={config.careTeamEdit}
           />
         </div>
       </main>
