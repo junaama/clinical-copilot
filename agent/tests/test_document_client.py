@@ -19,9 +19,18 @@ import pytest
 
 from copilot.config import Settings
 from copilot.extraction.document_client import (
+    _UPLOAD_BYTES_CACHE,
     MAX_DOCUMENT_BYTES,
     DocumentClient,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_upload_bytes_cache() -> None:
+    """Module-level cache is shared across DocumentClient instances by
+    design (so the /upload route's client populates a key the chat-tool
+    client can later read). Tests must start clean to avoid bleed."""
+    _UPLOAD_BYTES_CACHE.clear()
 
 
 def _settings() -> Settings:
@@ -847,6 +856,40 @@ async def test_download_caches_result_from_real_http_fetch(
         await client.download("patient-3", "7777")
 
     download_mock.assert_called_once()
+
+
+async def test_download_cache_is_shared_across_documentclient_instances(
+    client: DocumentClient,
+) -> None:
+    """server.py's /upload route binds a DocumentClient on app.state, but
+    tools/__init__.py builds a *separate* DocumentClient when wiring the
+    extraction tools. Both must read from the same bytes cache or the
+    cache is useless on the actual production path."""
+    upload_response = httpx.Response(
+        201,
+        json={"id": "5050"},
+        request=httpx.Request("POST", "http://test/"),
+    )
+    with patch.object(client._client, "post", new_callable=AsyncMock, return_value=upload_response):
+        ok, doc_id, _err, _ms = await client.upload(
+            "patient-shared", PDF_BYTES, "lab.pdf", "lab_pdf"
+        )
+    assert ok is True and doc_id == "5050"
+
+    # Second client built from independent settings, simulating the
+    # extraction-tools wiring path.
+    other_client = DocumentClient(_settings())
+    download_mock = AsyncMock()
+    with patch.object(other_client._client, "get", download_mock):
+        ok, file_bytes, mimetype, err, _ms = await other_client.download(
+            "patient-shared", "5050"
+        )
+
+    assert ok is True
+    assert file_bytes == PDF_BYTES
+    assert mimetype == "application/pdf"
+    assert err is None
+    download_mock.assert_not_called()
 
 
 async def test_download_recovers_cached_bytes_after_bool_true_upload(
