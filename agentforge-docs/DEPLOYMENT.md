@@ -54,19 +54,20 @@ OpenEMR's image entrypoint runs the schema installer on first boot, creates the 
 
 ### Shipping the forked tree
 
-`docker/openemr-railway/Dockerfile` builds **`FROM openemr/openemr:latest`** and then overlays three trees from the local repo on top of the upstream image's copies:
+`docker/openemr-railway/Dockerfile` builds **`FROM openemr/openemr:latest`** and then overlays four trees from the local repo on top of the upstream image's copies:
 
 | Tree | Why it ships |
 |---|---|
 | `src/` | ~766 files diverge from upstream (modern PSR-4 namespace; security and modernization patches throughout) |
 | `library/` | `Document.class.php` and friends carry local extensions like the `$eid` parameter on `createDocument` |
 | `apis/` | Local route definitions read query params (e.g. `?eid=`) the upstream routes don't |
+| `interface/` | Co-evolved with `src/` — e.g. local `SessionWrapperFactory` exposes `getActiveSession()` while upstream exposes `getWrapper()`. Shipping `src/` alone left upstream `globals.php` calling a method the local class doesn't have. |
 
-Staging is mechanical — `scripts/deploy-openemr.sh` does `cp -a $REPO_ROOT/{src,library,apis} docker/openemr-railway/patches/` before each `railway up`. The Dockerfile then `COPY patches/ /var/www/localhost/htdocs/openemr/`, replacing the upstream copies path-for-path.
+Staging is mechanical — `scripts/deploy-openemr.sh` does `cp -a $REPO_ROOT/{src,library,apis,interface} docker/openemr-railway/patches/` before each `railway up`. The Dockerfile then `COPY patches/ /var/www/localhost/htdocs/openemr/`, replacing the upstream copies path-for-path.
 
-**Trees not shipped:** `interface/` (the legacy UI layer, ~69 MB) is intentionally left as upstream. If a UI-level fork divergence surfaces, add a `cp -a` line in `deploy-openemr.sh`.
+**Trees not shipped:** `templates/`, `public/`, `modules/`, `sql/`, and root-level dirs come straight from `openemr/openemr:latest`. If a fork divergence surfaces in any of those, add a `cp -a` line in `deploy-openemr.sh`.
 
-**Tradeoff:** any upstream security patch landing in `src/`, `library/`, or `apis/` after our fork point is masked by the local version. Plan for a periodic rebase against `openemr/openemr:latest` to pull those forward.
+**Tradeoff:** any upstream security patch landing in `src/`, `library/`, `apis/`, or `interface/` after our fork point is masked by the local version. Plan for a periodic rebase against `openemr/openemr:latest` to pull those forward.
 
 **Why not hand-list patched files?** It was tried and produced silent caller/callee signature mismatches every deploy — local controller calling a 4-arg local service via an upstream router that called the local controller with 3 args, etc. Whole-tree shipping eliminates the class.
 

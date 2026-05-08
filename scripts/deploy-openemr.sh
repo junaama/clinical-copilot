@@ -32,15 +32,16 @@ fi
 # tests against.
 #
 # Trees shipped:
-#   src/      — modern PSR-4 (OpenEMR\ namespace), heaviest divergence
-#   library/  — legacy procedural PHP (Document.class.php and friends)
-#   apis/     — Standard REST + FHIR route definitions
-#
-# Tree intentionally NOT shipped:
-#   interface/ — UI layer (~69 MB). Works under upstream code today; if
-#                a UI-level fork divergence surfaces, add a cp -a line
-#                for it here. Adding ~2x to the build context is the
-#                tradeoff to avoid.
+#   src/        — modern PSR-4 (OpenEMR\ namespace), heaviest divergence
+#   library/    — legacy procedural PHP (Document.class.php and friends)
+#   apis/       — Standard REST + FHIR route definitions
+#   interface/  — legacy UI layer; co-evolved with src/ such that the
+#                 local SessionWrapperFactory exposes a different API
+#                 than upstream (getActiveSession() vs upstream's
+#                 getWrapper()). Shipping src/ alone left upstream
+#                 globals.php calling a method the local class doesn't
+#                 have, so login.php fataled with "Call to undefined
+#                 method getWrapper()". Whole-tree pairing is required.
 #
 # Tradeoff: this masks any upstream security patches in src/library/apis
 # under the local versions. Rebase against upstream periodically.
@@ -50,9 +51,10 @@ fi
 PATCHES_DEST="${CTX}/patches"
 rm -rf "${PATCHES_DEST}"
 mkdir -p "${PATCHES_DEST}"
-cp -a "${REPO_ROOT}/src"     "${PATCHES_DEST}/src"
-cp -a "${REPO_ROOT}/library" "${PATCHES_DEST}/library"
-cp -a "${REPO_ROOT}/apis"    "${PATCHES_DEST}/apis"
+cp -a "${REPO_ROOT}/src"       "${PATCHES_DEST}/src"
+cp -a "${REPO_ROOT}/library"   "${PATCHES_DEST}/library"
+cp -a "${REPO_ROOT}/apis"      "${PATCHES_DEST}/apis"
+cp -a "${REPO_ROOT}/interface" "${PATCHES_DEST}/interface"
 echo "==> Staged forked trees: $(find "${PATCHES_DEST}" -type f | wc -l | tr -d ' ') file(s) ($(du -sh "${PATCHES_DEST}" | cut -f1))"
 
 echo "==> Deploying openemr from ${CTX}"
