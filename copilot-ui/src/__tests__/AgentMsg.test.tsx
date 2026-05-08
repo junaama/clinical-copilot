@@ -16,6 +16,18 @@ function makeMsg(block: AgentMessage['block'], streaming = false): AgentMessage 
   return { role: 'agent', block, streaming };
 }
 
+function makeDebugInfo(): NonNullable<AgentMessage['debugInfo']> {
+  return {
+    route: { kind: 'document', label: 'Reading the uploaded document' },
+    workflow_id: 'W-DOC',
+    classifier_confidence: 0.99,
+    diagnostics: {
+      decision: 'allow',
+      supervisor_action: 'synthesize',
+    },
+  };
+}
+
 describe('AgentMsg block dispatch', () => {
   it('renders the cohort block for kind=triage when not streaming', () => {
     render(
@@ -167,6 +179,8 @@ describe('AgentMsg guideline citations (issue 027)', () => {
     const chip = screen.getByText('ADA · 6.5');
     expect(chip).toBeInTheDocument();
     expect(chip.closest('button')?.dataset['card']).toBe('guideline');
+    expect(screen.getByText('guideline')).toBeInTheDocument();
+    expect(screen.getByText('ada-a1c-2024-1')).toBeInTheDocument();
   });
 
   it('passes the guideline citation back to onCite on click', async () => {
@@ -374,6 +388,66 @@ describe('AgentMsg route badge (issue 039)', () => {
     expect(badge).toHaveAttribute('data-route-kind', 'panel');
     expect(badge.textContent).toContain('Reviewing your panel');
     expect(badge.textContent).not.toContain('Reading');
+  });
+});
+
+describe('AgentMsg reviewer trace', () => {
+  it('surfaces route, workflow, decision, supervisor action, and source count', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: {
+        kind: 'plain',
+        lead: 'The uploaded document shows elevated LDL.',
+        citations: [
+          {
+            card: 'documents',
+            label: 'Document · page 1',
+            fhir_ref: 'DocumentReference/2168',
+          },
+        ],
+        followups: [],
+      },
+      streaming: false,
+      route: { kind: 'document', label: 'Reading the uploaded document' },
+      debugInfo: makeDebugInfo(),
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+
+    const trace = screen.getByTestId('agent-reviewer-trace');
+    expect(trace.textContent).toContain('route document');
+    expect(trace.textContent).toContain('W-DOC');
+    expect(trace.textContent).toContain('decision allow');
+    expect(trace.textContent).toContain('synthesize');
+    expect(trace.textContent).toContain('1 source: document');
+    expect(screen.getByText('2168')).toBeInTheDocument();
+  });
+
+  it('keeps the reviewer trace hidden while the answer is streaming', () => {
+    const msg: AgentMessage = {
+      role: 'agent',
+      block: MOCK_PLAIN_BLOCK,
+      streaming: true,
+      route: { kind: 'document', label: 'Reading the uploaded document' },
+      debugInfo: makeDebugInfo(),
+    };
+    render(
+      <AgentMsg
+        message={msg}
+        showCitations
+        onCite={vi.fn()}
+        onFollowup={vi.fn()}
+        onJumpToVitals={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('agent-reviewer-trace')).not.toBeInTheDocument();
   });
 });
 

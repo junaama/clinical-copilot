@@ -470,6 +470,43 @@ body {
 .agent-route[data-route-kind='clarify'] { color: oklch(0.55 0.13 80); }
 .agent-route[data-route-kind='panel'] { color: oklch(0.55 0.13 240); }
 
+.agent-trace {
+  margin: 8px 0 10px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in oklab, var(--accent) 22%, var(--line));
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fff, color-mix(in oklab, var(--accent) 4%, #fff));
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+}
+.agent-trace-kicker {
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink-3);
+  margin-right: 2px;
+}
+.agent-trace-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: oklch(0.985 0.004 280);
+  border: 1px solid var(--line-2);
+  color: var(--ink-2);
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+.agent-trace-pill[data-trace='workflow'],
+.agent-trace-pill[data-trace='decision'],
+.agent-trace-pill[data-trace='supervisor'] {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
 /* issue 042: collapsed Technical details affordance — closed by default
  * (browser default behavior for <details>), visually deemphasized so a
  * clinician's eye skips past it on the answer surface. */
@@ -510,6 +547,27 @@ body {
 }
 .agent-cite:hover { background: color-mix(in oklab, var(--accent) 10%, #fff); color: var(--ink); border-color: color-mix(in oklab, var(--accent) 25%, var(--line)); }
 .agent-cite-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.agent-cite-label {
+  font-weight: 600;
+}
+.agent-cite-card,
+.agent-cite-ref {
+  color: var(--ink-3);
+  font-size: 10px;
+}
+.agent-cite-card::before,
+.agent-cite-ref::before {
+  content: '·';
+  margin-right: 5px;
+  color: var(--ink-3);
+}
+.agent-cite-ref {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* followups */
 .agent-followups { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; padding-left: 2px; }
