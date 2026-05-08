@@ -19,21 +19,41 @@ else
     echo "      Deploying without module update." >&2
 fi
 
-# Stage local patches to upstream OpenEMR PHP. Each patch file mirrors
-# its upstream path under ${CTX}/patches/ so the Dockerfile can COPY
-# the tree onto the image at /var/www/localhost/htdocs/openemr/.
+# Stage forked PHP trees over the upstream openemr image's copies.
+#
+# Why mirror whole trees and not specific files: the local repo forks
+# upstream openemr at every layer (~766 files diverge in src/ alone,
+# many with caller/callee signature changes). Hand-listing files turned
+# every deploy into a whack-a-mole on signature mismatches — e.g.
+# DocumentRestController calling a 4-arg DocumentService::insertAtPath
+# while upstream defines it as 3-arg, or local Document.class.php having
+# an $eid parameter the upstream version lacks. Shipping the whole
+# forked trees guarantees the deployed code matches what the local repo
+# tests against.
+#
+# Trees shipped:
+#   src/      — modern PSR-4 (OpenEMR\ namespace), heaviest divergence
+#   library/  — legacy procedural PHP (Document.class.php and friends)
+#   apis/     — Standard REST + FHIR route definitions
+#
+# Tree intentionally NOT shipped:
+#   interface/ — UI layer (~69 MB). Works under upstream code today; if
+#                a UI-level fork divergence surfaces, add a cp -a line
+#                for it here. Adding ~2x to the build context is the
+#                tradeoff to avoid.
+#
+# Tradeoff: this masks any upstream security patches in src/library/apis
+# under the local versions. Rebase against upstream periodically.
+#
+# See also: agentforge-docs/DEPLOYMENT.md "Shipping the forked tree".
+
 PATCHES_DEST="${CTX}/patches"
 rm -rf "${PATCHES_DEST}"
-mkdir -p "${PATCHES_DEST}/src/Common/Session"
-cp "${REPO_ROOT}/src/Common/Session/SessionConfigurationBuilder.php" \
-   "${PATCHES_DEST}/src/Common/Session/SessionConfigurationBuilder.php"
-mkdir -p "${PATCHES_DEST}/src/Services"
-cp "${REPO_ROOT}/src/Services/DocumentService.php" \
-   "${PATCHES_DEST}/src/Services/DocumentService.php"
-mkdir -p "${PATCHES_DEST}/src/RestControllers"
-cp "${REPO_ROOT}/src/RestControllers/DocumentRestController.php" \
-   "${PATCHES_DEST}/src/RestControllers/DocumentRestController.php"
-echo "==> Staged PHP patches: $(find "${PATCHES_DEST}" -type f | wc -l | tr -d ' ') file(s)"
+mkdir -p "${PATCHES_DEST}"
+cp -a "${REPO_ROOT}/src"     "${PATCHES_DEST}/src"
+cp -a "${REPO_ROOT}/library" "${PATCHES_DEST}/library"
+cp -a "${REPO_ROOT}/apis"    "${PATCHES_DEST}/apis"
+echo "==> Staged forked trees: $(find "${PATCHES_DEST}" -type f | wc -l | tr -d ' ') file(s) ($(du -sh "${PATCHES_DEST}" | cut -f1))"
 
 echo "==> Deploying openemr from ${CTX}"
 railway up \

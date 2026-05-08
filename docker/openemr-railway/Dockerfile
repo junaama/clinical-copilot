@@ -1,14 +1,25 @@
-# Production OpenEMR image extended with the Co-Pilot launcher module.
+# Production OpenEMR image extended with the Co-Pilot launcher module
+# and the local fork's PHP trees (src/, library/, apis/).
 #
-# Stays as close to the upstream image as possible: we only COPY one
-# directory in. Everything else (Apache config, PHP runtime, MySQL wiring,
-# entrypoint script) is unchanged. That means upstream security patches
-# arrive by bumping the FROM tag.
+# Build base is openemr/openemr:latest from Docker Hub. We then overlay:
+#   - oe-module-copilot-launcher/ (the custom module)
+#   - patches/ — a mirror of the local fork's src/, library/, apis/
+#     trees, staged into the build context by scripts/deploy-openemr.sh
+#     before `railway up`. This is intentionally a whole-tree overlay
+#     rather than per-file patches; see the rationale in
+#     scripts/deploy-openemr.sh.
 #
-# Build context is `docker/openemr-railway/` — `oe-module-copilot-launcher/`
-# is staged into the context by `build.sh` before `railway up`. Don't COPY
-# from `interface/modules/...` directly: Railway's CLI uploads only the
-# build context, and reaching above it isn't allowed.
+# Apache config, PHP runtime, MySQL wiring, and the upstream entrypoint
+# come from the FROM image and are unchanged. Upstream security patches
+# in dirs we DON'T overlay (interface/, public/, modules/, sql/, etc.)
+# arrive by bumping the FROM tag. Patches in dirs we DO overlay (src/,
+# library/, apis/) are masked — rebase the local fork against upstream
+# periodically.
+#
+# Build-context constraint: Railway's CLI uploads only the build
+# context, and reaching above it isn't allowed. Don't COPY from
+# `interface/modules/...` or `src/...` directly — they must be staged
+# into docker/openemr-railway/ first by deploy-openemr.sh.
 
 FROM openemr/openemr:latest
 
@@ -22,10 +33,13 @@ FROM openemr/openemr:latest
 COPY --chown=apache:root oe-module-copilot-launcher \
      /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-copilot-launcher
 
-# Layer local patches to upstream OpenEMR PHP on top. The patches/ tree
-# mirrors the upstream layout (patches/src/... → openemr/src/...), staged
-# by scripts/deploy-openemr.sh. Currently fixes session-lock serialization
-# on /apis/ requests by enabling read_and_close for the API session.
+# Overlay the local fork's PHP trees on top of the upstream image. The
+# patches/ directory mirrors openemr's layout — patches/src/...,
+# patches/library/..., patches/apis/... — and is staged by
+# scripts/deploy-openemr.sh before `railway up`. The COPY effectively
+# replaces the upstream src/, library/, and apis/ trees with the local
+# fork's versions so deployed code matches what the local repo tests
+# against (see deploy-openemr.sh for the full rationale).
 COPY --chown=apache:root patches/ /var/www/localhost/htdocs/openemr/
 
 # Install marker bootstrap. The upstream image reruns auto_configure.php
