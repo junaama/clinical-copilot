@@ -18,9 +18,10 @@ from copilot.extraction.schemas import LabResult
 
 pytestmark = pytest.mark.integration
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CHEN_LIPID_FIXTURE = REPO_ROOT / "evals" / "w2" / "fixtures" / "lab_chen_lipid.json"
-SPIKE_MODULE = REPO_ROOT / "scripts" / "spike_fhir_observation_write.py"
+AGENT_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CHEN_LIPID_FIXTURE = AGENT_ROOT / "evals" / "w2" / "fixtures" / "lab_chen_lipid.json"
+SPIKE_MODULE = AGENT_ROOT / "scripts" / "spike_fhir_observation_write.py"
 
 _spec = importlib.util.spec_from_file_location("spike_fhir_observation_write", SPIKE_MODULE)
 assert _spec is not None and _spec.loader is not None
@@ -61,7 +62,10 @@ def test_observation_payload_maps_lab_result_to_value_quantity_and_subject() -> 
     assert payload["effectiveDateTime"] == collection_date
 
 
-def test_missing_live_inputs_names_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_live_inputs_names_required_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     for name in (
         "ANTHROPIC_API_KEY",
         "OPENEMR_FHIR_TOKEN",
@@ -71,11 +75,41 @@ def test_missing_live_inputs_names_required_env(monkeypatch: pytest.MonkeyPatch)
     ):
         monkeypatch.delenv(name, raising=False)
 
-    missing = spike.missing_live_inputs(REPO_ROOT)
+    repo = tmp_path / "repo"
+    (repo / "example-documents" / "lab-results").mkdir(parents=True)
+    (repo / "example-documents" / "lab-results" / "real-lab.pdf").write_bytes(b"%PDF-1.4")
+
+    missing = spike.missing_live_inputs(repo)
 
     assert "ANTHROPIC_API_KEY" in missing
     assert "OPENEMR_FHIR_TOKEN" in missing
     assert "FHIR_OBSERVATION_SPIKE_PATIENT_ID or E2E_PATIENT_UUID" in missing
+
+
+def test_missing_live_inputs_reads_agent_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "OPENEMR_FHIR_TOKEN",
+        "FHIR_OBSERVATION_SPIKE_PATIENT_ID",
+        "E2E_PATIENT_UUID",
+        "E2E_LIVE_HTTP_PATIENT_UUID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("FHIR_OBSERVATION_SPIKE_PATIENT_ID", "live-patient-123")
+
+    repo = tmp_path / "repo"
+    (repo / "agent").mkdir(parents=True)
+    (repo / "example-documents" / "lab-results").mkdir(parents=True)
+    (repo / "example-documents" / "lab-results" / "real-lab.pdf").write_bytes(b"%PDF-1.4")
+    (repo / "agent" / ".env").write_text(
+        "ANTHROPIC_API_KEY=from-agent-env\n"
+        "OPENEMR_FHIR_TOKEN=from-agent-env-token\n"
+    )
+
+    assert spike.missing_live_inputs(repo) == []
 
 
 @pytest.mark.live
