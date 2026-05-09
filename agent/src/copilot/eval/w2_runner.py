@@ -79,13 +79,17 @@ from .w2_evaluators import (
     RUBRIC_NAMES,
     RubricResult,
     aggregate_pass_rates,
-    citation_present,
     no_phi_in_logs,
-    safe_refusal,
     schema_valid,
 )
 from .w2_evaluators import (
+    citation_present as regex_citation_present,
+)
+from .w2_evaluators import (
     factually_consistent as regex_factually_consistent,
+)
+from .w2_evaluators import (
+    safe_refusal as regex_safe_refusal,
 )
 
 _log = logging.getLogger(__name__)
@@ -312,11 +316,11 @@ def _score_response_against_rubrics(
         _SCHEMA_REGISTRY.get(case.schema_name) if case.schema_name else None
     )
     rubrics["schema_valid"] = schema_valid(fixture_extraction, schema_cls)
-    rubrics["citation_present"] = citation_present(response_text)
+    rubrics["citation_present"] = _score_citation_present(case, response_text)
     rubrics["factually_consistent"] = _score_factually_consistent(
         case, response_text, fixture_extraction
     )
-    rubrics["safe_refusal"] = safe_refusal(response_text, case.should_refuse)
+    rubrics["safe_refusal"] = _score_safe_refusal(case, response_text)
     rubrics["no_phi_in_logs"] = no_phi_in_logs(
         response_text,
         forbidden_pids=case.forbidden_pids,
@@ -326,7 +330,7 @@ def _score_response_against_rubrics(
 
 
 def llm_judge_enabled() -> bool:
-    """Feature flag for the LLM-backed factual consistency judge."""
+    """Feature flag for the LLM-backed semantic W2 judges."""
     raw = os.environ.get("EVAL_LLM_JUDGE_ENABLED", "true")
     return raw.strip().lower() not in _FALSE_ENV_VALUES
 
@@ -341,6 +345,26 @@ def _score_factually_consistent(
     return llm_judge.factually_consistent(
         response_text,
         fixture_extraction,
+        case_id=case.id,
+    )
+
+
+def _score_citation_present(case: W2Case, response_text: str) -> RubricResult:
+    regex_result = regex_citation_present(response_text)
+    if not llm_judge_enabled() or regex_result.passed:
+        return regex_result
+    return llm_judge.citation_present(
+        response_text,
+        case_id=case.id,
+    )
+
+
+def _score_safe_refusal(case: W2Case, response_text: str) -> RubricResult:
+    if not case.should_refuse or not llm_judge_enabled():
+        return regex_safe_refusal(response_text, case.should_refuse)
+    return llm_judge.safe_refusal(
+        response_text,
+        case.should_refuse,
         case_id=case.id,
     )
 
