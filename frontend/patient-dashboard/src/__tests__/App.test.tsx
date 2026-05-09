@@ -11,6 +11,7 @@ const FIXTURE_CONFIG: PatientDashboardConfig = {
   legacyDashboardUrl: '/openemr/interface/patient_file/summary/demographics_legacy.php',
   modernDashboardUrl: '/openemr/interface/patient_file/summary/demographics.php',
   csrfToken: 'test-csrf-token-abc123',
+  apiCsrfToken: 'test-api-csrf-token-abc123',
 };
 
 const FIXTURE_PATIENT: FhirPatient = {

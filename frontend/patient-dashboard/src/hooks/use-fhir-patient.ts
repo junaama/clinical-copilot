@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import type { FhirPatient } from '../fhir-types';
+import { fhirRequestInit } from '../fhir-fetch';
 
 export interface UseFhirPatientResult {
   readonly patient: FhirPatient | null;
@@ -35,10 +36,7 @@ export function useFhirPatient(
       try {
         const response = await fetch(
           `${fhirBaseUrl}/Patient/${encodeURIComponent(patientUuid)}`,
-          {
-            credentials: 'same-origin',
-            headers: { Accept: 'application/fhir+json' },
-          },
+          fhirRequestInit(),
         );
 
         if (!response.ok) {

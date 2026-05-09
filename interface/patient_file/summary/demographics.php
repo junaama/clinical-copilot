@@ -102,6 +102,7 @@ $modernDashboardUrl = $summaryDir . '/demographics.php';
 
 // CSRF token for any form submissions.
 $csrfToken = CsrfUtils::collectCsrfToken(session: $session);
+$apiCsrfToken = CsrfUtils::collectCsrfToken($session, 'api');
 
 // ---------------------------------------------------------------
 // Build CareTeam edit metadata (only if user has write ACL).
@@ -229,6 +230,7 @@ $bootConfig = [
     'legacyDashboardUrl' => $legacyDashboardUrl,
     'modernDashboardUrl' => $modernDashboardUrl,
     'csrfToken' => $csrfToken,
+    'apiCsrfToken' => $apiCsrfToken,
 ];
 
 if ($careTeamEditConfig !== null) {

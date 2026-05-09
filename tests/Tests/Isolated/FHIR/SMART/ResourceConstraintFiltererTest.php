@@ -140,6 +140,16 @@ class ResourceConstraintFiltererTest extends TestCase {
         $this->assertFalse($resourceConstraintFilterer->canAccessResource($condition, $httpRestRequest), "Access should be denied for Condition with category problem-list-item");
     }
 
+    public function testCanAccessResourceAllowsLocalApiWithoutRequiredScope(): void
+    {
+        $httpRestRequest = HttpRestRequest::create('/fhir/Condition?patient=patient-uuid', 'GET');
+        $httpRestRequest->setIsLocalApi(true);
+        $condition = $this->createConditionWithCategory('problem-list-item');
+        $resourceConstraintFilterer = new ResourceConstraintFilterer();
+
+        $this->assertTrue($resourceConstraintFilterer->canAccessResource($condition, $httpRestRequest));
+    }
+
     private function createObservationWithCategories(array $array): FHIRObservation
     {
         $observation = new FHIRObservation();

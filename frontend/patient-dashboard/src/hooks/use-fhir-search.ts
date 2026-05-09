@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from 'react';
 import type { FhirBundle } from '../fhir-types';
+import { fhirRequestInit } from '../fhir-fetch';
 
 export interface UseFhirSearchResult<T> {
   readonly bundle: FhirBundle<T> | null;
@@ -36,10 +37,7 @@ export function useFhirSearch<T>(
 
       try {
         const url = `${fhirBaseUrl}/${resourceType}?patient=${encodeURIComponent(patientUuid)}`;
-        const response = await fetch(url, {
-          credentials: 'same-origin',
-          headers: { Accept: 'application/fhir+json' },
-        });
+        const response = await fetch(url, fhirRequestInit());
 
         if (!response.ok) {
           throw new Error(`Failed to load ${resourceType} data (HTTP ${response.status})`);
