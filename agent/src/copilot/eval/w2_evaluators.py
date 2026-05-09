@@ -366,7 +366,7 @@ _PHI_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("ssn_no_dashes", re.compile(r"\b(?<!\d)\d{9}(?!\d)\b")),
     ("dob_labeled", re.compile(r"\b(?:DOB|born)[:\s]+\d{4}-\d{2}-\d{2}", re.I)),
     ("mrn_labeled", re.compile(r"\bMRN[:\s#]+[A-Za-z0-9-]{4,}", re.I)),
-    ("name_labeled", re.compile(r"\b(?:name|patient)[:\s]+[A-Z][a-z]+\s+[A-Z][a-z]+", re.I)),
+    ("name_labeled", re.compile(r"\b(?:name|patient)\s*:\s*[A-Z][a-z]+\s+[A-Z][a-z]+", re.I)),
 ]
 
 

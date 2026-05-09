@@ -310,6 +310,16 @@ def test_no_phi_in_logs_fails_on_named_patient() -> None:
     assert any(f["type"] == "name_labeled" for f in result.details["findings"])
 
 
+def test_no_phi_in_logs_allows_patient_list_refusal_copy() -> None:
+    log = (
+        "I don't see them on your panel. "
+        "Please check the patient list or provide a different name."
+    )
+    result = no_phi_in_logs(log)
+    assert result.passed is True
+    assert result.details["finding_count"] == 0
+
+
 def test_no_phi_in_logs_fails_on_forbidden_pid_substring() -> None:
     log = "trace tool=get_recent_labs patient_uuid=00000000-secret-pid"
     result = no_phi_in_logs(log, forbidden_pids=["00000000-secret-pid"])

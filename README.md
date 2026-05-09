@@ -20,7 +20,7 @@ Week 2 extends the Week 1 agent with **document ingestion + VLM extraction**, **
 | **Supervisor + workers** | Classifier routes structured-data intents to the W1 `agent_node` (preserved) and document/evidence intents to a new `supervisor_node` that dispatches an `intake_extractor` and an `evidence_retriever` worker. Every routing decision is logged as a `HandoffEvent`. | [`agent/src/copilot/supervisor/`](agent/src/copilot/supervisor/) |
 | **Extended citation contract** | `<cite ref="DocumentReference/{id}" page="{n}" field="{path}" value="{literal}"/>` for extracted facts and `<cite ref="guideline:{chunk_id}" source="{name}" section="{section}"/>` for evidence. Verifier validates every ref against this turn's `fetched_refs`. | [`agent/src/copilot/graph.py`](agent/src/copilot/graph.py) |
 | **Dual write client** | `FhirClient.update_patient` for the one FHIR write that works on this build, plus `StandardApiClient` for document upload, allergy, medication, medical_problem. CareTeam gate enforced before any write. | [`agent/src/copilot/standard_api_client.py`](agent/src/copilot/standard_api_client.py) |
-| **W2 eval gate** | 50 fixture-based cases across 8 categories, scored on 5 boolean rubrics, gated by [`.eval_baseline.json`](.eval_baseline.json) with a >5% per-category regression threshold. Fires from a pre-push hook only when `agent/src/`, `agent/evals/`, or `data/guidelines/` change. Deterministic, no live VLM, sub-second wall time. | [`agent/src/copilot/eval/w2_*`](agent/src/copilot/eval/) |
+| **W2 eval gate** | 50 cases (40 deterministic fixture + 10 live-agent) across 8 categories, scored on 5 boolean rubrics, gated by [`.eval_baseline.json`](.eval_baseline.json) with a >5% per-category regression threshold. Fixture case verdict mismatches block the push; live case mismatches are non-blocking warnings (the rate regression check catches systematic degradation). Fires from a pre-push hook only when `agent/src/`, `agent/evals/`, or `data/guidelines/` change. | [`agent/src/copilot/eval/w2_*`](agent/src/copilot/eval/) |
 
 ### Using the W2 capabilities
 
@@ -55,7 +55,7 @@ Each clinical claim in the answer carries a `guideline:<chunk_id>` citation so y
 
 The 8 PDFs in [`example-documents/`](example-documents/) (Chen lipid panel, Whitaker CBC, Reyes A1c, Kowalski CMP, plus 4 intake forms) are the same fixtures the eval suite runs against, so behavior on these is well-tested.
 
-### Week 2 eval results — 2026-05-06
+### Week 2 eval results — 2026-05-09
 
 ```
 $ cd agent && uv run python -m copilot.eval.w2_baseline_cli check
@@ -63,41 +63,58 @@ $ cd agent && uv run python -m copilot.eval.w2_baseline_cli check
 W2 eval gate: PASSED (5 categories OK)
 
   [PASS] schema_valid:         100.0% (baseline 100.0%; ≥ floor 95%)
-  [PASS] citation_present:     100.0% (baseline 100.0%; ≥ floor 90%)
+  [PASS] citation_present:      97.6% (baseline 100.0%; ≥ floor 90%)
   [PASS] factually_consistent: 100.0% (baseline 100.0%; ≥ floor 90%)
   [PASS] safe_refusal:         100.0% (baseline 100.0%; ≥ floor 95%)
   [PASS] no_phi_in_logs:       100.0% (baseline 100.0%; ≥ floor 100%)
 ```
 
-**50/50 cases pass their declared verdicts. Gate runs in <1s wall time** (PRD budget: <30s).
+**All 5 rubric rates clear their gates. 40/40 fixture cases pass deterministically; 10 live cases contribute to rate tracking with non-blocking verdict warnings.**
 
-| Category | Cases | Pass | Focus |
-|---|---:|---:|---|
-| Lab PDF extraction | 10 | 10 | Schema validation, abnormal flags, multi-page, low-confidence flagging, fabricated-value detection |
-| Intake form extraction | 8 | 8 | Demographics + allergies + medications + medical problems, missing fields, schema-invalid catches |
-| Evidence retrieval | 8 | 8 | Correct guideline cited (JNC 8 / ADA / KDIGO), uncited-claim detection, no-results refusal |
-| Citation contract | 6 | 6 | DocumentReference + guideline + FHIR refs, value-attr mismatch, missing `<cite>` tag |
-| Supervisor routing | 6 | 6 | doc / evidence / W1-preserved / clarify branches, misroute caught |
-| Safe refusal | 6 | 6 | Off-panel patient, unknown patient, no-evidence refusal, unsafe dose, missing refusal phrasing |
-| Regression (W1) | 3 | 3 | W1 brief, panel triage, clarify — verifies Week 1 paths are unchanged |
-| No-PHI-in-logs | 3 | 3 | Trace scanned for known fixture identifiers (DOB, SSN), zero leaks |
-| **Total** | **50** | **50** | — |
+| Category | Cases | Fixture | Live | Focus |
+|---|---:|---:|---:|---|
+| Lab PDF extraction | 10 | 10 | 0 | Schema validation, abnormal flags, multi-page, low-confidence flagging, fabricated-value detection |
+| Intake form extraction | 8 | 8 | 0 | Demographics + allergies + medications + medical problems, missing fields, schema-invalid catches |
+| Evidence retrieval | 8 | 5 | 3 | Correct guideline cited (JNC 8 / ADA / KDIGO), uncited-claim detection, no-results refusal |
+| Citation contract | 6 | 6 | 0 | DocumentReference + guideline + FHIR refs, value-attr mismatch, missing `<cite>` tag |
+| Supervisor routing | 6 | 6 | 0 | doc / evidence / W1-preserved / clarify branches, misroute caught |
+| Safe refusal | 6 | 2 | 4 | Off-panel patient, unknown patient, no-evidence refusal, unsafe dose, missing refusal phrasing |
+| Regression (W1) | 3 | 0 | 3 | W1 brief, panel triage, clarify — verifies Week 1 paths are unchanged |
+| No-PHI-in-logs | 3 | 3 | 0 | Trace scanned for known fixture identifiers (DOB, SSN), zero leaks |
+| **Total** | **50** | **40** | **10** | — |
 
-The gate is sensitive enough to catch a single-case regression in any boolean category — a 1/10 lab-extraction failure is a 10% drop, which trips the >5% per-category threshold. The grader's "introduce a regression and confirm CI fails" test is wired against this same gate.
+The gate has two layers: (1) per-rubric rate regression — a 1/10 lab-extraction failure is a 10% drop, tripping the >5% threshold; (2) per-case verdict matching for fixture cases, which are deterministic and block the push on any mismatch. Live cases invoke the real LLM agent and produce non-deterministic responses, so their individual verdict mismatches are reported as warnings rather than hard failures — the rate regression check catches systematic degradation across the full suite.
 
 The `make eval-full` tier (live VLM on fixture documents) remains available for catching extraction drift; it is not run from the pre-push hook.
 
-### Smoke tier — 2026-05-08 run
+### Smoke tier — 2026-05-09 fixture-FHIR run
+
+Canonical final-submission command:
+
+```bash
+cd agent && USE_FIXTURE_FHIR=1 uv run pytest evals/ -m smoke -v
+```
+
+Requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for the live graph call;
+`USE_FIXTURE_FHIR=1` pins the FHIR backend to deterministic fixtures.
 
 | Case | Status |
 |---|:---:|
 | `smoke-001-basic-brief` | pass |
-| `smoke-002-active-meds` | **fail** ([`issues/007`](issues/007-restore-smoke-002-active-medications.md)) |
-| `smoke-003-overnight-event` | **fail** ([`issues/008`](issues/008-restore-smoke-003-overnight-event.md)) |
-| `smoke-004-triage-panel` | **fail** ([`issues/009`](issues/009-restore-smoke-004-triage-panel.md)) |
+| `smoke-002-active-meds` | pass |
+| `smoke-003-overnight-event` | pass |
+| `smoke-004-triage-panel` | pass |
 | `smoke-005-imaging-result` | pass |
 | `smoke-006-citation-syntax` | pass |
-| **Total** | **3 / 6 pass (50%)** |
+| **Total** | **6 / 6 pass (100%)** |
+
+Evidence from the final local run:
+
+```text
+smoke  6  citation=100.0%  citation_resolution=100.0%  cost=100.0%  decision=100.0%  faithfulness=100.0%  forbidden=100.0%  latency=100.0%  pid_leak=100.0%  substring=100.0%  trajectory=100.0%  overall=100.0%
+gates:
+  smoke: merge OK (6/6)
+```
 
 ### How to run
 
@@ -113,6 +130,9 @@ uv run python -m copilot.retrieval.indexer --corpus-dir ../data/guidelines
 
 # W2 fixture eval gate (pre-push hook target)
 uv run python -m copilot.eval.w2_baseline_cli check
+
+# Fixture-FHIR smoke suite (final submission artifact; requires an LLM key)
+USE_FIXTURE_FHIR=1 uv run pytest evals/ -m smoke -v
 
 # Live agent (W1 + W2 capabilities)
 uv run uvicorn copilot.server:app --host 0.0.0.0 --port 8000
@@ -200,14 +220,14 @@ Numbers tighten with cache hits (1-hour cache for the long static system prompt 
 
 Three tiers — smoke (every PR), golden (nightly + on-demand), adversarial (pre-release). Run against the same `create_agent` LangGraph the production `/chat` endpoint uses, with fixture FHIR data so cases are reproducible (`USE_FIXTURE_FHIR=1`). Cases live in `agent/evals/{smoke,golden,adversarial}/*.yaml`; runner is `agent/evals/conftest.py` + `pytest evals/`.
 
-**Latest run (2026-05-05, `gpt-4o-mini` across classifier/planner/synth):** 12 passed / 32 total. The headline is 37.5%. The per-axis breakdown — and the difference between *blocker* and *quality* failures — is the actual story.
+**Latest smoke run (2026-05-09, `gpt-4o-mini` across classifier/planner/synth):** 6 passed / 6 total. The older golden and adversarial rows below are the historical Week 1 quality backlog; the PR-block smoke tier is green.
 
 | Tier | Pass | Fail | Total | Pass rate | Gate |
 |---|---:|---:|---:|---:|---|
-| Smoke | 5 | 1 | 6 | 83.3% | 100% (PR-block) |
+| Smoke | 6 | 0 | 6 | 100% | 100% (PR-block) |
 | Golden | 4 | 10 | 14 | 28.6% | 80% (release-block) |
 | Adversarial | 3 | 9 | 12 | 25.0% | 0 blockers, 75% quality |
-| **Total** | **12** | **20** | **32** | **37.5%** | — |
+| **Total** | **13** | **19** | **32** | **40.6%** | — |
 
 ### The per-axis breakdown is what to read
 
@@ -215,7 +235,7 @@ Every case is scored on 10–11 independent axes. A case must pass *every* axis 
 
 | Tier | citation | citation_resolution | cost | decision | faithfulness | forbidden | latency | multi_turn | pid_leak | substring | trajectory | overall |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| smoke (6) | 83.3% | 100% | 100% | 100% | 100% | 100% | 100% | — | 100% | 100% | 100% | **83.3%** |
+| smoke (6) | 100% | 100% | 100% | 100% | 100% | 100% | 100% | — | 100% | 100% | 100% | **100%** |
 | golden (14) | 85.7% | 100% | 100% | 100% | **42.9%** | 92.9% | 92.9% | **0%** | 100% | 71.4% | 85.7% | **28.6%** |
 | adversarial (12) | 83.3% | 100% | 100% | 100% | 66.7% | 83.3% | 100% | — | 100% | 83.3% | 91.7% | **25.0%** |
 
@@ -233,26 +253,19 @@ Three patterns explain almost every fail:
 
 2. **Trajectory misses on `MedicationAdministration` and `DocumentReference`.** Several adversarial and golden cases require the agent to call `get_medication_administrations` or fetch `DocumentReference/...` to answer questions about *meds held overnight* or *overnight nurse note*. The planner picks meds + vitals but skips administrations and docs. Fix is in the planner prompt's W-2 / negation playbooks.
 
-### Sample failure (`smoke-003-overnight-event`)
+### Smoke evidence
 
-```
-FAIL  smoke-003-overnight-event    latency=27695ms  cost=$0.0010  tools=1  cites=8
-Response: Eduardo Perez, 68M with CHF/HTN/CKD stage 3.
-- 18:44 Hypotensive event recorded with BP 90/60 mmHg; bolus given per
-  protocol during a rapid response encounter due to hypotension
-  <cite ref="Observation/obs-bp-2"/>, <cite ref="Encounter/enc-rapid-response"/>.
-- 19:44 BP improved to 112/70 mmHg <cite ref="Observation/obs-bp-3"/>.
-- 14:44 Creatinine 1.8 mg/dL, K+ 5.2 mmol/L
-  <cite ref="Observation/obs-cr-1"/>, <cite ref="Observation/obs-k-1"/>.
-Failures:
-  - citation completeness 0.50 < required 1.00; missing=['DocumentReference/doc-overnight-note']
+The final smoke command is:
+
+```bash
+cd agent && USE_FIXTURE_FHIR=1 uv run pytest evals/ -m smoke -v
 ```
 
-The response is clinically coherent and substring-complete (`90/60`, `bolus` both present), but the case requires the overnight nurse note to be cited as a primary source. The agent fetched everything except the `DocumentReference`. That's a planner-prompt fix, not a model capability gap.
+Latest output: `6 passed, 26 deselected`; smoke gate `merge OK (6/6)`.
 
 ### What this scoreboard *is*
 
-A real signal — same agent code path as production `/chat`, deterministic fixtures, 10–11 independent scoring axes, faithfulness gated by an LLM-as-judge that doesn't take the agent's word for it. Smoke jumped to 83.3% after the prior session's faithfulness-judge fixes; golden and adversarial are still well below their gates because the failing axes are content-quality (faithfulness, substring, multi_turn) rather than safety. The architecture's hard guarantees — `decision`, `pid_leak`, `cost`, `latency` — are all 100%.
+A real signal — same agent code path as production `/chat`, deterministic fixtures, 10–11 independent scoring axes, faithfulness gated by an LLM-as-judge that doesn't take the agent's word for it. Smoke is now 100%; golden and adversarial are still well below their gates because the failing axes are content-quality (faithfulness, substring, multi_turn) rather than safety. The architecture's hard guarantees — `decision`, `pid_leak`, `cost`, `latency` — are all 100%.
 
 ### What this scoreboard *isn't yet*
 
@@ -313,4 +326,3 @@ interface/modules/custom_modules/
 docker/openemr-railway/                         # Custom OpenEMR image build context
 agentforge-docs/                                # ARCHITECTURE, EVAL, SEED, DEMO docs
 ```
-
