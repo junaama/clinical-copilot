@@ -614,13 +614,17 @@ class FieldWithBBox(BaseModel):
 ### 7.3 CI Gate Implementation
 
 ```
-pre-push git hook (`.git/hooks/pre-push`)
+Committed hook wrapper (`hooks/pre-push`, copied to `.git/hooks/pre-push`)
+         ↓
+Delegate to gate script (`scripts/eval-gate-prepush.sh`)
          ↓
 Check changed files (git diff against remote):
   - If ONLY docs/UI/config changed → skip eval, exit 0
-  - If agent/src/, agent/evals/, or data/guidelines/ changed → run eval
+  - If agent/src/, agent/evals/, agent/tests/, data/guidelines/, or
+    .eval_baseline.json changed → run eval
          ↓
-Run: pytest agent/evals/ -x --timeout=120
+Run: cd agent && uv run --quiet python -m copilot.eval.w2_baseline_cli check
+Run: cd agent && uv run --quiet pytest -q tests/test_graph_integration.py
   - Uses pre-computed fixture extractions (NO live VLM calls)
   - Tests schema validation, citations, factual consistency, refusals, PHI checks
          ↓
@@ -641,8 +645,13 @@ Exit 0 (push proceeds) OR Exit 1 (push blocked)
 
 | Tier | Trigger | VLM calls | Speed | Purpose |
 |------|---------|-----------|-------|---------|
-| `pytest agent/evals/` (gate) | pre-push hook, relevant files only | None — uses fixture extractions | <30s | Block regressions deterministically |
+| `hooks/pre-push` → `scripts/eval-gate-prepush.sh` (gate) | pre-push hook, relevant files only | None — uses fixture extractions | <30s | Block regressions deterministically |
 | `make eval-full` | Manual / scheduled | Live VLM on all fixture docs | ~90s | Catch VLM accuracy drift |
+
+`hooks/pre-push` is the installable source path for the Git hook. It is only a
+thin wrapper: after installation, `.git/hooks/pre-push` execs the committed
+`scripts/eval-gate-prepush.sh` script, which remains the single source of truth
+for changed-file detection and the commands the gate runs.
 
 **Fixture extractions:** Each test case includes a pre-computed extraction JSON (the expected VLM output for that fixture document). The gate tests validate downstream behavior (schema, citations, persistence, refusals) against these fixtures. The `eval-full` target re-runs the VLM and compares against the fixture to detect extraction drift.
 
@@ -650,7 +659,7 @@ Exit 0 (push proceeds) OR Exit 1 (push blocked)
 
 **The grader test:** The PRD says "we will introduce a small regression and confirm your CI gate fails." The gate must be sensitive enough to catch a single-case regression in a 50-case suite (2% drop). The >5% regression threshold applies to the 5 boolean categories independently — a single `factually_consistent` failure in 10 relevant cases is a 10% drop in that category, which trips the gate.
 
-**Relevant-file detection:** The hook runs `git diff --name-only` against the push target. Paths matching `agent/src/**`, `agent/evals/**`, `data/guidelines/**`, or `pyproject.toml` trigger the eval. All other changes (docs, copilot-ui, scripts, docker configs) skip it.
+**Relevant-file detection:** The hook runs `git diff --name-only` against the push target. Paths matching `agent/src/**`, `agent/evals/**`, `agent/tests/**`, `data/guidelines/**`, or `.eval_baseline.json` trigger the eval. All other changes (docs, copilot-ui, scripts, docker configs) skip it.
 
 ### 7.4 Eval Runner Extensions
 
@@ -901,9 +910,9 @@ python -m copilot.retrieval.indexer --corpus-dir ./data/guidelines
 # Run the agent (same as Week 1, new capabilities auto-detected)
 uvicorn copilot.server:app --host 0.0.0.0 --port 8000
 
-# Run the eval suite with the git hook
+# Install the eval gate git hook, then run the eval suite directly if needed
 cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
-pytest agent/evals/ --rubric-report
+cd agent && uv run python -m copilot.eval.w2_baseline_cli check
 ```
 
 Documents are stored in OpenEMR's native document store. Guideline vectors are in the same Postgres already used for state. No additional services to run locally beyond the existing OpenEMR Docker stack.

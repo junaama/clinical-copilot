@@ -73,6 +73,18 @@ the discriminator routing, and the citation-card mapping with no LLM and
 no network calls. The graph-smoke and audit suites cover compilation and
 the per-turn JSONL writer.
 
+## Install the pre-push eval gate
+
+From the repository root:
+
+```bash
+cp hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+```
+
+`hooks/pre-push` is the committed hook wrapper. It delegates to the top-level
+`scripts/eval-gate-prepush.sh` script, which owns changed-file detection and the
+fixture-based W2 gate commands.
+
 ## Run the service locally
 
 ```bash
