@@ -66,6 +66,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,15 +74,18 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
+from . import llm_judge
 from .w2_evaluators import (
     RUBRIC_NAMES,
     RubricResult,
     aggregate_pass_rates,
     citation_present,
-    factually_consistent,
     no_phi_in_logs,
     safe_refusal,
     schema_valid,
+)
+from .w2_evaluators import (
+    factually_consistent as regex_factually_consistent,
 )
 
 _log = logging.getLogger(__name__)
@@ -95,6 +99,8 @@ _log = logging.getLogger(__name__)
 MODE_VALIDATOR_UNIT = "validator_unit"
 MODE_LIVE = "live"
 _SUPPORTED_MODES: frozenset[str] = frozenset({MODE_VALIDATOR_UNIT, MODE_LIVE})
+
+_FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
 # ---------------------------------------------------------------------------
 # Case shape
@@ -307,8 +313,8 @@ def _score_response_against_rubrics(
     )
     rubrics["schema_valid"] = schema_valid(fixture_extraction, schema_cls)
     rubrics["citation_present"] = citation_present(response_text)
-    rubrics["factually_consistent"] = factually_consistent(
-        response_text, fixture_extraction
+    rubrics["factually_consistent"] = _score_factually_consistent(
+        case, response_text, fixture_extraction
     )
     rubrics["safe_refusal"] = safe_refusal(response_text, case.should_refuse)
     rubrics["no_phi_in_logs"] = no_phi_in_logs(
@@ -317,6 +323,26 @@ def _score_response_against_rubrics(
         forbidden_names=case.forbidden_names,
     )
     return rubrics
+
+
+def llm_judge_enabled() -> bool:
+    """Feature flag for the LLM-backed factual consistency judge."""
+    raw = os.environ.get("EVAL_LLM_JUDGE_ENABLED", "true")
+    return raw.strip().lower() not in _FALSE_ENV_VALUES
+
+
+def _score_factually_consistent(
+    case: W2Case,
+    response_text: str,
+    fixture_extraction: dict[str, Any] | None,
+) -> RubricResult:
+    if not llm_judge_enabled():
+        return regex_factually_consistent(response_text, fixture_extraction)
+    return llm_judge.factually_consistent(
+        response_text,
+        fixture_extraction,
+        case_id=case.id,
+    )
 
 
 def _aggregate_case_verdict(

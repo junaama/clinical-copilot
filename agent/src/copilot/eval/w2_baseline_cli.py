@@ -34,9 +34,11 @@ import sys
 from pathlib import Path
 
 from .baseline import detect_regression, load_baseline, render_report, write_baseline
+from .llm_judge import LLMJudgeConfigurationError, ensure_llm_judge_ready
 from .w2_runner import (
     MODE_LIVE,
     compute_pass_rates,
+    llm_judge_enabled,
     load_w2_cases_in_dir,
     register_schema,
     score_w2_cases,
@@ -59,6 +61,8 @@ def _run(repo_root: Path) -> tuple[dict[str, float], int, int]:
     # live W2 personas (dr_lopez etc.) hit live OpenEMR and the
     # CareTeam gate denies every call before the agent can answer.
     os.environ.setdefault("USE_FIXTURE_FHIR", "1")
+    if llm_judge_enabled():
+        ensure_llm_judge_ready()
     register_w2_eval_schemas(register_schema)
     cases = load_w2_cases_in_dir(_eval_dir(repo_root))
     if any(c.mode == MODE_LIVE for c in cases):
@@ -83,7 +87,11 @@ def _run(repo_root: Path) -> tuple[dict[str, float], int, int]:
 
 def cmd_check(repo_root: Path) -> int:
     """Run the gate. Returns ``0`` on pass, ``1`` on regression."""
-    rates, fixture_failures, live_failures = _run(repo_root)
+    try:
+        rates, fixture_failures, live_failures = _run(repo_root)
+    except LLMJudgeConfigurationError as exc:
+        print(f"W2 LLM judge configuration error: {exc}")
+        return 1
     baseline = load_baseline(_baseline_path(repo_root))
     verdict = detect_regression(rates, baseline)
     print(render_report(verdict))
@@ -99,7 +107,11 @@ def cmd_check(repo_root: Path) -> int:
 
 def cmd_write(repo_root: Path) -> int:
     """Persist the current per-rubric rates as the new baseline."""
-    rates, fixture_failures, live_failures = _run(repo_root)
+    try:
+        rates, fixture_failures, live_failures = _run(repo_root)
+    except LLMJudgeConfigurationError as exc:
+        print(f"W2 LLM judge configuration error: {exc}")
+        return 1
     if fixture_failures > 0:
         print(
             f"refusing to write baseline: {fixture_failures} fixture case(s) failed"

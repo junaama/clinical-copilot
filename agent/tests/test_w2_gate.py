@@ -42,8 +42,10 @@ from copilot.eval.w2_schemas import register_w2_eval_schemas
 # Force fixture-FHIR mode for the gate run the same way ``evals/conftest.py``
 # does for smoke/golden — without it, live W2 cases route to live OpenEMR
 # and fail closed on every CareTeam check (W2 personas exist as fixture
-# users only). ``setdefault`` keeps real env vars dominant in CI.
+# users only). The LLM-backed factually_consistent judge has its own targeted
+# tests; this deterministic gate suite preserves the regex baseline behavior.
 os.environ.setdefault("USE_FIXTURE_FHIR", "1")
+os.environ["EVAL_LLM_JUDGE_ENABLED"] = "false"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVAL_DIR = REPO_ROOT / "agent" / "evals" / "w2"
