@@ -93,7 +93,9 @@ markers = [
     "golden: golden tier eval cases (nightly + on-demand)",
     "adversarial: adversarial tier eval cases (pre-release, weekly)",
     "drift: drift tier eval cases (on every model bump)",
+    "integration: integration tests that may exercise cross-module or external-service behavior.",
     "live: end-to-end tests that hit real LLM / Cohere / VLM / OpenEMR. Costs real money per run (~$0.05–$0.20). Opt-in via `pytest -m live`. Skipped by default and by the pre-push gate.",
+    "live_http: deployed HTTP smoke tests that need a manually captured browser session cookie. Opt-in via `pytest -m live_http`.",
 ]
 # ``live`` tests are opt-in — they need real API keys and run for tens of
 # seconds. Default discovery excludes them so the unit + graph-integration
