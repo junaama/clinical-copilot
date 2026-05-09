@@ -542,40 +542,50 @@ Unresolved refs trigger the same regen loop (max 2 attempts → explicit refusal
 
 ### 6.4 PDF Bounding-Box Overlay (Core Requirement)
 
-Bounding boxes are computed **downstream of extraction**, not by the VLM itself:
+Bounding boxes use a **dual-source strategy**: VLM-native coordinates are the primary path; PyMuPDF word-geometry is the validated secondary path.
 
 ```
 PDF
- ├─→ page images → VLM → extracted structured values
- └─→ PyMuPDF page.get_text("dict") → word-level spans with (x, y, w, h)
+ ├─→ page images → VLM → extracted values + per-result vlm_bbox
+ └─→ PyMuPDF page.get_text("words") → word-level spans with (x, y, w, h)
                     ↓
-       Match extracted values against OCR spans (fuzzy string match)
+       Matcher selection: prefer vlm_bbox when valid;
+       fall back to PyMuPDF fuzzy string match otherwise
                     ↓
-       BoundingBox per extracted field
+       FieldWithBBox per extracted field (with bbox_source indicator)
 ```
 
+**VLM-native coordinates (primary):** The VLM extraction prompt instructs the model to return a `vlm_bbox` per lab result row: `{"page": int, "bbox": [x0, y0, x1, y1]}` with each coordinate in `[0, 1]` page-space. When the vlm_bbox is present and passes validation (all coords in `[0, 1]`, non-zero area, plausible placement), it is used directly as the bounding box. This eliminates dependency on a separate geometry-matching step that can drift from the VLM's actual reading order, improving accuracy on rotated and multi-column scans.
+
+**PyMuPDF word-geometry (secondary):** When the VLM does not emit a vlm_bbox (or emits one that fails validation — negative coords, out-of-bounds, zero-area, implausibly small), the matcher falls back to the existing PyMuPDF fuzzy-match path: search OCR word spans for a fuzzy match (normalized Levenshtein distance <= 0.2), with sibling-aware tie-breaking for multi-match disambiguation.
+
 ```python
+class VlmBoundingBox(BaseModel):
+    page: int              # 1-indexed
+    bbox: list[float]      # [x0, y0, x1, y1] in [0, 1] page-space
+
 class BoundingBox(BaseModel):
-    page: int
-    x: float  # normalized 0-1
+    page: int              # 1-indexed
+    x: float               # normalized 0-1
     y: float
     width: float
     height: float
 
 class FieldWithBBox(BaseModel):
-    field_path: str       # e.g. "results[0].value"
-    extracted_value: str  # what the VLM extracted
-    matched_text: str     # the OCR span it matched against
-    bbox: BoundingBox
-    match_confidence: float  # string similarity score (0-1)
+    field_path: str        # e.g. "results[0].value"
+    extracted_value: str   # what the VLM extracted
+    matched_text: str      # the OCR span or VLM-extracted value
+    bbox: BoundingBox      # selected bbox (from vlm or pymupdf)
+    match_confidence: float  # 1.0 for vlm, similarity score for pymupdf
+    bbox_source: str | None  # "vlm" or "pymupdf"
 ```
 
-**Why not VLM-generated coordinates:** Claude's vision does not return positional metadata. Asking the model to estimate pixel coordinates produces hallucinated positions. PyMuPDF's text extraction gives ground-truth word-level geometry for typed/printed text.
+**Validation rules for vlm_bbox:**
+1. All four coordinates in `[0, 1]` range
+2. Non-zero width (`x1 > x0`) and height (`y1 > y0`)
+3. Area >= 1e-6 (rejects implausibly small boxes)
 
-**Matching strategy:**
-1. For each extracted value, search the OCR spans on the same page for a fuzzy match (normalized Levenshtein distance ≤ 0.2).
-2. If multiple matches, prefer the one closest to other matched fields from the same logical group (e.g., a lab result's value near its test name).
-3. If no match found (handwritten text, poor scan), fall back to page-level citation (no bbox, full page highlighted).
+When validation fails, `bbox_source` is set to `"pymupdf"` and the reason is logged for diagnostics.
 
 **UI rendering:**
 - The agent retrieves the PDF from OpenEMR (`GET /api/patient/{pid}/document/{did}`) and serves it to the browser.
@@ -583,6 +593,8 @@ class FieldWithBBox(BaseModel):
 - Bounding boxes are overlaid as absolutely-positioned `<div>` elements with semi-transparent highlight.
 - Clicking a box scrolls the extraction panel to the corresponding field.
 - Fields with no bbox match show a page-level highlight with a "page N" label.
+
+See `agent/src/copilot/extraction/bbox_matcher.py` for the matcher selection logic and `agent/src/copilot/extraction/schemas.py` for the VlmBoundingBox and bbox_source types.
 
 ---
 

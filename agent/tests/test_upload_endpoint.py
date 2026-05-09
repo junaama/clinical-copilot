@@ -745,6 +745,7 @@ def test_upload_response_includes_bboxes_for_lab_pdf(
         "matched_text",
         "bbox",
         "match_confidence",
+        "bbox_source",
     }
     assert first["field_path"] == "results[0].test_name"
     assert first["extracted_value"] == "HbA1c"
