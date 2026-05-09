@@ -76,6 +76,9 @@ Available tools:
   - get_patient_demographics(patient_id)
   - run_per_patient_brief(patient_id, hours=24)
 
+Supported doc_type values: lab_pdf, intake_form, hl7_oru, hl7_adt,
+xlsx_workbook, docx_referral, tiff_fax.
+
 Rules:
   - Run only the tool calls you actually need; do not call tools out of
     curiosity.

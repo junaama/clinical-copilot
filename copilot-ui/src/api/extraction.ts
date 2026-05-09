@@ -116,6 +116,52 @@ export interface ReferralExtraction {
   readonly requested_action: string | null;
 }
 
+export interface AdtMessageMetadata {
+  readonly sending_facility?: string | null;
+  readonly message_type?: string | null;
+  readonly trigger_event?: string | null;
+  readonly message_datetime?: string | null;
+  readonly event_type?: string | null;
+  readonly event_datetime?: string | null;
+  readonly event_reason?: string | null;
+}
+
+export interface AdtPatientDemographics {
+  readonly name?: string | null;
+  readonly dob?: string | null;
+  readonly gender?: string | null;
+  readonly race?: string | null;
+  readonly ethnicity?: string | null;
+  readonly marital_status?: string | null;
+  readonly address?: string | null;
+  readonly phone?: string | null;
+  readonly language?: string | null;
+}
+
+export interface AdtVisit {
+  readonly patient_class?: string | null;
+  readonly location?: string | null;
+  readonly attending_provider?: string | null;
+  readonly referring_provider?: string | null;
+  readonly admission_datetime?: string | null;
+  readonly visit_number?: string | null;
+}
+
+export interface AdtInsurance {
+  readonly company_name?: string | null;
+  readonly member_id?: string | null;
+  readonly plan_id?: string | null;
+  readonly plan_type?: string | null;
+}
+
+export interface AdtExtraction {
+  readonly message_metadata: AdtMessageMetadata;
+  readonly patient_identifiers?: readonly Readonly<Record<string, string>>[];
+  readonly patient_demographics: AdtPatientDemographics;
+  readonly visit?: AdtVisit | null;
+  readonly insurance?: readonly AdtInsurance[];
+}
+
 export type DocType =
   | 'lab_pdf'
   | 'intake_form'
@@ -180,6 +226,8 @@ export interface ExtractionResponse {
   readonly lab: LabExtraction | null;
   readonly intake: IntakeExtraction | null;
   readonly referral?: ReferralExtraction | null;
+  readonly workbook?: unknown | null;
+  readonly adt?: AdtExtraction | null;
   /** User-safe message — never raw exception text. null on success. */
   readonly failure_reason: string | null;
   /**

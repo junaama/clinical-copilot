@@ -35,6 +35,7 @@ import pytest
 from copilot.care_team import AuthDecision, CareTeamGate
 from copilot.extraction.persistence import IntakeWriteSummary
 from copilot.extraction.schemas import (
+    AdtExtraction,
     FieldWithBBox,
     IntakeAllergy,
     IntakeDemographics,
@@ -91,6 +92,8 @@ def _store() -> MagicMock:
     store = MagicMock()
     store.save_lab_extraction = AsyncMock(return_value=42)
     store.save_intake_extraction = AsyncMock(return_value=17)
+    store.save_adt_extraction = AsyncMock(return_value=19)
+    store.save_referral_extraction = AsyncMock(return_value=21)
     store.get_latest_by_document_id = AsyncMock(return_value=None)
     store.get_latest_by_hash = AsyncMock(return_value=None)
     return store
@@ -424,6 +427,55 @@ async def test_extract_document_tiff_fax_uses_visual_lab_path_and_lab_store() ->
     assert result["extraction_id"] == 42
     store.save_lab_extraction.assert_awaited_once()
     assert store.save_lab_extraction.await_args.kwargs["doc_type"] == "tiff_fax"
+
+
+async def test_extract_document_hl7_adt_parses_and_persists_for_discussion_cache() -> None:
+    file_bytes = (
+        b"MSH|^~\\&|ADTAPP|FAC|EHR|FAC|20260506143215||ADT^A08^ADT_A01|MSG-1|P|2.5.1\r"
+        b"EVN|A08|20260506143215||||Medication change recorded\r"
+        b"PID|1||BHS-2847163^^^MRN^MR||Chen^Margaret^L||19680312|F|||"
+        b"2418 CHANNING WAY^^BERKELEY^CA^94704^USA||^PRN^PH^^^510^5550142\r"
+        b"PV1|1|O|BHS IM CLINIC^^^BERKELEY HEALTH||||1234^Park^Helen^M\r"
+    )
+    document_client = _document_client(
+        download=(True, file_bytes, "x-application/hl7-v2+er7", None, 5)
+    )
+    store = _store()
+    tools = {
+        t.name: t
+        for t in make_extraction_tools(
+            gate=_allow_gate(),
+            document_client=document_client,
+            vlm_model=MagicMock(),
+            store=store,
+            persister=_persister(),
+        )
+    }
+
+    result = await tools["extract_document"].ainvoke(
+        {
+            "patient_id": "patient-1",
+            "document_id": "adt-doc-1",
+            "doc_type": "hl7_adt",
+            "filename": "update.hl7",
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["doc_type"] == "hl7_adt"
+    assert result["document_ref"] == "DocumentReference/adt-doc-1"
+    assert result["extraction_id"] == 19
+    assert result["extraction"]["message_metadata"]["trigger_event"] == "A08"
+    assert result["extraction"]["patient_demographics"]["name"] == "Margaret L Chen"
+    assert result["bboxes"] == []
+    store.save_adt_extraction.assert_awaited_once()
+    save_kwargs = store.save_adt_extraction.await_args.kwargs
+    assert isinstance(save_kwargs["extraction"], AdtExtraction)
+    assert save_kwargs["document_id"] == "adt-doc-1"
+    assert save_kwargs["filename"] == "update.hl7"
+    assert save_kwargs["content_sha256"] == hashlib.sha256(file_bytes).hexdigest()
+    store.save_lab_extraction.assert_not_awaited()
+    store.save_intake_extraction.assert_not_awaited()
 
 
 async def test_extract_document_cache_miss_persists_filename_and_content_hash() -> None:
