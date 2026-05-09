@@ -67,7 +67,7 @@ async def extract_document(
     3. Convert PDF pages to images (PyMuPDF).
     4. Extract structured JSON via VLM with strict schema.
     5. Validate extraction against Pydantic schema.
-    6. Persist derived facts as FHIR Observations (labs) or patient record fields (intake).
+    6. Persist derived facts: labs through the OpenEMR lab writer module, intake through FHIR/Standard API writes.
     7. Return extraction result with per-field citation metadata + bounding boxes.
     """
 ```
@@ -90,7 +90,8 @@ Agent stores in OpenEMR via POST /api/patient/{pid}/document?path={category}
          ↓
 Agent retrieves file content for VLM extraction
          ↓
-Extracted facts persisted as FHIR resources (Observation, AllergyIntolerance, etc.)
+Lab facts written to OpenEMR procedure_* tables via the lab writer module
+and read back through local FHIR Observation; intake facts use Patient/Standard API writes
 ```
 
 **Why OpenEMR's native document store:** OpenEMR already has a full document management system — filesystem storage, patient association, category tagging, soft deletes, access control, and a FHIR DocumentReference read surface. Using it means:
@@ -111,18 +112,20 @@ Source document (PDF)
     ┌────┴────┐
     │         │
     ▼         ▼
-Page images   PyMuPDF get_text("dict")
+Page images   PyMuPDF get_text("words")
 (for VLM)     (word-level spans with geometry)
     │         │
     ▼         │
 Claude Sonnet 4 (vision)          │
-with structured output            │
+with structured output + vlm_bbox │
     │                             │
     ▼                             │
 Pydantic schema validation        │
     │                             │
     ▼                             ▼
-Validated extraction ──→ BBox matcher (fuzzy string match)
+Validated extraction ──→ BBox selector
+                       (prefer valid vlm_bbox;
+                        fall back to PyMuPDF fuzzy match)
                                   │
                                   ▼
                     Extraction + per-field bounding boxes
@@ -220,7 +223,7 @@ normalization is unsafe, maps abnormal flags to OpenEMR's
 reference ranges as structured low/high where safe or as the original string
 otherwise.
 
-#### Intake Form (Standard API Writes — MVP)
+#### Intake Form (FHIR + Standard API Writes)
 
 Intake form data uses Standard API endpoints that exist and accept writes:
 
@@ -697,11 +700,12 @@ for changed-file detection and the commands the gate runs.
 
 ### 7.4 Eval Runner Extensions
 
-The existing eval runner (`eval/runner.py`) gains:
-- New evaluator functions for `schema_valid`, `factually_consistent`, `no_phi_in_logs`.
-- Document-extraction test cases that provide a fixture PDF and assert the extraction schema.
+The W2 runner (`agent/src/copilot/eval/w2_runner.py`) wires:
+- Deterministic evaluator functions for `schema_valid`, `factually_consistent`, `safe_refusal`, and `no_phi_in_logs`.
+- LLM-backed semantic judges from `agent/src/copilot/eval/llm_judge.py` for rubric checks that require clinical meaning rather than exact string matching.
+- Document-extraction test cases that provide fixture outputs and assert the extraction schema.
 - Evidence-retrieval test cases that assert the correct guideline chunk is cited.
-- A `--rubric-report` CLI flag that prints the per-category boolean breakdown.
+- CLI reporting through `agent/src/copilot/eval/w2_baseline_cli.py`.
 
 ---
 
@@ -746,7 +750,7 @@ Traces must not contain raw PHI. Enforcement:
 
 ## 9. Week 1 Technical Debt Resolved
 
-Before building Week 2 surface area, these Week 1 issues must be addressed:
+These Week 1 issues were resolved as part of the Week 2 foundation:
 
 | Issue | Resolution | Why Now |
 |-------|-----------|---------|
@@ -851,11 +855,11 @@ The agent Dockerfile adds:
 
 ### 12.4 OpenEMR Write Limitations
 
-**Risk:** OpenEMR's FHIR write surface may not accept all the derived resources we want to create (Observations, AllergyIntolerance, Condition).
+**Risk:** This OpenEMR build does not accept direct FHIR creates for every derived resource, including laboratory Observations.
 
-**Mitigation:** The Week 1 seed loader already demonstrates the hybrid write approach (FHIR for Patient/Practitioner, Standard API for everything else). The same pattern applies here. If a FHIR write fails, fall back to Standard API with the same payload shape. The `create()` method in `FhirClient` encapsulates this fallback.
+**Mitigation:** The completed write path uses the custom OpenEMR module at `interface/modules/custom_modules/oe-module-copilot-lab-writer/` for labs, writing native `procedure_*` rows through `POST /api/patient/:pid/lab_result`. The local Docker round-trip in `agent/tests/integration/test_openemr_lab_result_module_live.py` verifies module write plus FHIR `Observation` read-back. Intake data continues to use the writable Patient FHIR endpoint and existing Standard API endpoints.
 
-**Tradeoff accepted:** Two write paths (FHIR + Standard API) mean two code paths to maintain and test. The alternative — only FHIR writes — would fail silently for unsupported resource types on this OpenEMR build.
+**Tradeoff accepted:** Labs now depend on a small custom OpenEMR module, but the agent writes through a narrow `LabResultPersister` interface and keeps the extracted document row as an audit/retry mirror.
 
 ### 12.5 Single-Vendor VLM
 
@@ -875,8 +879,7 @@ The agent Dockerfile adds:
 - **Real-time OCR on camera capture** — the intake form is an uploaded file, not a live camera feed.
 - **Patient-facing output** — the agent speaks to clinicians, not patients.
 - **Automated order entry based on guidelines** — the evidence retriever surfaces evidence; the clinician decides.
-- **External object store (MinIO/S3)** — OpenEMR's native document store handles upload, storage, and retrieval. No extra infra for MVP.
-- **Standalone lab result persistence** — no API write path exists for Observations in this OpenEMR build. Extracted labs live as document annotations in the agent's Postgres (queryable by the agent, cited in responses, visible in the extraction UI). Post-MVP: custom OpenEMR module to promote labs to `procedure_result` table.
+- **External object store (MinIO/S3)** — OpenEMR's native document store handles upload, storage, and retrieval. No extra infrastructure is required.
 - **Multi-vendor VLM failover** — Anthropic-only for extraction. Swappable via config but no runtime failover logic.
 
 ---
@@ -888,9 +891,13 @@ agent/src/copilot/
   extraction/
     __init__.py
     schemas.py          # LabExtraction, IntakeExtraction, SourceCitation
-    vlm.py              # VLM extraction (PDF → images → structured output)
-    persistence.py      # Write derived facts to OpenEMR
+    vlm.py              # VLM extraction (PDF → images → structured output + vlm_bbox)
+    bbox_matcher.py     # Select valid vlm_bbox first; PyMuPDF fuzzy match fallback
+    lab_persistence.py  # LabResultPersister implementations
     document_client.py  # OpenEMR document API (upload, list, download)
+  eval/
+    llm_judge.py        # Semantic W2 rubric prompts, parsing, cache-key material
+    w2_evaluators.py    # Deterministic schema, PHI, and regression checks
   retrieval/
     __init__.py
     migrate.py          # CREATE EXTENSION vector; CREATE TABLE guideline_chunks
@@ -909,22 +916,27 @@ agent/src/copilot/
     composite.py        # existing 7 composites (moved from tools.py)
     extraction.py       # attach_and_extract, retrieve_evidence
     helpers.py          # shared utilities (_enforce_auth, _result_from_entries, etc.)
+
+interface/modules/custom_modules/oe-module-copilot-lab-writer/
+  # OpenEMR module registering POST /api/patient/:pid/lab_result
+
+hooks/pre-push          # Thin committed wrapper
+scripts/eval-gate-prepush.sh
+  # Single source of truth for pre-push eval gate commands and path filtering
 ```
 
 ---
 
-## 15. Implementation Order
+## 15. Completed Work Summary
 
-| Stage | Deliverable | Dependencies |
-|-------|-------------|-------------|
-| 0. Debt resolution | FHIR write path, VLM model factory, tools split, audit persistence | None |
-| 1. Document ingestion | `attach_and_extract`, Pydantic schemas, VLM extraction, MinIO storage | Stage 0 |
-| 2. Hybrid RAG | Guideline corpus, chunking, ChromaDB index, Cohere rerank | None (parallel with Stage 1) |
-| 3. Supervisor + workers | Supervisor node, intake-extractor, evidence-retriever, handoff logging | Stages 1 + 2 |
-| 4. Eval gate | 50 cases, boolean rubrics, git hook, baseline file | Stage 3 |
-| 5. Integration | UI updates (upload, PDF preview, bounding boxes), deploy, demo video | Stage 4 |
-
-Stages 1 and 2 are independent and can be developed in parallel. Stage 3 composes them. Stage 4 validates the composition. Stage 5 ships it.
+| Area | Completed deliverable | Evidence |
+|------|-----------------------|----------|
+| Document ingestion | `attach_and_extract`, Pydantic schemas, VLM extraction, OpenEMR document storage | `agent/src/copilot/extraction/` |
+| BBox overlay | VLM-native bbox primary path with PyMuPDF fallback | `agent/src/copilot/extraction/bbox_matcher.py`, `schemas.py` |
+| Lab persistence | Custom OpenEMR module writes native lab rows with local FHIR Observation read-back | `interface/modules/custom_modules/oe-module-copilot-lab-writer/`, `agent/tests/integration/test_openemr_lab_result_module_live.py` |
+| Hybrid RAG | Guideline corpus, chunking, pgvector hybrid retrieval, Cohere rerank | `agent/src/copilot/retrieval/` |
+| Supervisor + workers | Supervisor node, intake-extractor, evidence-retriever, handoff logging | `agent/src/copilot/supervisor/` |
+| Eval gate | W2 baseline runner, deterministic checks, LLM semantic judges, committed pre-push wrapper | `agent/src/copilot/eval/llm_judge.py`, `hooks/pre-push`, `scripts/eval-gate-prepush.sh` |
 
 ---
 
