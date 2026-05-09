@@ -18,7 +18,6 @@ from copilot.extraction.document_client import (
     _is_supported_document,
 )
 
-
 # ---------------------------------------------------------------------------
 # Magic-byte fixtures
 # ---------------------------------------------------------------------------
@@ -178,9 +177,9 @@ def upload_client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
 
-    from copilot import server
-
     from contextlib import asynccontextmanager
+
+    from copilot import server
 
     @asynccontextmanager
     async def _stub_open_checkpointer(_settings):

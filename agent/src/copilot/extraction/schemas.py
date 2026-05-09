@@ -24,7 +24,7 @@ Design choices:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -260,6 +260,7 @@ class LabResult(_StrictForbid):
     unit: str = Field(min_length=1)
     reference_range: str | None = None
     collection_date: str | None = None
+    status: str | None = None
     abnormal_flag: AbnormalFlag
     confidence: ExtractionConfidence
     source_citation: SourceCitation
@@ -280,6 +281,10 @@ class LabExtraction(_StrictForbid):
     collection_date: str | None = None
     ordering_provider: str | None = None
     lab_name: str | None = None
+    patient_identifiers: list[dict[str, str]] = Field(default_factory=list)
+    order_context: dict[str, Any] | None = None
+    orders: list[dict[str, Any]] = Field(default_factory=list)
+    notes: list[dict[str, str]] = Field(default_factory=list)
     results: list[LabResult] = Field(default_factory=list)
     source_document_id: str = Field(min_length=1, description="DocumentReference/{id}.")
     extraction_model: str = Field(min_length=1)

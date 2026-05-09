@@ -62,6 +62,7 @@ from .conversations import (
 )
 from .extraction.bbox_matcher import match_extraction_to_bboxes
 from .extraction.document_client import UPLOAD_LANDED_ID_LOST, DocumentClient
+from .extraction.hl7_oru import parse_hl7_oru_lab
 from .extraction.lab_persistence import (
     LabPersistenceResult,
     LabResultPersister,
@@ -1669,37 +1670,54 @@ async def upload(
             filename=filename,
         )
 
-    vlm_model = _resolve_upload_vlm_model(app)
     mimetype = sniffed_mimetype
-    result = await _vlm_extract_document(
-        file_data,
-        mimetype,
-        doc_type,  # type: ignore[arg-type]
-        document_id=f"DocumentReference/{document_id}",
-        model=vlm_model,
-    )
-    if not result.ok or result.extraction is None:
-        _log.warning("upload extraction failed: %s", result.error)
-        return _make_failure_response(
-            status="extraction_failed",
-            requested_type=doc_type,
-            filename=filename,
-            document_id=document_id,
+    if doc_type == "hl7_oru":
+        try:
+            extraction: LabExtraction | IntakeExtraction = parse_hl7_oru_lab(
+                file_data,
+                document_id=f"DocumentReference/{document_id}",
+            )
+        except ValueError as exc:
+            _log.warning("upload HL7 ORU parse failed: %s", exc)
+            return _make_failure_response(
+                status="extraction_failed",
+                requested_type=doc_type,
+                filename=filename,
+                document_id=document_id,
+            )
+        all_bboxes: list[FieldWithBBox] = []
+    else:
+        vlm_model = _resolve_upload_vlm_model(app)
+        result = await _vlm_extract_document(
+            file_data,
+            mimetype,
+            doc_type,  # type: ignore[arg-type]
+            document_id=f"DocumentReference/{document_id}",
+            model=vlm_model,
         )
+        if not result.ok or result.extraction is None:
+            _log.warning("upload extraction failed: %s", result.error)
+            return _make_failure_response(
+                status="extraction_failed",
+                requested_type=doc_type,
+                filename=filename,
+                document_id=document_id,
+            )
+        extraction = result.extraction
 
-    # Compute bboxes once: the cache row stores the full list (including
-    # bbox=None entries for fields the matcher couldn't locate, so future
-    # cache reads can preserve coverage stats); the response only carries
-    # the drawable subset (issue 031).
-    all_bboxes = _compute_upload_bboxes(
-        extraction=result.extraction,
-        file_data=file_data,
-        mimetype=mimetype,
-    )
+        # Compute bboxes once: the cache row stores the full list (including
+        # bbox=None entries for fields the matcher couldn't locate, so future
+        # cache reads can preserve coverage stats); the response only carries
+        # the drawable subset (issue 031).
+        all_bboxes = _compute_upload_bboxes(
+            extraction=extraction,
+            file_data=file_data,
+            mimetype=mimetype,
+        )
 
     await _persist_upload_extraction_cache(
         app,
-        extraction=result.extraction,
+        extraction=extraction,
         bboxes=all_bboxes,
         file_data=file_data,
         doc_type=doc_type,
@@ -1718,7 +1736,6 @@ async def upload(
             patient_id,
         )
 
-    extraction = result.extraction
     extraction_dump = extraction.model_dump(mode="json")
     lab_payload: dict[str, Any] | None = None
     intake_payload: dict[str, Any] | None = None
