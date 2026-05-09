@@ -9,8 +9,8 @@
 # This script is idempotent and safe to invoke from anywhere — it
 # resolves the repo root via ``git rev-parse``.
 #
-# Wire it as ``.git/hooks/pre-push`` via
-# ``scripts/install-eval-gate-hook.sh``.
+# Install it via the committed ``hooks/pre-push`` wrapper; that wrapper
+# delegates here so this script remains the single source of gate logic.
 
 set -euo pipefail
 

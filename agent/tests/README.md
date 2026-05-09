@@ -47,7 +47,8 @@ that pins the agent_node path against false-positive supervisor routing
 and exercises the agent_node contextvar handoff.
 
 The whole suite runs in well under a second and is wired into the W2
-pre-push gate (`scripts/eval-gate-prepush.sh`) so a graph-wiring
+pre-push gate (`hooks/pre-push`, delegating to
+`scripts/eval-gate-prepush.sh`) so a graph-wiring
 regression blocks `git push` on the same trigger as the W2 eval gate.
 
 ## Live end-to-end suite (`test_graph_e2e_live.py`, marker: `live`)
