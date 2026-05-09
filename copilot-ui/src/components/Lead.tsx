@@ -1,10 +1,14 @@
 /**
  * Typewriter render of the block lead. Streams characters at ~14ms cadence,
  * matching the prototype's pacing. When `streaming` flips false, the rest of
- * the block paints in (handled by AgentMsg).
+ * the block paints in (handled by AgentMsg) and the lead swaps to a markdown
+ * render so bold/italics/headings/lists from the model land formatted instead
+ * of as raw `**` and `#` characters.
  */
 
 import { useEffect, useState, type JSX } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface LeadProps {
   readonly text: string;
@@ -32,10 +36,18 @@ export function Lead({ text, streaming }: LeadProps): JSX.Element {
     return () => window.clearInterval(id);
   }, [text, streaming]);
 
+  if (streaming) {
+    return (
+      <p className="agent-lead">
+        {shown}
+        <span className="agent-caret">▍</span>
+      </p>
+    );
+  }
+
   return (
-    <p className="agent-lead">
-      {shown}
-      {streaming && <span className="agent-caret">▍</span>}
-    </p>
+    <div className="agent-lead agent-lead-md">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{shown}</ReactMarkdown>
+    </div>
   );
 }
