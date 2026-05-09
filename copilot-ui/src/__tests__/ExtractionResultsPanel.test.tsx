@@ -88,6 +88,56 @@ function labFixture(): ExtractionResponse {
   };
 }
 
+function labFixtureFor(docType: ExtractionResponse['doc_type']): ExtractionResponse {
+  return {
+    ...labFixture(),
+    requested_type: docType,
+    effective_type: docType,
+    doc_type: docType,
+    filename: `${docType}.dat`,
+  };
+}
+
+function adtFixture(): ExtractionResponse {
+  return {
+    status: 'ok',
+    requested_type: 'hl7_adt',
+    effective_type: 'hl7_adt',
+    discussable: true,
+    failure_reason: null,
+    document_id: 'doc-adt',
+    document_reference: 'DocumentReference/doc-adt',
+    doc_type: 'hl7_adt',
+    filename: 'p01-chen-adt-a08.hl7',
+    lab: null,
+    intake: null,
+    bboxes: [],
+    adt: {
+      message_metadata: {
+        trigger_event: 'A08',
+        event_reason: 'Medication change recorded',
+        sending_facility: 'BERKELEY HLTH SYS',
+      },
+      patient_demographics: {
+        name: 'Margaret L Chen',
+        dob: '1968-03-12T00:00:00',
+        gender: 'F',
+      },
+      visit: {
+        patient_class: 'O',
+        location: 'BHS IM CLINIC - BERKELEY HEALTH',
+        attending_provider: 'Helen M Park',
+      },
+      insurance: [
+        {
+          company_name: 'BLUE SHIELD OF CALIFORNIA PPO',
+          member_id: 'XEH123456789',
+        },
+      ],
+    },
+  };
+}
+
 function intakeFixture(): ExtractionResponse {
   return {
     status: 'ok',
@@ -167,6 +217,30 @@ describe('ExtractionResultsPanel', () => {
     expect(high).toHaveAttribute('data-flag', 'high');
     const critical = screen.getByText('5.8 mmol/L');
     expect(critical).toHaveAttribute('data-flag', 'critical');
+  });
+
+  it.each(['hl7_oru', 'xlsx_workbook', 'tiff_fax'] as const)(
+    'renders lab payloads for non-PDF document type %s',
+    (docType) => {
+      render(<ExtractionResultsPanel extraction={labFixtureFor(docType)} />);
+
+      expect(screen.getByText('Lab results')).toBeInTheDocument();
+      expect(screen.getByText(`${docType}.dat`)).toBeInTheDocument();
+      expect(screen.getByText('Hemoglobin A1c')).toBeInTheDocument();
+      expect(screen.getByText('8.2 %')).toBeInTheDocument();
+    },
+  );
+
+  it('renders HL7 ADT registration and encounter details', () => {
+    render(<ExtractionResultsPanel extraction={adtFixture()} />);
+
+    expect(screen.getByText('HL7 ADT update')).toBeInTheDocument();
+    expect(screen.getByText('p01-chen-adt-a08.hl7')).toBeInTheDocument();
+    expect(screen.getByText('Margaret L Chen')).toBeInTheDocument();
+    expect(screen.getByText('A08')).toBeInTheDocument();
+    expect(screen.getByText('Medication change recorded')).toBeInTheDocument();
+    expect(screen.getByText('BHS IM CLINIC - BERKELEY HEALTH')).toBeInTheDocument();
+    expect(screen.getByText('BLUE SHIELD OF CALIFORNIA PPO')).toBeInTheDocument();
   });
 
   it('shows an empty-state when lab has no results', () => {

@@ -40,6 +40,7 @@ import {
 } from 'react';
 import type {
   AbnormalFlag,
+  AdtExtraction,
   Confidence,
   ExtractionResponse,
   IntakeAllergy,
@@ -101,6 +102,7 @@ export function ExtractionResultsPanel(
   }
   const effectiveType: import('../api/extraction').DocType =
     extraction.effective_type ?? extraction.doc_type;
+  const labLike = isLabDocType(effectiveType);
 
   const sourceCtx: SourceContext = {
     byPath,
@@ -155,7 +157,7 @@ export function ExtractionResultsPanel(
           aria-labelledby="extraction-tab-results"
           data-testid="results-tab-panel"
         >
-          {effectiveType === 'lab_pdf' && extraction.lab ? (
+          {labLike && extraction.lab ? (
             <LabPanel lab={extraction.lab} sourceCtx={sourceCtx} />
           ) : null}
 
@@ -167,7 +169,11 @@ export function ExtractionResultsPanel(
             <ReferralPanel referral={extraction.referral} />
           ) : null}
 
-          {effectiveType === 'lab_pdf' && extraction.lab === null ? (
+          {effectiveType === 'hl7_adt' && extraction.adt ? (
+            <AdtPanel adt={extraction.adt} />
+          ) : null}
+
+          {labLike && extraction.lab === null ? (
             <p className="extraction-panel__empty">
               No lab values were extracted from this document.
             </p>
@@ -180,6 +186,11 @@ export function ExtractionResultsPanel(
           {effectiveType === 'docx_referral' && !extraction.referral ? (
             <p className="extraction-panel__empty">
               No referral fields were extracted from this document.
+            </p>
+          ) : null}
+          {effectiveType === 'hl7_adt' && !extraction.adt ? (
+            <p className="extraction-panel__empty">
+              No ADT details were extracted from this document.
             </p>
           ) : null}
         </div>
@@ -195,11 +206,21 @@ export function ExtractionResultsPanel(
 }
 
 function extractionTitle(docType: import('../api/extraction').DocType): string {
-  if (docType === 'lab_pdf' || docType === 'hl7_oru' || docType === 'xlsx_workbook') {
+  if (isLabDocType(docType)) {
     return 'Lab results';
   }
+  if (docType === 'hl7_adt') return 'HL7 ADT update';
   if (docType === 'docx_referral') return 'Referral letter';
   return 'Intake form';
+}
+
+function isLabDocType(docType: import('../api/extraction').DocType): boolean {
+  return (
+    docType === 'lab_pdf' ||
+    docType === 'hl7_oru' ||
+    docType === 'xlsx_workbook' ||
+    docType === 'tiff_fax'
+  );
 }
 
 interface TabButtonProps {
@@ -723,6 +744,86 @@ function ReferralLabRow({
       </td>
       <td className="extraction-panel__range">{lab.collection_date ?? '-'}</td>
     </tr>
+  );
+}
+
+function AdtPanel({
+  adt,
+}: {
+  readonly adt: AdtExtraction;
+}): JSX.Element {
+  const meta = adt.message_metadata;
+  const demo = adt.patient_demographics;
+  const visit = adt.visit;
+  const insurance = adt.insurance ?? [];
+  return (
+    <div className="extraction-panel__intake">
+      <Section title="Patient" defaultOpen>
+        <dl className="extraction-panel__meta">
+          {demo.name ? <FragmentPair label="Name" value={demo.name} /> : null}
+          {demo.dob ? <FragmentPair label="DOB" value={demo.dob} /> : null}
+          {demo.gender ? <FragmentPair label="Gender" value={demo.gender} /> : null}
+          {demo.phone ? <FragmentPair label="Phone" value={demo.phone} /> : null}
+          {demo.address ? <FragmentPair label="Address" value={demo.address} /> : null}
+        </dl>
+      </Section>
+
+      <Section title="Message" defaultOpen>
+        <dl className="extraction-panel__meta">
+          {meta.trigger_event ? (
+            <FragmentPair label="Trigger" value={meta.trigger_event} />
+          ) : null}
+          {meta.event_reason ? (
+            <FragmentPair label="Reason" value={meta.event_reason} />
+          ) : null}
+          {meta.sending_facility ? (
+            <FragmentPair label="Facility" value={meta.sending_facility} />
+          ) : null}
+          {meta.event_datetime ? (
+            <FragmentPair label="Event time" value={meta.event_datetime} />
+          ) : null}
+        </dl>
+      </Section>
+
+      {visit ? (
+        <Section title="Encounter" defaultOpen>
+          <dl className="extraction-panel__meta">
+            {visit.patient_class ? (
+              <FragmentPair label="Class" value={visit.patient_class} />
+            ) : null}
+            {visit.location ? (
+              <FragmentPair label="Location" value={visit.location} />
+            ) : null}
+            {visit.attending_provider ? (
+              <FragmentPair label="Attending" value={visit.attending_provider} />
+            ) : null}
+            {visit.visit_number ? (
+              <FragmentPair label="Visit" value={visit.visit_number} />
+            ) : null}
+          </dl>
+        </Section>
+      ) : null}
+
+      {insurance.length > 0 ? (
+        <Section title={`Insurance (${insurance.length})`} defaultOpen>
+          <ul className="extraction-panel__list">
+            {insurance.map((plan, i) => (
+              <li key={`${plan.company_name ?? 'plan'}-${i}`}>
+                <span className="extraction-panel__list-primary">
+                  {plan.company_name ?? 'Insurance plan'}
+                </span>
+                {plan.member_id || plan.plan_type ? (
+                  <span className="extraction-panel__list-secondary">
+                    {' '}
+                    {[plan.member_id, plan.plan_type].filter((s) => s).join(' · ')}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+    </div>
   );
 }
 

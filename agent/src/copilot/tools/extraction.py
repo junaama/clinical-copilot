@@ -28,6 +28,7 @@ from langchain_core.tools import StructuredTool
 
 from ..extraction.bbox_matcher import match_extraction_to_bboxes
 from ..extraction.docx_referral import parse_docx_referral
+from ..extraction.hl7_adt import parse_hl7_adt
 from ..extraction.hl7_oru import parse_hl7_oru_lab
 from ..extraction.vlm import extract_document as vlm_extract_document
 from ..extraction.xlsx_workbook import parse_xlsx_workbook
@@ -47,6 +48,7 @@ _VALID_DOC_TYPES: frozenset[str] = frozenset(
         "lab_pdf",
         "intake_form",
         "hl7_oru",
+        "hl7_adt",
         "xlsx_workbook",
         "docx_referral",
         "tiff_fax",
@@ -343,6 +345,16 @@ def make_extraction_tools(
                 return _error_envelope(f"hl7_oru_parse_failed: {exc}", _ms(started))
             bboxes = []
             pages_processed = 0
+        elif doc_type == "hl7_adt":
+            try:
+                extraction = parse_hl7_adt(
+                    file_data,
+                    document_id=f"DocumentReference/{document_id}",
+                )
+            except ValueError as exc:
+                return _error_envelope(f"hl7_adt_parse_failed: {exc}", _ms(started))
+            bboxes = []
+            pages_processed = 0
         elif doc_type == "xlsx_workbook":
             try:
                 workbook, extraction = parse_xlsx_workbook(
@@ -413,6 +425,22 @@ def make_extraction_tools(
                     f"persistence_failed: {exc.__class__.__name__}", _ms(started)
                 )
             intake_summary = None
+        elif doc_type == "hl7_adt":
+            try:
+                save_adt = store.save_adt_extraction
+                extraction_id = await save_adt(
+                    extraction=extraction,
+                    bboxes=bboxes,
+                    document_id=document_id,
+                    patient_id=patient_id,
+                    filename=filename,
+                    content_sha256=resolved_sha256,
+                )
+            except Exception as exc:
+                return _error_envelope(
+                    f"persistence_failed: {exc.__class__.__name__}", _ms(started)
+                )
+            intake_summary = None
         elif doc_type == "docx_referral":
             try:
                 save_referral = store.save_referral_extraction
@@ -476,7 +504,8 @@ def make_extraction_tools(
                 "store for a patient. Returns the document_id you can pass to "
                 "extract_document. Args: patient_id, file_path (absolute path "
                 "on the agent host), doc_type ('lab_pdf', 'intake_form', "
-                "'hl7_oru', 'xlsx_workbook', 'docx_referral', or 'tiff_fax')."
+                "'hl7_oru', 'hl7_adt', 'xlsx_workbook', 'docx_referral', or "
+                "'tiff_fax')."
             ),
         ),
         StructuredTool.from_function(
@@ -500,7 +529,7 @@ def make_extraction_tools(
                 "problems to OpenEMR via the Standard API. Args: patient_id, "
                 "document_id (from attach_document or list_patient_documents), "
                 "doc_type ('lab_pdf', 'intake_form', 'hl7_oru', "
-                "'xlsx_workbook', 'docx_referral', or 'tiff_fax')."
+                "'hl7_adt', 'xlsx_workbook', 'docx_referral', or 'tiff_fax')."
             ),
         ),
     ]
