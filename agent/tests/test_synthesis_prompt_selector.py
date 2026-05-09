@@ -105,6 +105,15 @@ def test_w2_prompt_requires_immediate_atomic_citations() -> None:
     assert "medication-status claims" in lowered
 
 
+def test_w2_prompt_forbids_uncited_stable_summary_values() -> None:
+    prompt = _build("W-2")
+    lowered = prompt.lower()
+    assert "omit the stable summary" in lowered
+    assert "uncited clinical claim" in lowered
+    assert "routine vitals" in lowered
+    assert "routine labs" in lowered
+
+
 def test_w2_prompt_points_to_per_patient_composite() -> None:
     prompt = _build("W-2")
     assert "run_per_patient_brief" in prompt

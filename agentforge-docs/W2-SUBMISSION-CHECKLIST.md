@@ -23,6 +23,7 @@ Companion documents:
 | `runbook/002-deployed-langfuse-measurement.md` | Manual measurement procedure that backs the cost report's "actual numbers" section. |
 | `agent/tests/test_w2_reliability_live_smoke.py` | Automated `live_http` smoke for the four representative flows. |
 | `agent/tests/test_http_e2e_deployed.py` | Automated `live_http` smoke for the upload-id + cache-first chain. |
+| `agent/evals/test_smoke.py` | Canonical six-case fixture-FHIR smoke suite for final submission. |
 | `agent/tests/test_w2_gate.py` | The pinned 50-case W2 eval gate. |
 | `agent/tests/test_graph_integration.py` | The graph-layer regression tier. |
 
@@ -39,6 +40,9 @@ cd agent
   tests/test_w2_gate.py \
   tests/test_w2_gate_regression.py \
   tests/test_graph_integration.py
+
+# Local — canonical fixture-FHIR smoke (requires OPENAI_API_KEY or ANTHROPIC_API_KEY)
+USE_FIXTURE_FHIR=1 uv run pytest evals/ -m smoke -v
 cd ../copilot-ui && npx vitest run
 ```
 
@@ -56,6 +60,9 @@ guideline question → W1 brief regression) against the live demo and
 inspect the four resulting Langfuse traces with the
 field checklist in `runbook/002-deployed-langfuse-measurement.md` §5.
 
+Save the smoke command output as a pre-submit artifact. The expected
+final smoke footer is `smoke: merge OK (6/6)`.
+
 If every box in §3 and §4 ticks, the submission is verified.
 
 ---
@@ -68,9 +75,9 @@ each one is verified:
 | # | Acceptance criterion | Verified by | How to run |
 | --- | --- | --- | --- |
 | AC1 | Lab PDF upload demonstrates extraction + visual source highlight in the deployed app. | Deployed flow §4.1 + `copilot-ui/src/__tests__/ExtractionResultsPanel.test.tsx` ("backend-shaped … rendering" + tab/source CTA cases). | §3.4 (UI vitest) + §4.1 (manual deployed click-through). |
-| AC2 | Intake form upload demonstrates structured extraction + source highlight for at least one important field. | Deployed flow §4.2 + the same vitest suite (`backend-shaped intake rendering (issue 034)` describe block) + automated `live_http` case `test_smoke_intake_upload_then_chat_cites_same_document`. | §3.3 (live_http smoke) + §3.4 (UI vitest) + §4.2 (manual deployed click-through). |
-| AC3 | Post-upload chat answer cites the uploaded `DocumentReference`. | `agent/tests/test_http_e2e_deployed.py` (whole file) + `agent/tests/test_w2_reliability_live_smoke.py::test_smoke_intake_upload_then_chat_cites_same_document` + deployed flow §4.2 trace inspection. | §3.3 (live_http smoke). |
-| AC4 | Guideline question answer cites retrieved guideline chunks. | `agent/tests/test_w2_reliability_live_smoke.py::test_smoke_ada_a1c_question_returns_guideline_citation` + `…_kdigo_ace_arb_…` + the W2 gate's `evidence_retrieval` and `citation_contract` categories (8 + 6 cases). | §3.1 (W2 gate) + §3.3 (live_http smoke) + §4.3 (deployed flow). |
+| AC2 | Intake form upload demonstrates structured extraction + source highlight for at least one important field. | Deployed flow §4.2 + the same vitest suite (`backend-shaped intake rendering (issue 034)` describe block) + automated `live_http` case `test_smoke_intake_upload_then_chat_cites_same_document`. | §3.4 (live_http smoke) + §3.5 (UI vitest) + §4.2 (manual deployed click-through). |
+| AC3 | Post-upload chat answer cites the uploaded `DocumentReference`. | `agent/tests/test_http_e2e_deployed.py` (whole file) + `agent/tests/test_w2_reliability_live_smoke.py::test_smoke_intake_upload_then_chat_cites_same_document` + deployed flow §4.2 trace inspection. | §3.4 (live_http smoke). |
+| AC4 | Guideline question answer cites retrieved guideline chunks. | `agent/tests/test_w2_reliability_live_smoke.py::test_smoke_ada_a1c_question_returns_guideline_citation` + `…_kdigo_ace_arb_…` + the W2 gate's `evidence_retrieval` and `citation_contract` categories (8 + 6 cases). | §3.1 (W2 gate) + §3.4 (live_http smoke) + §4.3 (deployed flow). |
 | AC5 | Langfuse trace shows supervisor routing and worker handoffs for a document or evidence turn. | Deployed inspection per `runbook/002-deployed-langfuse-measurement.md` §5 ("Supervisor handoffs" row of the trace-field checklist) + the `agent_audit` row's `extra.handoff_events` field, asserted under `agent/tests/test_supervisor_*` suites. | §3.2 (graph integration) + §4.4 (Langfuse UI walk). |
 | AC6 | W2 50-case eval gate passes. | `agent/tests/test_w2_gate.py` (5 tests, pinned 50-case fixture set, distribution-locked). | §3.1. |
 | AC7 | Graph integration test layer passes. | `agent/tests/test_graph_integration.py` (the ainvoke-the-real-graph tier). | §3.2. |
@@ -79,11 +86,14 @@ each one is verified:
 
 ---
 
-## 3. Local verification (deterministic, no API keys)
+## 3. Local verification
 
-These steps run on the host without any deployed infrastructure. They
-are the regression tier — if any of them fails on `main`, the
-submission story is broken before the deployed pass even matters.
+These steps run on the host without any deployed infrastructure. The
+W2 gate and graph integration tier are deterministic and keyless; the
+six-case smoke tier uses fixture FHIR but still invokes the live graph,
+so it requires `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. If any of them
+fails on `main`, the submission story is broken before the deployed
+pass even matters.
 
 ### 3.1 W2 50-case eval gate (AC6, partial AC4)
 
@@ -122,7 +132,24 @@ bugs as regression cases — see the issue brief at
 handoff events, and the verifier loop are all observable here without
 opening a browser.
 
-### 3.3 Deployed `live_http` smoke (AC2, AC3, AC4)
+### 3.3 Fixture-FHIR smoke suite (pre-submit artifact)
+
+```bash
+cd agent
+USE_FIXTURE_FHIR=1 uv run pytest evals/ -m smoke -v
+```
+
+**Expected:** all six documented cases pass:
+`smoke-001-basic-brief`, `smoke-002-active-meds`,
+`smoke-003-overnight-event`, `smoke-004-triage-panel`,
+`smoke-005-imaging-result`, and `smoke-006-citation-syntax`.
+The required footer is `smoke: merge OK (6/6)`.
+
+The command uses deterministic fixture FHIR data, not deployed OpenEMR.
+It intentionally requires an LLM key because it exercises the same
+LangGraph agent path as production `/chat`.
+
+### 3.4 Deployed `live_http` smoke (AC2, AC3, AC4)
 
 ```bash
 cd agent
@@ -149,7 +176,7 @@ Cost: ≈ $0.25 per full run (one VLM upload + four chat turns).
 Wall-clock 60-180 s, dominated by the VLM call and one cold-start
 synthesizer turn.
 
-### 3.4 Frontend test suite (AC1, AC2)
+### 3.5 Frontend test suite (AC1, AC2)
 
 ```bash
 cd copilot-ui

@@ -113,8 +113,10 @@ cite the BP value with its Observation and cite the intervention/note
 text with its DocumentReference in the same bullet.
 For medication holds or medication-status claims, cite the held/continued
 status immediately after that phrase and cite the reason separately.
-Group routine vitals and stable findings into a one-line summary at the
-end ("otherwise stable: routine vitals, no new orders since 22:00").
+If you include a stable summary, cite every clinical fact in it inline.
+Routine vitals and routine labs still require their own Observation
+citations even in the summary. Omit the stable summary entirely if it
+would contain any uncited clinical claim.
 Prefer ``run_per_patient_brief`` over chaining the granular reads —
 it fans them out in parallel and is materially faster.
 """
