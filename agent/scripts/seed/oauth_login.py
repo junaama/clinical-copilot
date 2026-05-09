@@ -37,7 +37,6 @@ from pathlib import Path
 import httpx
 import jwt
 
-
 SECRETS_DIR = Path(__file__).parent / "secrets"
 PRIVATE_KEY_PATH = SECRETS_DIR / "private_key.pem"
 REGISTRATION_PATH = SECRETS_DIR / "client_registration.json"
@@ -101,6 +100,22 @@ def _discover_smart(base_url: str) -> dict:
     r = httpx.get(url, timeout=15.0)
     r.raise_for_status()
     return r.json()
+
+
+def _fhir_audience(base_url: str, smart: dict) -> str:
+    """Return the FHIR audience OpenEMR expects on the authorize request.
+
+    The Railway OpenEMR deployment currently advertises
+    ``https://.../apis//fhir`` in SMART metadata, missing the ``default``
+    site segment. Passing that literal issuer as ``aud`` makes OpenEMR reject
+    the request with "Aud parameter did not match authorized server". The
+    canonical FHIR base is stable, so repair only this known malformed shape.
+    """
+
+    issuer = str(smart.get("issuer") or "").strip()
+    if issuer and "/apis//fhir" not in issuer:
+        return issuer
+    return f"{base_url.rstrip('/')}/apis/default/fhir"
 
 
 def _build_client_assertion(client_id: str, private_key: bytes, aud: str) -> str:
@@ -306,14 +321,7 @@ def main() -> int:
     smart = _discover_smart(base_url)
     authorize_endpoint = discovery["authorization_endpoint"]
     token_endpoint = discovery["token_endpoint"]
-    fhir_issuer = smart["issuer"]  # OpenEMR's self-advertised FHIR base — used as `aud`
-
-    # When you POST through Railway HTTPS edge, the URL we hit is https://;
-    # OpenEMR's discovery may still advertise http:// (TLS terminated at edge).
-    # Use the advertised URL for `aud` and for the authorize-URL we hand to
-    # the browser (browser-side this is fine because Railway will redirect
-    # http→https automatically for any human navigation).
-    post_token_url = f"{base_url.rstrip('/')}/oauth2/default/token"
+    fhir_issuer = _fhir_audience(base_url, smart)
 
     code_verifier, code_challenge = _generate_pkce()
     state = _secrets.token_urlsafe(16)
