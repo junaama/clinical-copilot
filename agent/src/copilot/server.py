@@ -1200,7 +1200,15 @@ async def get_conversation_messages(
 # ---------------------------------------------------------------------------
 
 
-_VALID_UPLOAD_DOC_TYPES: frozenset[str] = frozenset({"lab_pdf", "intake_form"})
+_VALID_UPLOAD_DOC_TYPES: frozenset[str] = frozenset({
+    "lab_pdf",
+    "intake_form",
+    "hl7_oru",
+    "hl7_adt",
+    "xlsx_workbook",
+    "docx_referral",
+    "tiff_fax",
+})
 
 # Mirror copilot-ui/src/api/upload.ts so the server-side cap matches the
 # client-side cap. DocumentClient also re-checks at the storage boundary.
@@ -1307,12 +1315,11 @@ def _resolve_upload_extraction_store(req_app: FastAPI) -> Any | None:
 
 def _sniff_mimetype(file_data: bytes, fallback: str | None) -> str:
     """Resolve a mimetype from the raw bytes, falling back to ``fallback``."""
-    if file_data.startswith(b"%PDF-"):
-        return "application/pdf"
-    if file_data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if file_data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
+    from copilot.extraction.document_client import _infer_mimetype as _dc_infer
+
+    sniffed = _dc_infer(file_data)
+    if sniffed != "application/octet-stream":
+        return sniffed
     return fallback or "application/octet-stream"
 
 

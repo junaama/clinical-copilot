@@ -24,6 +24,7 @@ import {
   type JSX,
 } from 'react';
 import {
+  ALLOWED_EXTENSIONS,
   ALLOWED_MIME_TYPES,
   uploadDocument,
   validateFileForUpload,
@@ -67,6 +68,11 @@ type UploadState =
 const DOC_TYPE_LABEL: Record<DocType, string> = {
   lab_pdf: 'Lab PDF',
   intake_form: 'Intake form',
+  hl7_oru: 'HL7 ORU (Lab)',
+  hl7_adt: 'HL7 ADT',
+  xlsx_workbook: 'XLSX Workbook',
+  docx_referral: 'DOCX Referral',
+  tiff_fax: 'TIFF Fax',
 };
 
 export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | null {
@@ -192,28 +198,19 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
       </div>
 
       <div className="upload-widget__doctype">
-        <label>
-          <input
-            type="radio"
-            name="doc_type"
-            value="lab_pdf"
-            checked={docType === 'lab_pdf'}
-            onChange={() => setDocType('lab_pdf')}
-            disabled={disabled}
-          />
-          Lab PDF
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="doc_type"
-            value="intake_form"
-            checked={docType === 'intake_form'}
-            onChange={() => setDocType('intake_form')}
-            disabled={disabled}
-          />
-          Intake form
-        </label>
+        {(Object.keys(DOC_TYPE_LABEL) as DocType[]).map((dt) => (
+          <label key={dt}>
+            <input
+              type="radio"
+              name="doc_type"
+              value={dt}
+              checked={docType === dt}
+              onChange={() => setDocType(dt)}
+              disabled={disabled}
+            />
+            {DOC_TYPE_LABEL[dt]}
+          </label>
+        ))}
       </div>
 
       <div
@@ -244,7 +241,7 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
         <input
           ref={inputRef}
           type="file"
-          accept={ALLOWED_MIME_TYPES.join(',')}
+          accept={[...ALLOWED_MIME_TYPES, ...ALLOWED_EXTENSIONS].join(',')}
           onChange={onPick}
           className="upload-widget__input"
           aria-label="choose document"

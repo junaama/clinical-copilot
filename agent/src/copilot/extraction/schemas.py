@@ -30,7 +30,43 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Closed set of citation sources. Anything outside this list is a programming
 # error, not a runtime input — the supervisor wires sources by hand.
-SourceType = Literal["lab_pdf", "intake_form", "guideline", "fhir_resource"]
+SourceType = Literal[
+    "lab_pdf",
+    "intake_form",
+    "hl7_oru",
+    "hl7_adt",
+    "xlsx_workbook",
+    "docx_referral",
+    "tiff_fax",
+    "guideline",
+    "fhir_resource",
+]
+
+# Physical file format (how bytes are decoded). Separate from document kind
+# so a lab arriving as HL7 ORU, XLSX row, or TIFF fax can share downstream
+# clinical behavior without pretending they are the same physical format.
+SourceFormat = Literal[
+    "pdf",
+    "png",
+    "jpeg",
+    "tiff",
+    "docx",
+    "xlsx",
+    "hl7",
+]
+
+# Clinical document intent (what the document means). A superset of the
+# legacy ``doc_type`` values used by upload callers.  Legacy ``lab_pdf``
+# and ``intake_form`` remain valid so existing callers don't break.
+DocumentKind = Literal[
+    "lab_pdf",
+    "intake_form",
+    "hl7_oru",
+    "hl7_adt",
+    "xlsx_workbook",
+    "docx_referral",
+    "tiff_fax",
+]
 
 # Lab-result clinical interpretation. ``unknown`` is the explicit fallback
 # when the document neither labels nor implies an interpretation, rather

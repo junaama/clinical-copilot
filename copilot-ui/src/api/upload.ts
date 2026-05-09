@@ -13,6 +13,23 @@ export const ALLOWED_MIME_TYPES: readonly string[] = [
   'application/pdf',
   'image/png',
   'image/jpeg',
+  'image/tiff',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'x-application/hl7-v2+er7',
+];
+
+/** File extensions accepted by the file picker (for browser ``accept``). */
+export const ALLOWED_EXTENSIONS: readonly string[] = [
+  '.pdf',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.tiff',
+  '.tif',
+  '.docx',
+  '.xlsx',
+  '.hl7',
 ];
 
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -69,17 +86,27 @@ export function validateFileForUpload(file: File): ValidationError | null {
   if (file.type && !ALLOWED_MIME_TYPES.includes(file.type)) {
     return {
       code: 'invalid_type',
-      detail: 'Only PDF, PNG, and JPEG files are supported.',
+      detail:
+        'Supported formats: PDF, PNG, JPEG, TIFF, DOCX, XLSX, and HL7.',
     };
   }
   if (!file.type) {
     const lower = file.name.toLowerCase();
-    const ok = lower.endsWith('.pdf') || lower.endsWith('.png') ||
-      lower.endsWith('.jpg') || lower.endsWith('.jpeg');
+    const ok =
+      lower.endsWith('.pdf') ||
+      lower.endsWith('.png') ||
+      lower.endsWith('.jpg') ||
+      lower.endsWith('.jpeg') ||
+      lower.endsWith('.tiff') ||
+      lower.endsWith('.tif') ||
+      lower.endsWith('.docx') ||
+      lower.endsWith('.xlsx') ||
+      lower.endsWith('.hl7');
     if (!ok) {
       return {
         code: 'invalid_type',
-        detail: 'Only PDF, PNG, and JPEG files are supported.',
+        detail:
+          'Supported formats: PDF, PNG, JPEG, TIFF, DOCX, XLSX, and HL7.',
       };
     }
   }
@@ -172,8 +199,8 @@ function parseMismatchDetail(bodyText: string): DocTypeMismatch | null {
   const detected = d['detected_type'];
   const confidence = d['confidence'];
   if (
-    (requested !== 'lab_pdf' && requested !== 'intake_form') ||
-    (detected !== 'lab_pdf' && detected !== 'intake_form') ||
+    !_isValidDocType(requested) ||
+    !_isValidDocType(detected) ||
     (confidence !== 'high' && confidence !== 'medium' && confidence !== 'low')
   ) {
     return null;
@@ -220,10 +247,7 @@ function isExtractionResponse(x: unknown): x is ExtractionResponse {
     status === 'unauthorized';
   if (!validStatus) return false;
   if (typeof obj['discussable'] !== 'boolean') return false;
-  if (
-    obj['requested_type'] !== 'lab_pdf' &&
-    obj['requested_type'] !== 'intake_form'
-  ) {
+  if (!_isValidDocType(obj['requested_type'])) {
     return false;
   }
   // ``bboxes`` is the issue-031 drawable-only contract: must be an array
@@ -234,7 +258,19 @@ function isExtractionResponse(x: unknown): x is ExtractionResponse {
   if (bboxes !== undefined && !Array.isArray(bboxes)) return false;
   return (
     (obj['document_id'] === null || typeof obj['document_id'] === 'string') &&
-    (obj['doc_type'] === 'lab_pdf' || obj['doc_type'] === 'intake_form') &&
+    _isValidDocType(obj['doc_type']) &&
     typeof obj['filename'] === 'string'
+  );
+}
+
+function _isValidDocType(value: unknown): value is DocType {
+  return (
+    value === 'lab_pdf' ||
+    value === 'intake_form' ||
+    value === 'hl7_oru' ||
+    value === 'hl7_adt' ||
+    value === 'xlsx_workbook' ||
+    value === 'docx_referral' ||
+    value === 'tiff_fax'
   );
 }

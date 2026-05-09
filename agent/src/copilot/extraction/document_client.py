@@ -53,6 +53,10 @@ MAX_DOCUMENT_BYTES: int = 20 * 1024 * 1024
 _PDF_MAGIC = b"%PDF-"
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _JPEG_MAGIC = b"\xff\xd8\xff"
+_TIFF_LE_MAGIC = b"II\x2a\x00"  # Little-endian TIFF
+_TIFF_BE_MAGIC = b"MM\x00\x2a"  # Big-endian TIFF
+_OOXML_MAGIC = b"PK\x03\x04"   # ZIP-based (DOCX, XLSX)
+_HL7_MAGIC = b"MSH|"            # HL7 v2 message segment header
 
 # OpenEMR's Standard API document upload routes the category through
 # ``?path=<category-name>`` (see ``apis/routes/_rest_routes_standard.inc.php``
@@ -65,6 +69,11 @@ _DEFAULT_CATEGORY_PATH = "Medical Record"
 _DOC_TYPE_TO_CATEGORY_PATH: dict[str, str] = {
     "lab_pdf": "Lab Report",
     "intake_form": "Medical Record",
+    "hl7_oru": "Lab Report",
+    "hl7_adt": "Medical Record",
+    "xlsx_workbook": "Medical Record",
+    "docx_referral": "Medical Record",
+    "tiff_fax": "Medical Record",
 }
 
 # Same retry transport contract used by FhirClient / StandardApiClient: 3
@@ -120,17 +129,55 @@ def _infer_mimetype(file_data: bytes) -> str:
         return "image/png"
     if file_data.startswith(_JPEG_MAGIC):
         return "image/jpeg"
+    if file_data.startswith((_TIFF_LE_MAGIC, _TIFF_BE_MAGIC)):
+        return "image/tiff"
+    if file_data.startswith(_OOXML_MAGIC):
+        return _infer_ooxml_mimetype(file_data)
+    if file_data.startswith(_HL7_MAGIC):
+        return "x-application/hl7-v2+er7"
     return "application/octet-stream"
 
 
-def _is_supported_document(file_data: bytes) -> bool:
-    """Return True iff ``file_data`` starts with a PDF/PNG/JPEG magic-byte sequence."""
+def _infer_ooxml_mimetype(file_data: bytes) -> str:
+    """Distinguish DOCX from XLSX inside an OOXML (PK) archive.
+
+    The ZIP central directory contains path entries like ``word/`` for DOCX
+    or ``xl/`` for XLSX. We scan the first 4 KB for these markers rather
+    than fully parsing the ZIP to keep the check fast and allocation-free.
+    """
+    header = file_data[:4096]
+    if b"word/" in header:
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    if b"xl/" in header:
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    # Fallback: generic OOXML; callers can refine via extension.
+    return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _is_supported_document(file_data: bytes, *, filename: str = "") -> bool:
+    """Return True iff ``file_data`` starts with a recognized magic-byte sequence.
+
+    Supports PDF, PNG, JPEG, TIFF, OOXML (DOCX/XLSX), and HL7 v2 messages.
+    For HL7 text messages where magic bytes alone are weak, the filename
+    extension is used as a supplementary signal.
+    """
     if file_data.startswith(_PDF_MAGIC):
         return True
     if file_data.startswith(_PNG_MAGIC):
         return True
     if file_data.startswith(_JPEG_MAGIC):
         return True
+    if file_data.startswith((_TIFF_LE_MAGIC, _TIFF_BE_MAGIC)):
+        return True
+    if file_data.startswith(_OOXML_MAGIC):
+        return True
+    if file_data.startswith(_HL7_MAGIC):
+        return True
+    # Extension fallback for HL7 files that may start with whitespace or BOM.
+    if filename and filename.lower().endswith(".hl7"):
+        stripped = file_data.lstrip(b"\xef\xbb\xbf \t\r\n")
+        if stripped.startswith(_HL7_MAGIC):
+            return True
     return False
 
 
@@ -380,7 +427,7 @@ class DocumentClient:
 
         if len(file_data) > MAX_DOCUMENT_BYTES:
             return False, None, "file_too_large", int((time.monotonic() - started) * 1000)
-        if not _is_supported_document(file_data):
+        if not _is_supported_document(file_data, filename=filename):
             return False, None, "invalid_file_type", int((time.monotonic() - started) * 1000)
 
         token = self._resolve_token()

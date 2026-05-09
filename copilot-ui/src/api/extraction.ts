@@ -91,7 +91,14 @@ export interface IntakeExtraction {
   readonly social_history: SocialHistory | null;
 }
 
-export type DocType = 'lab_pdf' | 'intake_form';
+export type DocType =
+  | 'lab_pdf'
+  | 'intake_form'
+  | 'hl7_oru'
+  | 'hl7_adt'
+  | 'xlsx_workbook'
+  | 'docx_referral'
+  | 'tiff_fax';
 
 /**
  * Drawable-only bbox record (issue 031).
