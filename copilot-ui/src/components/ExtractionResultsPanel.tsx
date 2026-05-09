@@ -46,6 +46,8 @@ import type {
   IntakeMedication,
   LabExtraction,
   LabResult,
+  ReferralExtraction,
+  ReferralLab,
   UploadBboxRecord,
 } from '../api/extraction';
 import { renderPdfPageToCanvas } from '../lib/pdfRenderer';
@@ -114,7 +116,7 @@ export function ExtractionResultsPanel(
       <header className="extraction-panel__header">
         <div>
           <h3 className="extraction-panel__title">
-            {effectiveType === 'lab_pdf' ? 'Lab results' : 'Intake form'}
+            {extractionTitle(effectiveType)}
           </h3>
           <span className="extraction-panel__filename">
             {extraction.filename}
@@ -161,6 +163,10 @@ export function ExtractionResultsPanel(
             <IntakePanel intake={extraction.intake} sourceCtx={sourceCtx} />
           ) : null}
 
+          {effectiveType === 'docx_referral' && extraction.referral ? (
+            <ReferralPanel referral={extraction.referral} />
+          ) : null}
+
           {effectiveType === 'lab_pdf' && extraction.lab === null ? (
             <p className="extraction-panel__empty">
               No lab values were extracted from this document.
@@ -169,6 +175,11 @@ export function ExtractionResultsPanel(
           {effectiveType === 'intake_form' && extraction.intake === null ? (
             <p className="extraction-panel__empty">
               No intake form fields were extracted from this document.
+            </p>
+          ) : null}
+          {effectiveType === 'docx_referral' && !extraction.referral ? (
+            <p className="extraction-panel__empty">
+              No referral fields were extracted from this document.
             </p>
           ) : null}
         </div>
@@ -181,6 +192,14 @@ export function ExtractionResultsPanel(
       )}
     </aside>
   );
+}
+
+function extractionTitle(docType: import('../api/extraction').DocType): string {
+  if (docType === 'lab_pdf' || docType === 'hl7_oru' || docType === 'xlsx_workbook') {
+    return 'Lab results';
+  }
+  if (docType === 'docx_referral') return 'Referral letter';
+  return 'Intake form';
 }
 
 interface TabButtonProps {
@@ -536,6 +555,174 @@ function AllergyRow({
       ) : null}
       <SourceCta fieldPath={fieldPath} sourceCtx={sourceCtx} />
     </li>
+  );
+}
+
+function ReferralPanel({
+  referral,
+}: {
+  readonly referral: ReferralExtraction;
+}): JSX.Element {
+  const identifiers = Object.entries(referral.patient_identifiers);
+  return (
+    <div className="extraction-panel__intake">
+      <Section title="Referral" defaultOpen>
+        <dl className="extraction-panel__meta">
+          {referral.referring_provider ? (
+            <>
+              <dt>From</dt>
+              <dd>{referral.referring_provider}</dd>
+            </>
+          ) : null}
+          {referral.referring_organization ? (
+            <>
+              <dt>Organization</dt>
+              <dd>{referral.referring_organization}</dd>
+            </>
+          ) : null}
+          {referral.receiving_provider ? (
+            <>
+              <dt>To</dt>
+              <dd>{referral.receiving_provider}</dd>
+            </>
+          ) : null}
+          {referral.receiving_organization ? (
+            <>
+              <dt>Receiving org</dt>
+              <dd>{referral.receiving_organization}</dd>
+            </>
+          ) : null}
+        </dl>
+      </Section>
+
+      <Section title="Patient" defaultOpen>
+        <dl className="extraction-panel__meta">
+          {referral.patient_name ? (
+            <>
+              <dt>Name</dt>
+              <dd>{referral.patient_name}</dd>
+            </>
+          ) : null}
+          {referral.patient_dob ? (
+            <>
+              <dt>DOB</dt>
+              <dd>{referral.patient_dob}</dd>
+            </>
+          ) : null}
+          {identifiers.map(([key, value]) => (
+            <FragmentPair key={key} label={key} value={value} />
+          ))}
+        </dl>
+      </Section>
+
+      {referral.reason_for_referral ? (
+        <Section title="Reason" defaultOpen>
+          <p className="extraction-panel__cc">{referral.reason_for_referral}</p>
+        </Section>
+      ) : null}
+
+      {referral.pertinent_history ? (
+        <Section title="Pertinent history">
+          <p className="extraction-panel__cc">{referral.pertinent_history}</p>
+        </Section>
+      ) : null}
+
+      <ReferralList title="Medical history" items={referral.past_medical_history} />
+      <ReferralList title="Medications" items={referral.current_medications} />
+      <ReferralList title="Allergies" items={referral.allergies} emptyText="None reported." />
+
+      {referral.pertinent_labs.length > 0 ? (
+        <Section title={`Pertinent labs (${referral.pertinent_labs.length})`}>
+          <table className="extraction-panel__table">
+            <thead>
+              <tr>
+                <th scope="col">Test</th>
+                <th scope="col">Value</th>
+                <th scope="col">Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {referral.pertinent_labs.map((lab, i) => (
+                <ReferralLabRow key={`${lab.name}-${i}`} lab={lab} />
+              ))}
+            </tbody>
+          </table>
+        </Section>
+      ) : null}
+
+      {referral.requested_action ? (
+        <Section title="Requested action" defaultOpen>
+          <p className="extraction-panel__cc">{referral.requested_action}</p>
+        </Section>
+      ) : null}
+    </div>
+  );
+}
+
+function FragmentPair({
+  label,
+  value,
+}: {
+  readonly label: string;
+  readonly value: string;
+}): JSX.Element {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </>
+  );
+}
+
+function ReferralList({
+  title,
+  items,
+  emptyText = 'None found.',
+}: {
+  readonly title: string;
+  readonly items: readonly string[];
+  readonly emptyText?: string;
+}): JSX.Element {
+  return (
+    <Section title={`${title} (${items.length})`}>
+      {items.length === 0 ? (
+        <p className="extraction-panel__empty">{emptyText}</p>
+      ) : (
+        <ul className="extraction-panel__list">
+          {items.map((item, i) => (
+            <li key={`${item}-${i}`}>
+              <span className="extraction-panel__list-primary">{item}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+function ReferralLabRow({
+  lab,
+}: {
+  readonly lab: ReferralLab;
+}): JSX.Element {
+  const value = `${lab.value}${lab.unit ? ` ${lab.unit}` : ''}`;
+  return (
+    <tr>
+      <td>{lab.name}</td>
+      <td>
+        <span
+          className={
+            lab.flag
+              ? 'extraction-panel__value extraction-panel__value--high'
+              : 'extraction-panel__value extraction-panel__value--normal'
+          }
+        >
+          {value}
+          {lab.flag ? ` ${lab.flag}` : ''}
+        </span>
+      </td>
+      <td className="extraction-panel__range">{lab.collection_date ?? '-'}</td>
+    </tr>
   );
 }
 
