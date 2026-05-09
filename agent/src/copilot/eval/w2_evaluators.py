@@ -293,6 +293,7 @@ def factually_consistent(
 # uses an overlapping set.
 _REFUSAL_PHRASES = (
     "i don't have access",
+    "i do not have access",
     "you don't have access",
     "you do not have access",
     "couldn't ground",
