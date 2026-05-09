@@ -91,6 +91,31 @@ export interface IntakeExtraction {
   readonly social_history: SocialHistory | null;
 }
 
+export interface ReferralLab {
+  readonly name: string;
+  readonly value: string;
+  readonly unit: string | null;
+  readonly flag: string | null;
+  readonly collection_date: string | null;
+}
+
+export interface ReferralExtraction {
+  readonly referring_provider: string | null;
+  readonly referring_organization: string | null;
+  readonly receiving_provider: string | null;
+  readonly receiving_organization: string | null;
+  readonly patient_name: string | null;
+  readonly patient_dob: string | null;
+  readonly patient_identifiers: Readonly<Record<string, string>>;
+  readonly reason_for_referral: string | null;
+  readonly pertinent_history: string | null;
+  readonly past_medical_history: readonly string[];
+  readonly current_medications: readonly string[];
+  readonly allergies: readonly string[];
+  readonly pertinent_labs: readonly ReferralLab[];
+  readonly requested_action: string | null;
+}
+
 export type DocType =
   | 'lab_pdf'
   | 'intake_form'
@@ -154,6 +179,7 @@ export interface ExtractionResponse {
   readonly discussable: boolean;
   readonly lab: LabExtraction | null;
   readonly intake: IntakeExtraction | null;
+  readonly referral?: ReferralExtraction | null;
   /** User-safe message — never raw exception text. null on success. */
   readonly failure_reason: string | null;
   /**

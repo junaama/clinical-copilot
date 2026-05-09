@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from langchain_core.tools import StructuredTool
 
 from ..extraction.bbox_matcher import match_extraction_to_bboxes
+from ..extraction.docx_referral import parse_docx_referral
 from ..extraction.hl7_oru import parse_hl7_oru_lab
 from ..extraction.vlm import extract_document as vlm_extract_document
 from ..extraction.xlsx_workbook import parse_xlsx_workbook
@@ -42,7 +43,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 _VALID_DOC_TYPES: frozenset[str] = frozenset(
-    {"lab_pdf", "intake_form", "hl7_oru", "xlsx_workbook"}
+    {"lab_pdf", "intake_form", "hl7_oru", "xlsx_workbook", "docx_referral"}
 )
 
 
@@ -346,6 +347,17 @@ def make_extraction_tools(
                 return _error_envelope(f"xlsx_workbook_parse_failed: {exc}", _ms(started))
             bboxes = []
             pages_processed = 0
+        elif doc_type == "docx_referral":
+            try:
+                extraction = parse_docx_referral(
+                    file_data,
+                    document_id=f"DocumentReference/{document_id}",
+                    extraction_model_name=extraction_model_name,
+                )
+            except ValueError as exc:
+                return _error_envelope(f"docx_referral_parse_failed: {exc}", _ms(started))
+            bboxes = []
+            pages_processed = 0
         else:
             try:
                 result = await vlm_extract_document(
@@ -395,6 +407,22 @@ def make_extraction_tools(
                     f"persistence_failed: {exc.__class__.__name__}", _ms(started)
                 )
             intake_summary = None
+        elif doc_type == "docx_referral":
+            try:
+                save_referral = store.save_referral_extraction
+                extraction_id = await save_referral(
+                    extraction=extraction,
+                    bboxes=bboxes,
+                    document_id=document_id,
+                    patient_id=patient_id,
+                    filename=filename,
+                    content_sha256=resolved_sha256,
+                )
+            except Exception as exc:
+                return _error_envelope(
+                    f"persistence_failed: {exc.__class__.__name__}", _ms(started)
+                )
+            intake_summary = None
         else:
             try:
                 summary = await persister.persist_intake(
@@ -437,12 +465,12 @@ def make_extraction_tools(
             coroutine=attach_document,
             name="attach_document",
             description=(
-                "Upload a local file (PDF, PNG, JPEG, HL7 ORU, or XLSX workbook) "
-                "to OpenEMR's document "
+                "Upload a local file (PDF, PNG, JPEG, HL7 ORU, XLSX workbook, "
+                "or DOCX referral) to OpenEMR's document "
                 "store for a patient. Returns the document_id you can pass to "
                 "extract_document. Args: patient_id, file_path (absolute path "
                 "on the agent host), doc_type ('lab_pdf', 'intake_form', "
-                "'hl7_oru', or 'xlsx_workbook')."
+                "'hl7_oru', 'xlsx_workbook', or 'docx_referral')."
             ),
         ),
         StructuredTool.from_function(
@@ -466,7 +494,7 @@ def make_extraction_tools(
                 "problems to OpenEMR via the Standard API. Args: patient_id, "
                 "document_id (from attach_document or list_patient_documents), "
                 "doc_type ('lab_pdf', 'intake_form', 'hl7_oru', "
-                "or 'xlsx_workbook')."
+                "'xlsx_workbook', or 'docx_referral')."
             ),
         ),
     ]
