@@ -43,7 +43,14 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 
 _VALID_DOC_TYPES: frozenset[str] = frozenset(
-    {"lab_pdf", "intake_form", "hl7_oru", "xlsx_workbook", "docx_referral"}
+    {
+        "lab_pdf",
+        "intake_form",
+        "hl7_oru",
+        "xlsx_workbook",
+        "docx_referral",
+        "tiff_fax",
+    }
 )
 
 
@@ -190,9 +197,8 @@ def make_extraction_tools(
     ) -> dict[str, Any]:
         """Upload a local file to OpenEMR's document store for ``patient_id``.
 
-        ``doc_type`` must be ``lab_pdf``, ``intake_form``, or ``hl7_oru`` — the doc
-        type is recorded with the upload and used when ``extract_document``
-        is called against the resulting document_id later.
+        ``doc_type`` is recorded with the upload and used when
+        ``extract_document`` is called against the resulting document_id later.
         """
         started = time.monotonic()
         if (err := _validate_doc_type(doc_type)) is not None:
@@ -391,7 +397,7 @@ def make_extraction_tools(
                 )
             pages_processed = result.pages_processed
 
-        if doc_type in {"lab_pdf", "hl7_oru", "xlsx_workbook"}:
+        if doc_type in {"lab_pdf", "hl7_oru", "xlsx_workbook", "tiff_fax"}:
             try:
                 extraction_id = await store.save_lab_extraction(
                     extraction=extraction,  # type: ignore[arg-type]
@@ -466,11 +472,11 @@ def make_extraction_tools(
             name="attach_document",
             description=(
                 "Upload a local file (PDF, PNG, JPEG, HL7 ORU, XLSX workbook, "
-                "or DOCX referral) to OpenEMR's document "
+                "DOCX referral, or TIFF fax packet) to OpenEMR's document "
                 "store for a patient. Returns the document_id you can pass to "
                 "extract_document. Args: patient_id, file_path (absolute path "
                 "on the agent host), doc_type ('lab_pdf', 'intake_form', "
-                "'hl7_oru', 'xlsx_workbook', or 'docx_referral')."
+                "'hl7_oru', 'xlsx_workbook', 'docx_referral', or 'tiff_fax')."
             ),
         ),
         StructuredTool.from_function(
@@ -494,7 +500,7 @@ def make_extraction_tools(
                 "problems to OpenEMR via the Standard API. Args: patient_id, "
                 "document_id (from attach_document or list_patient_documents), "
                 "doc_type ('lab_pdf', 'intake_form', 'hl7_oru', "
-                "'xlsx_workbook', or 'docx_referral')."
+                "'xlsx_workbook', 'docx_referral', or 'tiff_fax')."
             ),
         ),
     ]

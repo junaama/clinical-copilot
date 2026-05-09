@@ -383,6 +383,49 @@ async def test_extract_document_lab_persists_to_store_and_returns_envelope() -> 
     assert result["extraction"]["results"][0]["test_name"] == "LDL"
 
 
+async def test_extract_document_tiff_fax_uses_visual_lab_path_and_lab_store() -> None:
+    file_bytes = b"II\x2a\x00fake-tiff"
+    document_client = _document_client(
+        download=(True, file_bytes, "image/tiff", None, 5)
+    )
+    store = _store()
+    tools = {
+        t.name: t
+        for t in make_extraction_tools(
+            gate=_allow_gate(),
+            document_client=document_client,
+            vlm_model=MagicMock(),
+            store=store,
+            persister=_persister(),
+        )
+    }
+    extraction = _lab_extraction()
+
+    with (
+        patch(
+            "copilot.tools.extraction.vlm_extract_document",
+            _vlm_success(extraction),
+        ),
+        patch(
+            "copilot.tools.extraction.match_extraction_to_bboxes",
+            _bboxes_passthrough(),
+        ),
+    ):
+        result = await tools["extract_document"].ainvoke(
+            {
+                "patient_id": "patient-1",
+                "document_id": "fax-doc-1",
+                "doc_type": "tiff_fax",
+            }
+        )
+
+    assert result["ok"] is True
+    assert result["doc_type"] == "tiff_fax"
+    assert result["extraction_id"] == 42
+    store.save_lab_extraction.assert_awaited_once()
+    assert store.save_lab_extraction.await_args.kwargs["doc_type"] == "tiff_fax"
+
+
 async def test_extract_document_cache_miss_persists_filename_and_content_hash() -> None:
     file_bytes = b"%PDF-cache-miss-bytes"
     document_client = _document_client(
