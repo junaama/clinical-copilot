@@ -189,21 +189,36 @@ class SourceCitation(BaseModel):
 
 ### 3.5 Persistence of Derived Facts
 
-#### Lab Results (Document-Annotation Model — MVP)
+#### Lab Results (Custom Module Native Lab Writes)
 
-Extracted lab values are **not** written as standalone Observation resources. OpenEMR has no API write path for lab results (Observations are read-only on both FHIR and Standard API; labs are stored internally via `procedure_order`/`procedure_result` tables with no REST write endpoint).
+Extracted lab values are written through the custom OpenEMR module at
+`interface/modules/custom_modules/oe-module-copilot-lab-writer/`. The module
+registers `POST /api/patient/:pid/lab_result` on the Standard API route map
+and writes into OpenEMR's native lab pipeline tables:
+`procedure_order`, `procedure_order_code`, `procedure_report`, and
+`procedure_result`.
 
-Instead, extracted lab data lives as structured JSON attached to the DocumentReference:
+The agent keeps the original document extraction row as an audit/retry mirror,
+but final success requires the module write to succeed. Failed module writes
+return per-result structured errors and mark the lab payload
+`persistence_status=failed`; the upload flow is not reported as final-green.
 
 ```
-LabResult → stored in extraction JSON on DocumentReference
-  - Cited via: DocumentReference/{id}, field_path "results[n].value"
-  - Queryable by the agent (it reads the extraction from state)
-  - Visible in the UI via the extraction panel + bounding-box overlay
-  - NOT a discrete FHIR Observation in the chart
+LabResult → OpenEMR module → procedure_* native lab tables
+  - Idempotency key: patient_id + DocumentReference/{id} + field_path
+  - Provenance: procedure_result.document_id + comments carry the source document/field_path
+  - FHIR read-back: GET /fhir/Observation?patient={id}&category=laboratory
+  - Audit mirror: document_extractions row remains available for retry/debug
 ```
 
-**Post-MVP intent:** Build a custom OpenEMR module that exposes `POST /api/patient/:pid/lab_result` writing into `procedure_order`/`procedure_result` tables. This would promote extracted labs to first-class chart data visible in OpenEMR's native lab results view. Tracked as extension work.
+`OpenEmrLabResultPersister` implements the storage-agnostic
+`LabResultPersister` protocol and is selected with
+`FHIR_LAB_PERSISTENCE_BACKEND=openemr_module` (the default). It maps extracted
+results to the module payload, preserves original units when UCUM
+normalization is unsafe, maps abnormal flags to OpenEMR's
+`proc_res_abnormal` list so FHIR `interpretation` is populated, and preserves
+reference ranges as structured low/high where safe or as the original string
+otherwise.
 
 #### Intake Form (Standard API Writes — MVP)
 
@@ -253,6 +268,11 @@ class StandardApiClient:
         self, patient_id: str, problem: dict[str, Any]
     ) -> tuple[bool, str | None, str | None, int]:
         """POST /api/patient/{pid}/medical_problem."""
+
+    async def create_lab_result(
+        self, patient_id: str, lab_result: dict[str, Any]
+    ) -> tuple[bool, dict[str, Any] | None, str | None, int]:
+        """POST /api/patient/{pid}/lab_result via oe-module-copilot-lab-writer."""
 ```
 
 Write calls use the same bearer token as reads. The CareTeam gate runs before any write.
@@ -263,7 +283,7 @@ Write calls use the same bearer token as reads. The CareTeam gate runs before an
 |----------|-------------|-------------|--------------|
 | Patient | yes | yes | — (use FHIR) |
 | DocumentReference | yes (metadata only) | no | `POST /api/patient/:pid/document` (file upload) |
-| Observation (labs) | **no** | **no** | **no endpoint** (MVP: document-annotation model) |
+| Observation (labs) | no | no | `POST /api/patient/:pid/lab_result` via `oe-module-copilot-lab-writer`; FHIR read-back through laboratory Observation |
 | Allergy | no | no | `POST /api/patient/:pid/allergy` |
 | Medication | no | no | `POST /api/patient/:pid/medication` |
 | Medical Problem | no | no | `POST /api/patient/:pid/medical_problem` |

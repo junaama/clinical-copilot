@@ -284,6 +284,12 @@ class FhirObservationLaboratoryService extends FhirServiceBase implements IPatie
             $observation->addNote(['text' => $dataRecord['comments']]);
         }
 
+        if (!empty($dataRecord['document_uuid'])) {
+            $observation->addDerivedFrom(
+                UtilsService::createRelativeReference('DocumentReference', $dataRecord['document_uuid'])
+            );
+        }
+
         if (!empty($dataRecord['patient'])) {
             $observation->setSubject(UtilsService::createRelativeReference("Patient", $dataRecord['patient']['uuid']));
         }

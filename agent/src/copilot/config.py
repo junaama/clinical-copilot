@@ -119,6 +119,11 @@ class Settings(BaseSettings):
 
     checkpointer_dsn: str = Field(default="", alias="CHECKPOINTER_DSN")
 
+    fhir_lab_persistence_backend: str = Field(
+        default="openemr_module",
+        alias="FHIR_LAB_PERSISTENCE_BACKEND",
+    )
+
     agent_audit_log_path: str = Field(
         default="./logs/agent_audit.jsonl",
         alias="AGENT_AUDIT_LOG_PATH",

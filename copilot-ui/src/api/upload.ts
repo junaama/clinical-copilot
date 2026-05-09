@@ -216,6 +216,7 @@ function isExtractionResponse(x: unknown): x is ExtractionResponse {
     status === 'upload_failed' ||
     status === 'doc_ref_failed' ||
     status === 'extraction_failed' ||
+    status === 'persistence_failed' ||
     status === 'unauthorized';
   if (!validStatus) return false;
   if (typeof obj['discussable'] !== 'boolean') return false;

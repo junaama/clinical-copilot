@@ -60,7 +60,7 @@ class ProcedureService extends BaseService
      */
     public function getUuidFields(): array
     {
-        return ['order_uuid', 'result_uuid', 'report_uuid', 'lab_uuid', 'puuid', 'euuid', 'provider_uuid', 'specimen_uuid', 'lab_director_uuid'];
+        return ['order_uuid', 'result_uuid', 'report_uuid', 'lab_uuid', 'puuid', 'euuid', 'doc_uuid', 'provider_uuid', 'specimen_uuid', 'lab_director_uuid'];
     }
 
     /**
@@ -461,6 +461,7 @@ class ProcedureService extends BaseService
                         ,'result_abnormal_codes' => $record['result_abnormal_codes']
                         , 'comments' => $record['result_comments']
                         ,'document_id' => $record['doc_id']
+                        ,'document_uuid' => $record['doc_uuid']
                         ,'status' => $record['result_status']
                     ];
                     $report['results'][] = $result;

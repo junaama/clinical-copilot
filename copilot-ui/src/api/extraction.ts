@@ -124,6 +124,7 @@ export type UploadStatus =
   | 'upload_failed'
   | 'doc_ref_failed'
   | 'extraction_failed'
+  | 'persistence_failed'
   | 'unauthorized';
 
 export interface ExtractionResponse {
