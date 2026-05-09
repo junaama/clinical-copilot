@@ -62,6 +62,8 @@ from .conversations import (
 )
 from .extraction.bbox_matcher import match_extraction_to_bboxes
 from .extraction.document_client import UPLOAD_LANDED_ID_LOST, DocumentClient
+from .extraction.docx_referral import parse_docx_referral
+from .extraction.hl7_adt import parse_hl7_adt
 from .extraction.hl7_oru import parse_hl7_oru_lab
 from .extraction.lab_persistence import (
     LabPersistenceResult,
@@ -71,14 +73,18 @@ from .extraction.lab_persistence import (
 from .extraction.migrate import ensure_schema as ensure_extraction_schema
 from .extraction.persistence import DocumentExtractionStore
 from .extraction.schemas import (
+    AdtExtraction,
     DrawableFieldBBox,
     FieldWithBBox,
     IntakeExtraction,
     LabExtraction,
+    ReferralExtraction,
+    WorkbookExtraction,
     filter_drawable_bboxes,
 )
 from .extraction.type_guard import detect_doc_type
 from .extraction.vlm import extract_document as _vlm_extract_document
+from .extraction.xlsx_workbook import parse_xlsx_workbook
 from .fhir import FhirClient
 from .graph import build_graph
 from .observability import get_callback_handler
@@ -1243,6 +1249,9 @@ class UploadResponse(BaseModel):
     discussable: bool = False
     lab: dict[str, Any] | None = None
     intake: dict[str, Any] | None = None
+    referral: dict[str, Any] | None = None
+    workbook: dict[str, Any] | None = None
+    adt: dict[str, Any] | None = None
     failure_reason: str | None = None
     # Drawable-only bbox records (issue 031). Empty for image uploads, for
     # PDFs whose extracted values the matcher couldn't locate, and for any
@@ -1326,7 +1335,7 @@ def _sniff_mimetype(file_data: bytes, fallback: str | None) -> str:
 
 def _compute_upload_bboxes(
     *,
-    extraction: LabExtraction | IntakeExtraction,
+    extraction: LabExtraction | IntakeExtraction | ReferralExtraction,
     file_data: bytes,
     mimetype: str,
 ) -> list[FieldWithBBox]:
@@ -1352,7 +1361,7 @@ def _compute_upload_bboxes(
 async def _persist_upload_extraction_cache(
     req_app: FastAPI,
     *,
-    extraction: LabExtraction | IntakeExtraction,
+    extraction: LabExtraction | IntakeExtraction | ReferralExtraction | AdtExtraction,
     bboxes: list[FieldWithBBox],
     file_data: bytes,
     doc_type: str,
@@ -1373,6 +1382,7 @@ async def _persist_upload_extraction_cache(
                 patient_id=patient_id,
                 filename=filename,
                 content_sha256=content_sha256,
+                doc_type=doc_type,
             )
         elif isinstance(extraction, IntakeExtraction):
             await store.save_intake_extraction(
@@ -1383,6 +1393,28 @@ async def _persist_upload_extraction_cache(
                 filename=filename,
                 content_sha256=content_sha256,
             )
+        elif isinstance(extraction, ReferralExtraction):
+            save_referral = getattr(store, "save_referral_extraction", None)
+            if save_referral is not None:
+                await save_referral(
+                    extraction=extraction,
+                    bboxes=bboxes,
+                    document_id=document_id,
+                    patient_id=patient_id,
+                    filename=filename,
+                    content_sha256=content_sha256,
+                )
+        elif isinstance(extraction, AdtExtraction):
+            save_adt = getattr(store, "save_adt_extraction", None)
+            if save_adt is not None:
+                await save_adt(
+                    extraction=extraction,
+                    bboxes=bboxes,
+                    document_id=document_id,
+                    patient_id=patient_id,
+                    filename=filename,
+                    content_sha256=content_sha256,
+                )
     except Exception as exc:  # pragma: no cover - cache best-effort
         _log.warning("upload cache persistence failed: %s", exc)
 
@@ -1519,6 +1551,8 @@ def _make_failure_response(
         discussable=False,
         lab=None,
         intake=None,
+        referral=None,
+        workbook=None,
         failure_reason=_FAILURE_REASONS.get(status),
     )
 
@@ -1671,9 +1705,12 @@ async def upload(
         )
 
     mimetype = sniffed_mimetype
+    workbook_extraction: WorkbookExtraction | None = None
     if doc_type == "hl7_oru":
         try:
-            extraction: LabExtraction | IntakeExtraction = parse_hl7_oru_lab(
+            extraction: (
+                LabExtraction | IntakeExtraction | ReferralExtraction | AdtExtraction
+            ) = parse_hl7_oru_lab(
                 file_data,
                 document_id=f"DocumentReference/{document_id}",
             )
@@ -1686,6 +1723,51 @@ async def upload(
                 document_id=document_id,
             )
         all_bboxes: list[FieldWithBBox] = []
+    elif doc_type == "hl7_adt":
+        try:
+            extraction = parse_hl7_adt(
+                file_data,
+                document_id=f"DocumentReference/{document_id}",
+            )
+        except ValueError as exc:
+            _log.warning("upload HL7 ADT parse failed: %s", exc)
+            return _make_failure_response(
+                status="extraction_failed",
+                requested_type=doc_type,
+                filename=filename,
+                document_id=document_id,
+            )
+        all_bboxes = []
+    elif doc_type == "docx_referral":
+        try:
+            extraction = parse_docx_referral(
+                file_data,
+                document_id=f"DocumentReference/{document_id}",
+            )
+        except ValueError as exc:
+            _log.warning("upload DOCX referral parse failed: %s", exc)
+            return _make_failure_response(
+                status="extraction_failed",
+                requested_type=doc_type,
+                filename=filename,
+                document_id=document_id,
+            )
+        all_bboxes = []
+    elif doc_type == "xlsx_workbook":
+        try:
+            workbook_extraction, extraction = parse_xlsx_workbook(
+                file_data,
+                document_id=f"DocumentReference/{document_id}",
+            )
+        except ValueError as exc:
+            _log.warning("upload XLSX workbook parse failed: %s", exc)
+            return _make_failure_response(
+                status="extraction_failed",
+                requested_type=doc_type,
+                filename=filename,
+                document_id=document_id,
+            )
+        all_bboxes = []
     else:
         vlm_model = _resolve_upload_vlm_model(app)
         result = await _vlm_extract_document(
@@ -1739,6 +1821,13 @@ async def upload(
     extraction_dump = extraction.model_dump(mode="json")
     lab_payload: dict[str, Any] | None = None
     intake_payload: dict[str, Any] | None = None
+    referral_payload: dict[str, Any] | None = None
+    adt_payload: dict[str, Any] | None = None
+    workbook_payload: dict[str, Any] | None = (
+        workbook_extraction.model_dump(mode="json")
+        if workbook_extraction is not None
+        else None
+    )
     persistence_status = "not_applicable"
     if isinstance(extraction, LabExtraction):
         lab_payload = extraction_dump
@@ -1757,6 +1846,10 @@ async def upload(
                 lab_payload["persistence_error"] = persistence.error
     elif isinstance(extraction, IntakeExtraction):
         intake_payload = extraction_dump
+    elif isinstance(extraction, ReferralExtraction):
+        referral_payload = extraction_dump
+    elif isinstance(extraction, AdtExtraction):
+        adt_payload = extraction_dump
 
     if isinstance(extraction, LabExtraction) and persistence_status in {"failed", "partial"}:
         return UploadResponse(
@@ -1770,8 +1863,11 @@ async def upload(
             discussable=False,
             lab=lab_payload,
             intake=None,
+            referral=None,
+            adt=None,
             failure_reason=_FAILURE_REASONS["persistence_failed"],
             bboxes=filter_drawable_bboxes(all_bboxes),
+            workbook=workbook_payload,
         )
 
     return UploadResponse(
@@ -1785,6 +1881,9 @@ async def upload(
         discussable=True,
         lab=lab_payload,
         intake=intake_payload,
+        referral=referral_payload,
+        adt=adt_payload,
+        workbook=workbook_payload,
         failure_reason=None,
         bboxes=filter_drawable_bboxes(all_bboxes),
     )
