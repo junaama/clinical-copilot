@@ -8,6 +8,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CTX="${REPO_ROOT}/docker/openemr-railway"
 SRC="${REPO_ROOT}/interface/modules/custom_modules/oe-module-copilot-launcher"
 DEST="${CTX}/oe-module-copilot-launcher"
+DASHBOARD_FRONTEND="${REPO_ROOT}/frontend/patient-dashboard"
+DASHBOARD_ASSETS="${REPO_ROOT}/public/assets/patient-dashboard"
 
 # Stage the copilot-launcher module into the build context.
 if [[ -d "${SRC}" ]]; then
@@ -17,6 +19,18 @@ if [[ -d "${SRC}" ]]; then
 else
     echo "WARN: copilot-launcher source not found at ${SRC}" >&2
     echo "      Deploying without module update." >&2
+fi
+
+if [[ -d "${DASHBOARD_FRONTEND}" ]]; then
+    (
+        cd "${DASHBOARD_FRONTEND}"
+        npm ci
+        npm run build
+    )
+    echo "==> Built patient-dashboard frontend"
+else
+    echo "WARN: patient-dashboard frontend source not found at ${DASHBOARD_FRONTEND}" >&2
+    echo "      Deploying without modern patient dashboard assets." >&2
 fi
 
 # Stage forked PHP trees over the upstream openemr image's copies.
@@ -55,6 +69,10 @@ cp -a "${REPO_ROOT}/src"         "${PATCHES_DEST}/src"
 cp -a "${REPO_ROOT}/library"     "${PATCHES_DEST}/library"
 cp -a "${REPO_ROOT}/apis"        "${PATCHES_DEST}/apis"
 cp -a "${REPO_ROOT}/interface"   "${PATCHES_DEST}/interface"
+if [[ -d "${DASHBOARD_ASSETS}" ]]; then
+    mkdir -p "${PATCHES_DEST}/public/assets"
+    cp -a "${DASHBOARD_ASSETS}" "${PATCHES_DEST}/public/assets/patient-dashboard"
+fi
 # controllers/ ships the legacy procedural classes (C_Document.class.php
 # etc.) that call into src/. The local fork updated the SessionWrapperFactory
 # API away from upstream's getWrapper() to getInstance()->getActiveSession().

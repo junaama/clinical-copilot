@@ -1,0 +1,357 @@
+:root {
+  color-scheme: light;
+  --dashboard-bg: #f4f7f6;
+  --dashboard-surface: #ffffff;
+  --dashboard-surface-muted: #eef4f2;
+  --dashboard-border: #cfdbd7;
+  --dashboard-border-strong: #9db2ac;
+  --dashboard-text: #1b2b28;
+  --dashboard-text-muted: #526661;
+  --dashboard-accent: #0f766e;
+  --dashboard-accent-strong: #115e59;
+  --dashboard-danger-bg: #fff1f0;
+  --dashboard-danger-border: #ffb4ab;
+  --dashboard-danger-text: #8c1d18;
+  --dashboard-success-bg: #e7f6ed;
+  --dashboard-success-text: #17663a;
+  --dashboard-radius: 8px;
+}
+
+body {
+  margin: 0;
+  background: var(--dashboard-bg);
+  color: var(--dashboard-text);
+}
+
+.patient-dashboard {
+  min-height: 100vh;
+  background: var(--dashboard-bg);
+  color: var(--dashboard-text);
+  font-family:
+    "Segoe UI",
+    -apple-system,
+    BlinkMacSystemFont,
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.25rem;
+  background: var(--dashboard-surface);
+  border-bottom: 1px solid var(--dashboard-border);
+}
+
+.dashboard-header h1 {
+  margin: 0;
+  color: var(--dashboard-text);
+  font-size: 1.25rem;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.dashboard-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.legacy-link,
+.clinical-card__edit-link,
+.care-team__edit-btn {
+  color: var(--dashboard-accent);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.legacy-link:hover,
+.clinical-card__edit-link:hover,
+.care-team__edit-btn:hover {
+  color: var(--dashboard-accent-strong);
+  text-decoration: underline;
+}
+
+.dashboard-main {
+  padding: 1rem 1.25rem 1.5rem;
+}
+
+.dashboard-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr));
+  gap: 1rem;
+}
+
+.patient-header,
+.clinical-card,
+.dashboard-error {
+  background: var(--dashboard-surface);
+  border: 1px solid var(--dashboard-border);
+  border-radius: var(--dashboard-radius);
+  box-shadow: 0 1px 2px rgba(19, 35, 31, 0.06);
+}
+
+.patient-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  margin: 1rem 1.25rem 0;
+  padding: 1rem 1.25rem;
+}
+
+.patient-header--loading,
+.patient-header--error {
+  justify-content: flex-start;
+}
+
+.patient-header--error,
+.dashboard-error,
+.clinical-card__error {
+  background: var(--dashboard-danger-bg);
+  border-color: var(--dashboard-danger-border);
+  color: var(--dashboard-danger-text);
+}
+
+.patient-header__identity {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.patient-header__name {
+  margin: 0;
+  color: var(--dashboard-text);
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.patient-header__status {
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.patient-header__status--active {
+  background: var(--dashboard-success-bg);
+  color: var(--dashboard-success-text);
+}
+
+.patient-header__status--inactive {
+  background: var(--dashboard-surface-muted);
+  color: var(--dashboard-text-muted);
+}
+
+.patient-header__details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(5rem, auto));
+  gap: 0.75rem 1rem;
+  margin: 0;
+}
+
+.patient-header__detail {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.patient-header__detail dt,
+.clinical-card__item-details dt {
+  color: var(--dashboard-text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.patient-header__detail dd,
+.clinical-card__item-details dd {
+  margin: 0;
+  color: var(--dashboard-text);
+  font-size: 0.92rem;
+}
+
+.clinical-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.clinical-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--dashboard-border);
+}
+
+.clinical-card__title {
+  margin: 0;
+  color: var(--dashboard-text);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.clinical-card__body {
+  padding: 1rem;
+}
+
+.clinical-card__loading,
+.clinical-card__empty,
+.clinical-card__error {
+  margin: 0;
+  border-radius: 6px;
+  padding: 0.75rem;
+  font-size: 0.9rem;
+}
+
+.clinical-card__loading,
+.clinical-card__empty {
+  background: var(--dashboard-surface-muted);
+  color: var(--dashboard-text-muted);
+}
+
+.clinical-card__list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.clinical-card__list-item {
+  border: 1px solid var(--dashboard-border);
+  border-radius: 6px;
+  padding: 0.75rem;
+  background: #fbfdfc;
+}
+
+.clinical-card__item-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.clinical-card__item-title {
+  margin: 0;
+  color: var(--dashboard-text);
+  font-size: 0.94rem;
+  font-weight: 700;
+}
+
+.clinical-card__badge {
+  flex: 0 0 auto;
+  border: 1px solid var(--dashboard-border-strong);
+  border-radius: 999px;
+  padding: 0.12rem 0.45rem;
+  color: var(--dashboard-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.clinical-card__badge--active,
+.clinical-card__badge--high,
+.clinical-card__badge--user {
+  border-color: #8dd5c9;
+  background: #e2f7f3;
+  color: var(--dashboard-accent-strong);
+}
+
+.clinical-card__badge--inactive,
+.clinical-card__badge--resolved,
+.clinical-card__badge--completed {
+  background: var(--dashboard-surface-muted);
+}
+
+.clinical-card__item-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  gap: 0.5rem 0.75rem;
+  margin-top: 0.65rem;
+}
+
+.care-team-edit {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.care-team-edit__field,
+.care-team-edit__row {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.care-team-edit label {
+  color: var(--dashboard-text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.care-team-edit input,
+.care-team-edit select,
+.care-team-edit textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--dashboard-border-strong);
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+  background: var(--dashboard-surface);
+  color: var(--dashboard-text);
+  font: inherit;
+}
+
+.care-team-edit__actions,
+.care-team-edit__submit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.care-team-edit button {
+  border: 1px solid var(--dashboard-border-strong);
+  border-radius: 6px;
+  padding: 0.45rem 0.7rem;
+  background: var(--dashboard-surface);
+  color: var(--dashboard-text);
+  font-weight: 650;
+}
+
+.care-team-edit button[type="submit"] {
+  border-color: var(--dashboard-accent);
+  background: var(--dashboard-accent);
+  color: #ffffff;
+}
+
+@media (max-width: 760px) {
+  .dashboard-header,
+  .patient-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .patient-header__details {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .dashboard-main,
+  .patient-header {
+    margin-left: 0.75rem;
+    margin-right: 0.75rem;
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .dashboard-cards {
+    grid-template-columns: 1fr;
+  }
+}

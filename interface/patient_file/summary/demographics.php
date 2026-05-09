@@ -208,10 +208,16 @@ $assetsPath = $webRoot . '/public/assets/patient-dashboard';
 // Find the built JS entry point.
 $assetsDir = $globalsBag->getProjectDir() . '/public/assets/patient-dashboard/assets';
 $jsFile = '';
+$cssFile = '';
 if (is_dir($assetsDir)) {
-    $files = glob($assetsDir . '/index-*.js');
-    if (!empty($files)) {
-        $jsFile = $assetsPath . '/assets/' . basename($files[0]);
+    $jsFiles = glob($assetsDir . '/index-*.js');
+    if (!empty($jsFiles)) {
+        $jsFile = $assetsPath . '/assets/' . basename($jsFiles[0]);
+    }
+
+    $cssFiles = glob($assetsDir . '/index-*.css');
+    if (!empty($cssFiles)) {
+        $cssFile = $assetsPath . '/assets/' . basename($cssFiles[0]);
     }
 }
 
@@ -249,6 +255,9 @@ if ($careTeamEditConfig !== null) {
             JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_THROW_ON_ERROR
         ); ?>;
     </script>
+    <?php if (!empty($cssFile)) : ?>
+        <link rel="stylesheet" href="<?php echo htmlspecialchars($cssFile, ENT_QUOTES, 'UTF-8'); ?>">
+    <?php endif; ?>
 </head>
 <body>
     <div id="patient-dashboard-root"></div>
