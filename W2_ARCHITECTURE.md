@@ -655,6 +655,8 @@ for changed-file detection and the commands the gate runs.
 
 **Fixture extractions:** Each test case includes a pre-computed extraction JSON (the expected VLM output for that fixture document). The gate tests validate downstream behavior (schema, citations, persistence, refusals) against these fixtures. The `eval-full` target re-runs the VLM and compares against the fixture to detect extraction drift.
 
+**LLM-backed judges:** Semantic W2 rubric prompts, parser, and cache-key material live in `agent/src/copilot/eval/llm_judge.py`; deterministic schema and PHI checks remain in `agent/src/copilot/eval/w2_evaluators.py`.
+
 **Regression detection:** The hook compares the current run's per-category pass rates against a `.eval_baseline.json` file committed to the repo. If any category drops by more than 5 percentage points from baseline, the hook fails even if the absolute threshold is still met. This catches slow degradation.
 
 **The grader test:** The PRD says "we will introduce a small regression and confirm your CI gate fails." The gate must be sensitive enough to catch a single-case regression in a 50-case suite (2% drop). The >5% regression threshold applies to the 5 boolean categories independently — a single `factually_consistent` failure in 10 relevant cases is a 10% drop in that category, which trips the gate.
