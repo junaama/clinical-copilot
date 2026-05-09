@@ -49,6 +49,11 @@ def _register_schemas() -> None:
     register_w2_eval_schemas(register_schema)
 
 
+@pytest.fixture(autouse=True)
+def _disable_llm_judge_for_deterministic_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVAL_LLM_JUDGE_ENABLED", "false")
+
+
 def _copy_eval_dir(target: Path) -> Path:
     """Mirror the live eval directory into ``target``.
 

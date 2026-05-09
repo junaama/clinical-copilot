@@ -36,7 +36,8 @@ class _SampleLab(BaseModel):
 
 
 @pytest.fixture(autouse=True)
-def _register_sample_schema() -> None:
+def _register_sample_schema(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EVAL_LLM_JUDGE_ENABLED", "false")
     register_schema("SampleLab", _SampleLab)
 
 
@@ -288,6 +289,89 @@ expected:
     case = load_w2_case(path)
     result = score_w2_case(case)
     assert result.rubrics["schema_valid"].passed is False
+
+
+def test_score_uses_llm_judge_for_factually_consistent_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_case(
+        tmp_path,
+        "llm_fact",
+        """
+id: w2-llm-fact
+category: lab_extraction
+description: llm judge owns factual consistency
+fixture_extraction:
+  value: "220"
+fixture_response: |
+  Total cholesterol 220 mg/dL <cite ref="DocumentReference/lab-001" value="220"/>.
+expected:
+  schema_valid: false
+  factually_consistent: false
+""",
+    )
+    observed: dict[str, object] = {}
+
+    def _judge(response_text, fixture_extraction, *, case_id, **_kwargs):
+        observed["response_text"] = response_text
+        observed["fixture_extraction"] = fixture_extraction
+        observed["case_id"] = case_id
+        from copilot.eval.w2_evaluators import RubricResult
+
+        return RubricResult(
+            name="factually_consistent",
+            passed=False,
+            details={"source": "llm"},
+        )
+
+    monkeypatch.setenv("EVAL_LLM_JUDGE_ENABLED", "true")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr("copilot.eval.llm_judge.factually_consistent", _judge)
+
+    case = load_w2_case(path)
+    result = score_w2_case(case)
+
+    assert result.rubrics["factually_consistent"].passed is False
+    assert result.rubrics["factually_consistent"].details == {"source": "llm"}
+    assert observed["case_id"] == "w2-llm-fact"
+    assert observed["fixture_extraction"] == {"value": "220"}
+    assert result.case_passed is True
+
+
+def test_score_preserves_regex_factually_consistent_when_llm_judge_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _write_case(
+        tmp_path,
+        "regex_fact",
+        """
+id: w2-regex-fact
+category: lab_extraction
+description: disabled llm judge keeps regex behavior
+fixture_extraction:
+  value: "220"
+fixture_response: |
+  Total cholesterol 999 mg/dL <cite ref="DocumentReference/lab-001" value="999"/>.
+expected:
+  schema_valid: false
+  factually_consistent: false
+""",
+    )
+
+    def _raise_if_called(*_args, **_kwargs):
+        raise AssertionError("LLM judge should not run when disabled")
+
+    monkeypatch.setenv("EVAL_LLM_JUDGE_ENABLED", "false")
+    monkeypatch.setattr("copilot.eval.llm_judge.factually_consistent", _raise_if_called)
+
+    case = load_w2_case(path)
+    result = score_w2_case(case)
+
+    assert result.rubrics["factually_consistent"].passed is False
+    assert result.rubrics["factually_consistent"].details["inconsistent_values"] == ["999"]
+    assert result.case_passed is True
 
 
 # ---------------------------------------------------------------------------
