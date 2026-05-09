@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from langchain_core.tools import StructuredTool
 
 from ..extraction.bbox_matcher import match_extraction_to_bboxes
+from ..extraction.hl7_oru import parse_hl7_oru_lab
 from ..extraction.vlm import extract_document as vlm_extract_document
 from .helpers import _enforce_patient_authorization
 
@@ -39,7 +40,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..extraction.persistence import DocumentExtractionStore, IntakePersister
 
 
-_VALID_DOC_TYPES: frozenset[str] = frozenset({"lab_pdf", "intake_form"})
+_VALID_DOC_TYPES: frozenset[str] = frozenset({"lab_pdf", "intake_form", "hl7_oru"})
 
 
 @runtime_checkable
@@ -185,7 +186,7 @@ def make_extraction_tools(
     ) -> dict[str, Any]:
         """Upload a local file to OpenEMR's document store for ``patient_id``.
 
-        ``doc_type`` must be ``lab_pdf`` or ``intake_form`` — the doc
+        ``doc_type`` must be ``lab_pdf``, ``intake_form``, or ``hl7_oru`` — the doc
         type is recorded with the upload and used when ``extract_document``
         is called against the resulting document_id later.
         """
@@ -321,40 +322,51 @@ def make_extraction_tools(
             doc_type=doc_type,
         )
 
-        try:
-            result = await vlm_extract_document(
-                file_data,
-                mimetype or "application/octet-stream",
-                doc_type,  # type: ignore[arg-type]
-                document_id=f"DocumentReference/{document_id}",
-                model=vlm_model,
-                extraction_model_name=extraction_model_name,
-            )
-        except Exception as exc:
-            return _error_envelope(
-                f"vlm_extraction_failed: {exc.__class__.__name__}", _ms(started)
-            )
+        if doc_type == "hl7_oru":
+            try:
+                extraction = parse_hl7_oru_lab(
+                    file_data,
+                    document_id=f"DocumentReference/{document_id}",
+                )
+            except ValueError as exc:
+                return _error_envelope(f"hl7_oru_parse_failed: {exc}", _ms(started))
+            bboxes = []
+            pages_processed = 0
+        else:
+            try:
+                result = await vlm_extract_document(
+                    file_data,
+                    mimetype or "application/octet-stream",
+                    doc_type,  # type: ignore[arg-type]
+                    document_id=f"DocumentReference/{document_id}",
+                    model=vlm_model,
+                    extraction_model_name=extraction_model_name,
+                )
+            except Exception as exc:
+                return _error_envelope(
+                    f"vlm_extraction_failed: {exc.__class__.__name__}", _ms(started)
+                )
 
-        if not result.ok or result.extraction is None:
-            return _error_envelope(
-                f"vlm_extraction_failed: {result.error or 'no extraction'}",
-                _ms(started),
-            )
+            if not result.ok or result.extraction is None:
+                return _error_envelope(
+                    f"vlm_extraction_failed: {result.error or 'no extraction'}",
+                    _ms(started),
+                )
 
-        extraction = result.extraction
+            extraction = result.extraction
 
-        try:
-            bboxes = match_extraction_to_bboxes(
-                extraction, file_data, mimetype=mimetype
-            )
-        except Exception as exc:
-            return _error_envelope(
-                f"bbox_match_failed: {exc.__class__.__name__}", _ms(started)
-            )
+            try:
+                bboxes = match_extraction_to_bboxes(
+                    extraction, file_data, mimetype=mimetype
+                )
+            except Exception as exc:
+                return _error_envelope(
+                    f"bbox_match_failed: {exc.__class__.__name__}", _ms(started)
+                )
+            pages_processed = result.pages_processed
 
-        intake_summary: dict[str, Any] | None = None
-        try:
-            if doc_type == "lab_pdf":
+        if doc_type in {"lab_pdf", "hl7_oru"}:
+            try:
                 extraction_id = await store.save_lab_extraction(
                     extraction=extraction,  # type: ignore[arg-type]
                     bboxes=bboxes,
@@ -363,7 +375,13 @@ def make_extraction_tools(
                     filename=filename,
                     content_sha256=resolved_sha256,
                 )
-            else:  # intake_form
+            except Exception as exc:
+                return _error_envelope(
+                    f"persistence_failed: {exc.__class__.__name__}", _ms(started)
+                )
+            intake_summary = None
+        else:
+            try:
                 summary = await persister.persist_intake(
                     patient_id=patient_id, extraction=extraction  # type: ignore[arg-type]
                 )
@@ -376,10 +394,10 @@ def make_extraction_tools(
                     filename=filename,
                     content_sha256=resolved_sha256,
                 )
-        except Exception as exc:
-            return _error_envelope(
-                f"persistence_failed: {exc.__class__.__name__}", _ms(started)
-            )
+            except Exception as exc:
+                return _error_envelope(
+                    f"persistence_failed: {exc.__class__.__name__}", _ms(started)
+                )
 
         return {
             "ok": True,
@@ -392,7 +410,7 @@ def make_extraction_tools(
             "extraction": extraction.model_dump(mode="json"),
             "bboxes": [b.model_dump(mode="json") for b in bboxes],
             "intake_summary": intake_summary,
-            "pages_processed": result.pages_processed,
+            "pages_processed": pages_processed,
             "latency_ms": _ms(started),
         }
 
@@ -401,10 +419,10 @@ def make_extraction_tools(
             coroutine=attach_document,
             name="attach_document",
             description=(
-                "Upload a local file (PDF, PNG, or JPEG) to OpenEMR's document "
+                "Upload a local file (PDF, PNG, JPEG, or HL7 ORU) to OpenEMR's document "
                 "store for a patient. Returns the document_id you can pass to "
                 "extract_document. Args: patient_id, file_path (absolute path "
-                "on the agent host), doc_type ('lab_pdf' or 'intake_form')."
+                "on the agent host), doc_type ('lab_pdf', 'intake_form', or 'hl7_oru')."
             ),
         ),
         StructuredTool.from_function(
@@ -427,7 +445,7 @@ def make_extraction_tools(
                 "forms additionally write allergies/medications/medical "
                 "problems to OpenEMR via the Standard API. Args: patient_id, "
                 "document_id (from attach_document or list_patient_documents), "
-                "doc_type ('lab_pdf' or 'intake_form')."
+                "doc_type ('lab_pdf', 'intake_form', or 'hl7_oru')."
             ),
         ),
     ]
