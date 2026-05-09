@@ -29,7 +29,12 @@ from .schemas import FieldWithBBox
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..fhir import FhirClient
     from ..standard_api_client import StandardApiClient
-    from .schemas import IntakeExtraction, LabExtraction
+    from .schemas import (
+        AdtExtraction,
+        IntakeExtraction,
+        LabExtraction,
+        ReferralExtraction,
+    )
 
 _log = logging.getLogger(__name__)
 
@@ -102,10 +107,11 @@ class DocumentExtractionStore:
         patient_id: str,
         filename: str | None = None,
         content_sha256: str | None = None,
+        doc_type: str = "lab_pdf",
     ) -> int:
         """Insert one extraction row and return its primary-key id."""
         return await self._insert(
-            doc_type="lab_pdf",
+            doc_type=doc_type,
             extraction_json=extraction.model_dump(mode="json"),
             bboxes_json=[b.model_dump(mode="json") for b in bboxes],
             document_id=document_id,
@@ -132,6 +138,54 @@ class DocumentExtractionStore:
         """
         return await self._insert(
             doc_type="intake_form",
+            extraction_json=extraction.model_dump(mode="json"),
+            bboxes_json=[b.model_dump(mode="json") for b in bboxes],
+            document_id=document_id,
+            patient_id=patient_id,
+            filename=filename,
+            content_sha256=content_sha256,
+        )
+
+    async def save_adt_extraction(
+        self,
+        *,
+        extraction: AdtExtraction,
+        bboxes: list[FieldWithBBox],
+        document_id: str,
+        patient_id: str,
+        filename: str | None = None,
+        content_sha256: str | None = None,
+    ) -> int:
+        """Insert an HL7 ADT extraction row.
+
+        ADT data isn't lab or intake — registration / encounter-update
+        content lives in its own ``doc_type='hl7_adt'`` row so the
+        document-discussion follow-up path (issue 007) can resurface it
+        from cache without re-parsing.
+        """
+        return await self._insert(
+            doc_type="hl7_adt",
+            extraction_json=extraction.model_dump(mode="json"),
+            bboxes_json=[b.model_dump(mode="json") for b in bboxes],
+            document_id=document_id,
+            patient_id=patient_id,
+            filename=filename,
+            content_sha256=content_sha256,
+        )
+
+    async def save_referral_extraction(
+        self,
+        *,
+        extraction: ReferralExtraction,
+        bboxes: list[FieldWithBBox],
+        document_id: str,
+        patient_id: str,
+        filename: str | None = None,
+        content_sha256: str | None = None,
+    ) -> int:
+        """Insert a DOCX referral extraction row."""
+        return await self._insert(
+            doc_type="docx_referral",
             extraction_json=extraction.model_dump(mode="json"),
             bboxes_json=[b.model_dump(mode="json") for b in bboxes],
             document_id=document_id,

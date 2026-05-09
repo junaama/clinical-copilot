@@ -292,6 +292,79 @@ class LabExtraction(_StrictForbid):
 
 
 # ---------------------------------------------------------------------------
+# XLSX workbook extraction
+# ---------------------------------------------------------------------------
+
+
+class WorkbookPatientField(_StrictForbid):
+    """One key/value field from the workbook's patient sheet."""
+
+    value: str = Field(min_length=1)
+    source_citation: SourceCitation
+
+
+class WorkbookMedication(_StrictForbid):
+    """One medication row from a clinical workbook."""
+
+    brand: str | None = None
+    generic: str | None = None
+    strength: str | None = None
+    route: str | None = None
+    sig: str | None = None
+    indication: str | None = None
+    start_date: str | None = None
+    last_filled: str | None = None
+    refills_remaining: str | None = None
+    prescriber: str | None = None
+    source_citation: SourceCitation
+
+
+class WorkbookLabTrendValue(_StrictForbid):
+    """One dated value inside a workbook lab-trend row."""
+
+    collection_date: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    abnormal_flag: AbnormalFlag
+    source_citation: SourceCitation
+
+
+class WorkbookLabTrend(_StrictForbid):
+    """A longitudinal lab row from the workbook."""
+
+    test_name: str = Field(min_length=1)
+    loinc_code: str | None = None
+    unit: str | None = None
+    reference_range: str | None = None
+    values: list[WorkbookLabTrendValue] = Field(default_factory=list)
+    source_citation: SourceCitation
+
+
+class WorkbookCareGap(_StrictForbid):
+    """One preventive-care or quality gap row from the workbook."""
+
+    measure: str = Field(min_length=1)
+    reference: str | None = None
+    status: str | None = None
+    last_done: str | None = None
+    due_date: str | None = None
+    notes: str | None = None
+    source_citation: SourceCitation
+
+
+class WorkbookExtraction(_StrictForbid):
+    """Structured deterministic extraction for week-2 clinical workbooks."""
+
+    patient_fields: dict[str, WorkbookPatientField] = Field(default_factory=dict)
+    medications: list[WorkbookMedication] = Field(default_factory=list)
+    lab_trends: list[WorkbookLabTrend] = Field(default_factory=list)
+    care_gaps: list[WorkbookCareGap] = Field(default_factory=list)
+    sheet_roles: dict[str, str] = Field(default_factory=dict)
+    source_document_id: str = Field(min_length=1, description="DocumentReference/{id}.")
+    extraction_model: str = Field(min_length=1)
+    extraction_timestamp: str = Field(min_length=1, description="ISO 8601.")
+
+
+# ---------------------------------------------------------------------------
 # Intake-form extraction
 # ---------------------------------------------------------------------------
 
@@ -379,6 +452,218 @@ class IntakeExtraction(_StrictForbid):
     family_history: list[FamilyHistoryEntry] = Field(default_factory=list)
     social_history: SocialHistory | None = None
     source_citation: SourceCitation
+    source_document_id: str = Field(min_length=1, description="DocumentReference/{id}.")
+    extraction_model: str = Field(min_length=1)
+    extraction_timestamp: str = Field(min_length=1, description="ISO 8601.")
+
+
+# ---------------------------------------------------------------------------
+# HL7 ADT (registration / encounter-update) extraction
+# ---------------------------------------------------------------------------
+
+
+class AdtMessageMetadata(_StrictForbid):
+    """MSH/EVN-derived header for an HL7 v2 ADT message.
+
+    Captures who sent the message, who received it, the trigger event
+    (``A01``, ``A04``, ``A08`` …), the message control id, and the event
+    reason text. ``message_datetime`` and ``event_datetime`` are HL7
+    timestamps converted to ISO 8601 where parseable.
+    """
+
+    sending_application: str | None = None
+    sending_facility: str | None = None
+    receiving_application: str | None = None
+    receiving_facility: str | None = None
+    message_type: str | None = None
+    trigger_event: str | None = None
+    message_structure: str | None = None
+    message_control_id: str | None = None
+    message_datetime: str | None = None
+    processing_id: str | None = None
+    version: str | None = None
+    event_type: str | None = None
+    event_datetime: str | None = None
+    event_reason: str | None = None
+
+
+class AdtPatientDemographics(_StrictForbid):
+    """PID-derived patient demographics.
+
+    Every field is optional — different ADT senders populate different
+    subsets. ``race`` and ``ethnicity`` carry the HL7 coded display text
+    rather than the numeric code.
+    """
+
+    name: str | None = None
+    dob: str | None = None
+    gender: str | None = None
+    race: str | None = None
+    ethnicity: str | None = None
+    marital_status: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    language: str | None = None
+
+
+class AdtContact(_StrictForbid):
+    """One next-of-kin / emergency contact row (NK1 segment)."""
+
+    name: str | None = None
+    relationship: str | None = None
+    phone: str | None = None
+    address: str | None = None
+
+
+class AdtAllergy(_StrictForbid):
+    """One AL1 allergy row attached to an ADT message.
+
+    ADT messages occasionally carry allergies (e.g. medication-
+    reconciliation events). Fields mirror the HL7 AL1 segment:
+    ``type`` (e.g. ``DA`` drug allergy), ``substance``, ``severity``,
+    and free-text ``reaction``.
+    """
+
+    type: str | None = None
+    substance: str = Field(min_length=1)
+    severity: str | None = None
+    reaction: str | None = None
+
+
+class AdtVisit(_StrictForbid):
+    """PV1-derived visit / encounter context.
+
+    ``patient_class`` is the HL7 code (``I``, ``O``, ``E`` …) preserved
+    as-is. ``location`` is the assigned point of care string.
+    """
+
+    patient_class: str | None = None
+    location: str | None = None
+    attending_provider: str | None = None
+    referring_provider: str | None = None
+    admission_datetime: str | None = None
+    visit_number: str | None = None
+
+
+class AdtPrimaryCare(_StrictForbid):
+    """PD1-derived primary-care assignment."""
+
+    patient_primary_facility: str | None = None
+    patient_primary_care_provider: str | None = None
+
+
+class AdtGuarantor(_StrictForbid):
+    """GT1-derived guarantor — who is financially responsible."""
+
+    name: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    relationship_to_patient: str | None = None
+
+
+class AdtInsurance(_StrictForbid):
+    """One IN1 insurance row.
+
+    ``insured_name`` distinguishes self-insured (patient is subscriber)
+    from dependent coverage; ``relationship_to_subscriber`` records
+    ``SEL`` / ``SPO`` / ``CHD`` etc. as found in the message.
+    """
+
+    plan_id: str | None = None
+    company_id: str | None = None
+    company_name: str | None = None
+    group_number: str | None = None
+    group_name: str | None = None
+    insured_name: str | None = None
+    relationship_to_subscriber: str | None = None
+    member_id: str | None = None
+    plan_type: str | None = None
+
+
+class AdtSegmentCitation(_StrictForbid):
+    """Citation for one ADT-segment-derived field.
+
+    Mirrors :class:`SourceCitation` but the structured fields are
+    HL7-segment-aware so the supervisor can link a fact back to the
+    exact ``(segment, set_id, field)`` location in the raw message.
+    """
+
+    source_type: SourceType = "hl7_adt"
+    source_id: str = Field(min_length=1)
+    segment: str = Field(min_length=1)
+    set_id: str | None = None
+    field: str | None = None
+    quote_or_value: str | None = None
+
+
+class AdtExtraction(_StrictForbid):
+    """Validated deterministic parse of an HL7 v2 ADT message.
+
+    ADT messages are NOT lab data — this shape exists so the upload
+    response and downstream chat can describe registration / encounter-
+    update content without forcing it through the lab or intake schema.
+    All segment-derived sections are optional; ``contacts``,
+    ``allergies``, and ``insurance`` carry empty lists when absent.
+
+    ``citations`` carries one entry per populated section root (or per
+    row of a list section) so the verifier and UI can audit each fact
+    back to its HL7 segment + field.
+    """
+
+    message_metadata: AdtMessageMetadata
+    patient_identifiers: list[dict[str, str]] = Field(default_factory=list)
+    patient_demographics: AdtPatientDemographics
+    primary_care: AdtPrimaryCare | None = None
+    visit: AdtVisit | None = None
+    contacts: list[AdtContact] = Field(default_factory=list)
+    allergies: list[AdtAllergy] = Field(default_factory=list)
+    guarantor: AdtGuarantor | None = None
+    insurance: list[AdtInsurance] = Field(default_factory=list)
+    citations: list[AdtSegmentCitation] = Field(default_factory=list)
+    source_document_id: str = Field(min_length=1, description="DocumentReference/{id}.")
+    extraction_model: str = Field(min_length=1)
+    extraction_timestamp: str = Field(min_length=1, description="ISO 8601.")
+
+
+# ---------------------------------------------------------------------------
+# DOCX referral extraction
+# ---------------------------------------------------------------------------
+
+
+class ReferralLab(_StrictForbid):
+    """One pertinent lab value copied from a referral letter."""
+
+    name: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    unit: str | None = None
+    flag: str | None = None
+    collection_date: str | None = None
+    source_citation: SourceCitation
+
+
+class ReferralExtraction(_StrictForbid):
+    """Structured clinical summary from a DOCX referral letter.
+
+    Referral letters are typed text documents rather than visual lab or
+    intake forms, so they keep their own payload instead of being forced
+    into either legacy schema.
+    """
+
+    referring_provider: str | None = None
+    referring_organization: str | None = None
+    receiving_provider: str | None = None
+    receiving_organization: str | None = None
+    patient_name: str | None = None
+    patient_dob: str | None = None
+    patient_identifiers: dict[str, str] = Field(default_factory=dict)
+    reason_for_referral: str | None = None
+    pertinent_history: str | None = None
+    past_medical_history: list[str] = Field(default_factory=list)
+    current_medications: list[str] = Field(default_factory=list)
+    allergies: list[str] = Field(default_factory=list)
+    pertinent_labs: list[ReferralLab] = Field(default_factory=list)
+    requested_action: str | None = None
+    source_citations: dict[str, SourceCitation] = Field(default_factory=dict)
     source_document_id: str = Field(min_length=1, description="DocumentReference/{id}.")
     extraction_model: str = Field(min_length=1)
     extraction_timestamp: str = Field(min_length=1, description="ISO 8601.")
