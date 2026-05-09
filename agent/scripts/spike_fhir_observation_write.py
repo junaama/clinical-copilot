@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-from copilot.config import get_settings
+from copilot.config import Settings
 from copilot.extraction.schemas import LabExtraction, LabResult
 from copilot.extraction.vlm import extract_lab
 from copilot.llm import build_vision_model
@@ -37,6 +37,7 @@ class SpikeConfig:
     token: str
     patient_id: str
     document_path: Path
+    settings: Settings
 
 
 @dataclass(frozen=True)
@@ -107,10 +108,11 @@ def missing_live_inputs(repo_root: Path | None = None) -> list[str]:
     """List missing live inputs without exposing secret values."""
 
     root = repo_root or repo_root_from_here()
+    settings = _load_settings(root)
     missing: list[str] = []
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not settings.anthropic_api_key.get_secret_value():
         missing.append("ANTHROPIC_API_KEY")
-    if not _resolve_token(root):
+    if not _resolve_token(root, settings):
         missing.append("OPENEMR_FHIR_TOKEN")
     if not _resolve_patient_id():
         missing.append("FHIR_OBSERVATION_SPIKE_PATIENT_ID or E2E_PATIENT_UUID")
@@ -123,16 +125,16 @@ def load_config(repo_root: Path | None = None, document: str | None = None) -> S
     """Load config from env and checked-in fixture paths."""
 
     root = repo_root or repo_root_from_here()
-    settings = get_settings()
+    settings = _load_settings(root)
     document_path = Path(document) if document else (_find_lab_document(root) or Path())
     if not document_path.is_absolute():
         document_path = root / document_path
     if not document_path.exists():
         raise RuntimeError(f"lab fixture missing: {document_path}")
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not settings.anthropic_api_key.get_secret_value():
         raise RuntimeError("missing VLM credential: set ANTHROPIC_API_KEY")
 
-    token = _resolve_token(root)
+    token = _resolve_token(root, settings)
     if not token:
         raise RuntimeError(
             "missing write-capable SMART token: set OPENEMR_FHIR_TOKEN "
@@ -151,6 +153,7 @@ def load_config(repo_root: Path | None = None, document: str | None = None) -> S
         token=token,
         patient_id=strip_fhir_prefix(patient_id, "Patient"),
         document_path=document_path,
+        settings=settings,
     )
 
 
@@ -175,7 +178,7 @@ async def run_spike(
         )
 
     try:
-        extraction = await extract_labs(config.document_path)
+        extraction = await extract_labs(config.document_path, settings=config.settings)
     except RuntimeError as exc:
         return SpikeReport(
             document_path=config.document_path,
@@ -218,10 +221,14 @@ async def run_spike(
     )
 
 
-async def extract_labs(document_path: Path) -> LabExtraction:
+async def extract_labs(
+    document_path: Path,
+    *,
+    settings: Settings | None = None,
+) -> LabExtraction:
     """Run the existing VLM lab extraction pipeline on a real fixture file."""
 
-    settings = get_settings()
+    settings = settings or _load_settings(repo_root_from_here())
     model = build_vision_model(settings)
     file_data = document_path.read_bytes()
     mimetype = _guess_mimetype(document_path)
@@ -379,6 +386,11 @@ def strip_fhir_prefix(value: str, resource_type: str) -> str:
     return value[len(prefix) :] if value.startswith(prefix) else value
 
 
+def _load_settings(repo_root: Path) -> Settings:
+    env_file = repo_root / "agent" / ".env"
+    return Settings(_env_file=env_file)
+
+
 def _resolve_patient_id() -> str:
     return (
         os.environ.get("FHIR_OBSERVATION_SPIKE_PATIENT_ID")
@@ -389,10 +401,14 @@ def _resolve_patient_id() -> str:
     ).strip()
 
 
-def _resolve_token(repo_root: Path) -> str:
+def _resolve_token(repo_root: Path, settings: Settings | None = None) -> str:
     env_token = os.environ.get("OPENEMR_FHIR_TOKEN", "").strip()
     if env_token:
         return env_token
+    if settings is not None:
+        settings_token = settings.openemr_fhir_token.get_secret_value().strip()
+        if settings_token:
+            return settings_token
     token_path = repo_root / TOKEN_CACHE
     if not token_path.exists():
         return ""
