@@ -108,6 +108,8 @@ export interface UploadBboxRecord {
   readonly matched_text: string;
   readonly bbox: BoundingBox;
   readonly match_confidence: number;
+  /** Coordinate source: 'vlm' for VLM-native or 'pymupdf' for word-geometry. */
+  readonly bbox_source?: 'vlm' | 'pymupdf' | null;
 }
 
 /**

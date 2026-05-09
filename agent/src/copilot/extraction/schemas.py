@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Closed set of citation sources. Anything outside this list is a programming
 # error, not a runtime input — the supervisor wires sources by hand.
@@ -78,6 +78,39 @@ class SourceCitation(_StrictForbid):
     quote_or_value: str | None = None
 
 
+BboxSource = Literal["vlm", "pymupdf"]
+
+
+class VlmBoundingBox(BaseModel):
+    """VLM-emitted bounding box in normalized page-space.
+
+    The VLM returns per-result bounding boxes as ``[x0, y0, x1, y1]``
+    corner coordinates in ``[0, 1]`` page-space (0,0 = top-left,
+    1,1 = bottom-right). This model captures the raw VLM output before
+    the matcher selects between VLM-native and PyMuPDF-derived coords.
+
+    Uses non-strict config so JSON integer ``0`` coerces to float without
+    validation errors (the VLM may emit ``0`` or ``1`` as JSON ints).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    page: int = Field(ge=1, description="1-indexed page number.")
+    bbox: list[float] = Field(
+        min_length=4,
+        max_length=4,
+        description="[x0, y0, x1, y1] in [0, 1] page-space.",
+    )
+
+    @field_validator("bbox")
+    @classmethod
+    def _check_coords(cls, v: list[float]) -> list[float]:
+        if len(v) != 4:
+            msg = "bbox must have exactly 4 coordinates"
+            raise ValueError(msg)
+        return v
+
+
 class BoundingBox(_StrictForbid):
     """Normalized rectangle on a page (coords in 0-1 range, top-left origin).
 
@@ -99,6 +132,10 @@ class FieldWithBBox(_StrictForbid):
     ``bbox`` is ``None`` when the bbox matcher could not find the extracted
     value in the OCR spans (handwritten text, poor scan, scanned image
     without text layer). The caller falls back to a page-level citation.
+
+    ``bbox_source`` indicates which coordinate source produced the ``bbox``:
+    ``"vlm"`` for VLM-native coordinates, ``"pymupdf"`` for PyMuPDF
+    word-geometry matching. ``None`` when ``bbox`` is ``None``.
     """
 
     field_path: str = Field(min_length=1, description="Dotted path into the extraction object.")
@@ -112,6 +149,10 @@ class FieldWithBBox(_StrictForbid):
         ge=0.0,
         le=1.0,
         description="String similarity score (1.0 = exact, 0.0 = no overlap).",
+    )
+    bbox_source: BboxSource | None = Field(
+        default=None,
+        description="Coordinate source: 'vlm' or 'pymupdf'. None when bbox is None.",
     )
 
 
@@ -129,6 +170,10 @@ class DrawableFieldBBox(_StrictForbid):
     matched_text: str
     bbox: BoundingBox
     match_confidence: float = Field(ge=0.0, le=1.0)
+    bbox_source: BboxSource | None = Field(
+        default=None,
+        description="Coordinate source: 'vlm' or 'pymupdf'.",
+    )
 
 
 def filter_drawable_bboxes(
@@ -149,6 +194,7 @@ def filter_drawable_bboxes(
             matched_text=b.matched_text,
             bbox=b.bbox,
             match_confidence=b.match_confidence,
+            bbox_source=b.bbox_source,
         )
         for b in bboxes
         if b.bbox is not None
@@ -166,6 +212,10 @@ class LabResult(_StrictForbid):
     ``value`` is ``str`` because lab values mix integers ("4"), floats
     ("4.2"), and qualitative results ("positive", "trace"). The VLM is
     instructed to emit the value as it appears on the document.
+
+    ``vlm_bbox`` carries the VLM-emitted bounding box for this result row
+    in normalized page-space. The bbox matcher uses this as the primary
+    coordinate source when valid; PyMuPDF word-geometry is the fallback.
     """
 
     test_name: str = Field(min_length=1)
@@ -176,6 +226,7 @@ class LabResult(_StrictForbid):
     abnormal_flag: AbnormalFlag
     confidence: ExtractionConfidence
     source_citation: SourceCitation
+    vlm_bbox: VlmBoundingBox | None = None
 
 
 class LabExtraction(_StrictForbid):

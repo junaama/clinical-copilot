@@ -35,6 +35,7 @@ emit a page-level citation (page=1) when they see this.
 from __future__ import annotations
 
 import io
+import logging
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
@@ -42,7 +43,9 @@ from typing import Any
 import fitz  # PyMuPDF
 from pydantic import BaseModel
 
-from copilot.extraction.schemas import BoundingBox, FieldWithBBox
+from copilot.extraction.schemas import BoundingBox, FieldWithBBox, VlmBoundingBox
+
+_log = logging.getLogger(__name__)
 
 _DEFAULT_SIMILARITY_THRESHOLD = 0.8
 
@@ -105,6 +108,76 @@ class _Match:
     score: float
 
 
+def _extract_vlm_bboxes(
+    extraction: BaseModel | dict[str, Any] | list[Any],
+) -> dict[str, VlmBoundingBox]:
+    """Extract VLM-emitted bboxes from the extraction, keyed by result group prefix.
+
+    For a ``LabExtraction`` with ``results[i].vlm_bbox``, returns a dict
+    mapping ``"results[i]"`` → ``VlmBoundingBox``. The bbox matcher uses
+    this to look up VLM-native coordinates for any field under that result.
+    """
+
+    if isinstance(extraction, BaseModel):
+        data: Any = extraction.model_dump(mode="python")
+    else:
+        data = extraction
+
+    bboxes: dict[str, VlmBoundingBox] = {}
+    if not isinstance(data, dict):
+        return bboxes
+
+    results = data.get("results")
+    if not isinstance(results, list):
+        return bboxes
+
+    for i, result in enumerate(results):
+        if not isinstance(result, dict):
+            continue
+        vlm_bbox_data = result.get("vlm_bbox")
+        if vlm_bbox_data is None:
+            continue
+        try:
+            vlm_bbox = VlmBoundingBox.model_validate(vlm_bbox_data)
+            bboxes[f"results[{i}]"] = vlm_bbox
+        except Exception:
+            _log.debug("results[%d].vlm_bbox failed validation, skipping", i)
+
+    return bboxes
+
+
+def _validate_vlm_bbox(vlm_bbox: VlmBoundingBox) -> str | None:
+    """Return ``None`` if the VLM bbox is valid for use, or a reason string if not.
+
+    Checks:
+    - All four coordinates are in [0, 1] range
+    - The box has non-zero area (x1 > x0, y1 > y0)
+    - The box has plausible placement (not degenerate or implausibly small)
+    """
+
+    x0, y0, x1, y1 = vlm_bbox.bbox
+
+    # Check bounds: all coordinates must be in [0, 1]
+    for coord_name, coord in [("x0", x0), ("y0", y0), ("x1", x1), ("y1", y1)]:
+        if coord < 0.0 or coord > 1.0:
+            return f"{coord_name}={coord} out of [0, 1] bounds"
+
+    # Check non-zero area
+    width = x1 - x0
+    height = y1 - y0
+    if width <= 0.0:
+        return f"zero or negative width: x1-x0={width}"
+    if height <= 0.0:
+        return f"zero or negative height: y1-y0={height}"
+
+    # Check plausible placement (box must have at least minimal area)
+    area = width * height
+    if area < 1e-6:
+        return f"implausibly small area: {area}"
+
+    return None
+
+
 def match_extraction_to_bboxes(
     extraction: BaseModel | dict[str, Any] | list[Any],
     pdf_bytes: bytes,
@@ -130,6 +203,7 @@ def match_extraction_to_bboxes(
         A list of ``FieldWithBBox`` in the same order as the walk.
     """
     fields = _collect_fields(extraction)
+    vlm_bboxes = _extract_vlm_bboxes(extraction)
     pages = _read_pdf_pages(pdf_bytes, mimetype=mimetype)
 
     if not pages:
@@ -159,6 +233,47 @@ def match_extraction_to_bboxes(
             )
             continue
 
+        # Check for a VLM-native bbox from the parent result group.
+        group = _group_prefix(path)
+        vlm_bbox = vlm_bboxes.get(group) if group else None
+        if vlm_bbox is not None:
+            reason = _validate_vlm_bbox(vlm_bbox)
+            if reason is None:
+                # VLM bbox is valid — use it as the primary coordinate source.
+                x0, y0, x1, y1 = vlm_bbox.bbox
+                _log.debug(
+                    "bbox_source=vlm for %s (page=%d, coords=[%.3f,%.3f,%.3f,%.3f])",
+                    path,
+                    vlm_bbox.page,
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                )
+                out.append(
+                    FieldWithBBox(
+                        field_path=path,
+                        extracted_value=value,
+                        matched_text=value,
+                        bbox=BoundingBox(
+                            page=vlm_bbox.page,
+                            x=x0,
+                            y=y0,
+                            width=max(x1 - x0, 1e-6),
+                            height=max(y1 - y0, 1e-6),
+                        ),
+                        match_confidence=1.0,
+                        bbox_source="vlm",
+                    )
+                )
+                continue
+            _log.debug(
+                "bbox_source=pymupdf for %s (vlm_bbox rejected: %s)",
+                path,
+                reason,
+            )
+
+        # Fall back to PyMuPDF word-geometry matching.
         match = _find_best_match(
             value=value,
             pages=pages,
@@ -198,6 +313,7 @@ def match_extraction_to_bboxes(
                     ),
                 ),
                 match_confidence=match.score,
+                bbox_source="pymupdf",
             )
         )
 

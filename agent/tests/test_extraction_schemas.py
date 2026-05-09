@@ -37,6 +37,7 @@ from copilot.extraction.schemas import (
     LabResult,
     SocialHistory,
     SourceCitation,
+    VlmBoundingBox,
     filter_drawable_bboxes,
 )
 
@@ -655,3 +656,134 @@ def test_filter_drawable_bboxes_all_non_drawable_returns_empty() -> None:
         for i in range(3)
     ]
     assert filter_drawable_bboxes(not_drawable) == []
+
+
+# ---------------------------------------------------------------------------
+# VlmBoundingBox (issue 056)
+# ---------------------------------------------------------------------------
+
+
+def test_vlm_bounding_box_valid() -> None:
+    vbb = VlmBoundingBox(page=1, bbox=[0.1, 0.2, 0.8, 0.9])
+    assert vbb.page == 1
+    assert len(vbb.bbox) == 4
+    assert vbb.bbox[0] == pytest.approx(0.1)
+
+
+def test_vlm_bounding_box_accepts_integer_coords() -> None:
+    """VLM may output 0 or 1 as JSON integers; non-strict config allows coercion."""
+    vbb = VlmBoundingBox(page=1, bbox=[0, 0, 1, 1])
+    assert vbb.bbox == [0.0, 0.0, 1.0, 1.0]
+
+
+def test_vlm_bounding_box_rejects_wrong_length() -> None:
+    with pytest.raises(ValidationError):
+        VlmBoundingBox(page=1, bbox=[0.1, 0.2, 0.3])
+
+    with pytest.raises(ValidationError):
+        VlmBoundingBox(page=1, bbox=[0.1, 0.2, 0.3, 0.4, 0.5])
+
+
+def test_vlm_bounding_box_rejects_zero_page() -> None:
+    with pytest.raises(ValidationError):
+        VlmBoundingBox(page=0, bbox=[0.1, 0.2, 0.3, 0.4])
+
+
+def test_vlm_bounding_box_rejects_extra_field() -> None:
+    with pytest.raises(ValidationError):
+        VlmBoundingBox(page=1, bbox=[0.1, 0.2, 0.3, 0.4], extra="x")  # type: ignore[call-arg]
+
+
+def test_vlm_bounding_box_round_trip() -> None:
+    vbb = VlmBoundingBox(page=2, bbox=[0.1, 0.2, 0.5, 0.8])
+    again = VlmBoundingBox.model_validate(vbb.model_dump())
+    assert again == vbb
+
+
+# ---------------------------------------------------------------------------
+# LabResult with vlm_bbox (issue 056)
+# ---------------------------------------------------------------------------
+
+
+def test_lab_result_vlm_bbox_optional_defaults_none() -> None:
+    lr = LabResult(**_valid_lab_result_payload())
+    assert lr.vlm_bbox is None
+
+
+def test_lab_result_vlm_bbox_accepted_when_provided() -> None:
+    payload = _valid_lab_result_payload()
+    payload["vlm_bbox"] = {"page": 1, "bbox": [0.1, 0.2, 0.8, 0.3]}
+    lr = LabResult(**payload)
+    assert lr.vlm_bbox is not None
+    assert lr.vlm_bbox.page == 1
+    assert len(lr.vlm_bbox.bbox) == 4
+
+
+def test_lab_result_vlm_bbox_can_be_explicit_none() -> None:
+    payload = _valid_lab_result_payload()
+    payload["vlm_bbox"] = None
+    lr = LabResult(**payload)
+    assert lr.vlm_bbox is None
+
+
+def test_lab_extraction_round_trip_with_vlm_bbox() -> None:
+    payload = _valid_lab_extraction_payload()
+    payload["results"][0]["vlm_bbox"] = {"page": 1, "bbox": [0.1, 0.15, 0.9, 0.25]}
+    le = LabExtraction(**payload)
+    again = LabExtraction.model_validate(le.model_dump())
+    assert again.results[0].vlm_bbox is not None
+    assert again.results[0].vlm_bbox.bbox == pytest.approx([0.1, 0.15, 0.9, 0.25])
+
+
+# ---------------------------------------------------------------------------
+# FieldWithBBox / DrawableFieldBBox with bbox_source (issue 056)
+# ---------------------------------------------------------------------------
+
+
+def test_field_with_bbox_accepts_bbox_source() -> None:
+    fb = FieldWithBBox(
+        field_path="results[0].value",
+        extracted_value="7.2",
+        matched_text="7.2",
+        bbox=BoundingBox(page=1, x=0.1, y=0.2, width=0.3, height=0.05),
+        match_confidence=1.0,
+        bbox_source="vlm",
+    )
+    assert fb.bbox_source == "vlm"
+
+
+def test_field_with_bbox_bbox_source_defaults_none() -> None:
+    fb = FieldWithBBox(
+        field_path="results[0].value",
+        extracted_value="7.2",
+        matched_text="7.2",
+        bbox=BoundingBox(page=1, x=0.1, y=0.2, width=0.3, height=0.05),
+        match_confidence=0.95,
+    )
+    assert fb.bbox_source is None
+
+
+def test_drawable_field_bbox_preserves_bbox_source() -> None:
+    d = DrawableFieldBBox(
+        field_path="results[0].value",
+        extracted_value="7.2",
+        matched_text="7.2",
+        bbox=BoundingBox(page=1, x=0.1, y=0.2, width=0.3, height=0.05),
+        match_confidence=1.0,
+        bbox_source="vlm",
+    )
+    assert d.bbox_source == "vlm"
+
+
+def test_filter_drawable_bboxes_preserves_bbox_source() -> None:
+    drawable = FieldWithBBox(
+        field_path="results[0].value",
+        extracted_value="7.2",
+        matched_text="7.2",
+        bbox=BoundingBox(page=1, x=0.1, y=0.2, width=0.3, height=0.05),
+        match_confidence=1.0,
+        bbox_source="vlm",
+    )
+    out = filter_drawable_bboxes([drawable])
+    assert len(out) == 1
+    assert out[0].bbox_source == "vlm"

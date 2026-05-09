@@ -307,3 +307,280 @@ def test_fixture_lab_pdf_locates_patient_name() -> None:
     # Chief concern is typed by the VLM, not present verbatim in the
     # PDF — the matcher should report no bbox.
     assert chief.bbox is None or chief.match_confidence < 0.99
+
+
+# ---------------------------------------------------------------------------
+# VLM-native bounding boxes (issue 056)
+# ---------------------------------------------------------------------------
+
+
+def test_vlm_bbox_happy_path_uses_vlm_coordinates() -> None:
+    """When a valid vlm_bbox is present on a LabResult, the matcher uses it
+    as the primary coordinate source instead of PyMuPDF word matching."""
+    pdf = _exact_pdf()
+    extraction = {
+        "results": [
+            {
+                "test_name": "Hemoglobin A1C",
+                "value": "7.2",
+                "unit": "percent",
+                "abnormal_flag": "high",
+                "confidence": "high",
+                "source_citation": {
+                    "source_type": "lab_pdf",
+                    "source_id": "DocumentReference/abc",
+                },
+                "vlm_bbox": {"page": 1, "bbox": [0.15, 0.10, 0.85, 0.25]},
+            }
+        ],
+        "source_document_id": "DocumentReference/abc",
+        "extraction_model": "claude-sonnet-4",
+        "extraction_timestamp": "2026-05-09T00:00:00Z",
+    }
+
+    fields = match_extraction_to_bboxes(extraction, pdf)
+    by_path = {f.field_path: f for f in fields}
+
+    # Fields within the result group should use VLM-native coordinates.
+    test_name = by_path["results[0].test_name"]
+    assert test_name.bbox is not None
+    assert test_name.bbox_source == "vlm"
+    assert test_name.bbox.page == 1
+    assert test_name.bbox.x == pytest.approx(0.15, abs=0.001)
+    assert test_name.bbox.y == pytest.approx(0.10, abs=0.001)
+    assert test_name.bbox.width == pytest.approx(0.70, abs=0.001)
+    assert test_name.bbox.height == pytest.approx(0.15, abs=0.001)
+    assert test_name.match_confidence == 1.0
+
+    value_field = by_path["results[0].value"]
+    assert value_field.bbox is not None
+    assert value_field.bbox_source == "vlm"
+    assert value_field.bbox.x == pytest.approx(0.15, abs=0.001)
+
+
+def test_vlm_bbox_missing_falls_back_to_pymupdf() -> None:
+    """When vlm_bbox is None or absent, the matcher falls back to PyMuPDF."""
+    pdf = _exact_pdf()
+    extraction = {
+        "results": [
+            {
+                "test_name": "Hemoglobin A1C",
+                "value": "7.2",
+                "unit": "percent",
+                "abnormal_flag": "high",
+                "confidence": "high",
+                "source_citation": {
+                    "source_type": "lab_pdf",
+                    "source_id": "DocumentReference/abc",
+                },
+                "vlm_bbox": None,
+            }
+        ],
+        "source_document_id": "DocumentReference/abc",
+        "extraction_model": "claude-sonnet-4",
+        "extraction_timestamp": "2026-05-09T00:00:00Z",
+    }
+
+    fields = match_extraction_to_bboxes(extraction, pdf)
+    by_path = {f.field_path: f for f in fields}
+
+    test_name = by_path["results[0].test_name"]
+    assert test_name.bbox is not None
+    assert test_name.bbox_source == "pymupdf"
+
+
+def test_vlm_bbox_out_of_bounds_falls_back_to_pymupdf() -> None:
+    """When vlm_bbox has coordinates outside [0, 1], fall back to PyMuPDF."""
+    pdf = _exact_pdf()
+    extraction = {
+        "results": [
+            {
+                "test_name": "Hemoglobin A1C",
+                "value": "7.2",
+                "unit": "percent",
+                "abnormal_flag": "high",
+                "confidence": "high",
+                "source_citation": {
+                    "source_type": "lab_pdf",
+                    "source_id": "DocumentReference/abc",
+                },
+                # x1 = 1.5 is out of bounds
+                "vlm_bbox": {"page": 1, "bbox": [0.1, 0.1, 1.5, 0.3]},
+            }
+        ],
+        "source_document_id": "DocumentReference/abc",
+        "extraction_model": "claude-sonnet-4",
+        "extraction_timestamp": "2026-05-09T00:00:00Z",
+    }
+
+    fields = match_extraction_to_bboxes(extraction, pdf)
+    by_path = {f.field_path: f for f in fields}
+
+    test_name = by_path["results[0].test_name"]
+    assert test_name.bbox is not None
+    assert test_name.bbox_source == "pymupdf"
+
+
+def test_vlm_bbox_zero_area_falls_back_to_pymupdf() -> None:
+    """When vlm_bbox has zero area (x0 == x1 or y0 == y1), fall back."""
+    pdf = _exact_pdf()
+    extraction = {
+        "results": [
+            {
+                "test_name": "Hemoglobin A1C",
+                "value": "7.2",
+                "unit": "percent",
+                "abnormal_flag": "high",
+                "confidence": "high",
+                "source_citation": {
+                    "source_type": "lab_pdf",
+                    "source_id": "DocumentReference/abc",
+                },
+                # x0 == x1 → zero width
+                "vlm_bbox": {"page": 1, "bbox": [0.5, 0.1, 0.5, 0.3]},
+            }
+        ],
+        "source_document_id": "DocumentReference/abc",
+        "extraction_model": "claude-sonnet-4",
+        "extraction_timestamp": "2026-05-09T00:00:00Z",
+    }
+
+    fields = match_extraction_to_bboxes(extraction, pdf)
+    by_path = {f.field_path: f for f in fields}
+
+    test_name = by_path["results[0].test_name"]
+    assert test_name.bbox is not None
+    assert test_name.bbox_source == "pymupdf"
+
+
+def test_vlm_bbox_negative_coords_falls_back_to_pymupdf() -> None:
+    """When vlm_bbox has negative coordinates, fall back to PyMuPDF."""
+    pdf = _exact_pdf()
+    extraction = {
+        "results": [
+            {
+                "test_name": "Hemoglobin A1C",
+                "value": "7.2",
+                "unit": "percent",
+                "abnormal_flag": "high",
+                "confidence": "high",
+                "source_citation": {
+                    "source_type": "lab_pdf",
+                    "source_id": "DocumentReference/abc",
+                },
+                "vlm_bbox": {"page": 1, "bbox": [-0.1, 0.1, 0.5, 0.3]},
+            }
+        ],
+        "source_document_id": "DocumentReference/abc",
+        "extraction_model": "claude-sonnet-4",
+        "extraction_timestamp": "2026-05-09T00:00:00Z",
+    }
+
+    fields = match_extraction_to_bboxes(extraction, pdf)
+    by_path = {f.field_path: f for f in fields}
+
+    test_name = by_path["results[0].test_name"]
+    assert test_name.bbox is not None
+    assert test_name.bbox_source == "pymupdf"
+
+
+def test_vlm_bbox_implausibly_small_falls_back_to_pymupdf() -> None:
+    """When vlm_bbox area is implausibly small, fall back to PyMuPDF."""
+    pdf = _exact_pdf()
+    extraction = {
+        "results": [
+            {
+                "test_name": "Hemoglobin A1C",
+                "value": "7.2",
+                "unit": "percent",
+                "abnormal_flag": "high",
+                "confidence": "high",
+                "source_citation": {
+                    "source_type": "lab_pdf",
+                    "source_id": "DocumentReference/abc",
+                },
+                # Tiny area: 0.0001 * 0.0001 = 1e-8 < 1e-6 threshold
+                "vlm_bbox": {"page": 1, "bbox": [0.5, 0.5, 0.5001, 0.5001]},
+            }
+        ],
+        "source_document_id": "DocumentReference/abc",
+        "extraction_model": "claude-sonnet-4",
+        "extraction_timestamp": "2026-05-09T00:00:00Z",
+    }
+
+    fields = match_extraction_to_bboxes(extraction, pdf)
+    by_path = {f.field_path: f for f in fields}
+
+    test_name = by_path["results[0].test_name"]
+    assert test_name.bbox is not None
+    assert test_name.bbox_source == "pymupdf"
+
+
+def test_vlm_bbox_does_not_apply_to_top_level_fields() -> None:
+    """Top-level fields (patient_name etc.) do not have VLM bboxes and
+    should always use PyMuPDF matching."""
+    pdf = _exact_pdf()
+    extraction = {
+        "patient_name": "CHEN, MARGARET",
+        "results": [
+            {
+                "test_name": "Hemoglobin A1C",
+                "value": "7.2",
+                "unit": "percent",
+                "abnormal_flag": "high",
+                "confidence": "high",
+                "source_citation": {
+                    "source_type": "lab_pdf",
+                    "source_id": "DocumentReference/abc",
+                },
+                "vlm_bbox": {"page": 1, "bbox": [0.15, 0.10, 0.85, 0.25]},
+            }
+        ],
+        "source_document_id": "DocumentReference/abc",
+        "extraction_model": "claude-sonnet-4",
+        "extraction_timestamp": "2026-05-09T00:00:00Z",
+    }
+
+    fields = match_extraction_to_bboxes(extraction, pdf)
+    by_path = {f.field_path: f for f in fields}
+
+    # Top-level patient_name uses PyMuPDF (no group prefix → no vlm_bbox)
+    patient_name = by_path["patient_name"]
+    assert patient_name.bbox is not None
+    assert patient_name.bbox_source == "pymupdf"
+
+    # Result fields use VLM
+    test_name = by_path["results[0].test_name"]
+    assert test_name.bbox_source == "vlm"
+
+
+def test_vlm_bbox_derived_fields_still_none() -> None:
+    """Derived/metadata fields (abnormal_flag, confidence, source_citation.*)
+    should still produce bbox=None even when vlm_bbox is present."""
+    pdf = _exact_pdf()
+    extraction = {
+        "results": [
+            {
+                "test_name": "Hemoglobin A1C",
+                "value": "7.2",
+                "unit": "percent",
+                "abnormal_flag": "high",
+                "confidence": "high",
+                "source_citation": {
+                    "source_type": "lab_pdf",
+                    "source_id": "DocumentReference/abc",
+                },
+                "vlm_bbox": {"page": 1, "bbox": [0.15, 0.10, 0.85, 0.25]},
+            }
+        ],
+        "source_document_id": "DocumentReference/abc",
+        "extraction_model": "claude-sonnet-4",
+        "extraction_timestamp": "2026-05-09T00:00:00Z",
+    }
+
+    fields = match_extraction_to_bboxes(extraction, pdf)
+    by_path = {f.field_path: f for f in fields}
+
+    assert by_path["results[0].abnormal_flag"].bbox is None
+    assert by_path["results[0].confidence"].bbox is None
+    assert by_path["results[0].source_citation.source_type"].bbox is None

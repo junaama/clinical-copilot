@@ -106,6 +106,13 @@ Rules:
   * Quote the literal value as it appears (preserve units, decimal places).
   * source_citation.source_type must be "lab_pdf" and source_id will be filled by the caller.
   * Never invent values. If a row is unreadable, omit it from results.
+  * For each result row, provide vlm_bbox with the bounding box of that
+    result row on the page in normalized coordinates:
+    {"page": <page_number>, "bbox": [x0, y0, x1, y1]}
+    where each coordinate is in [0, 1] range (0,0 = top-left corner of
+    the page, 1,1 = bottom-right corner). The bbox should tightly enclose
+    the entire result row (test name through unit/reference range).
+    If you cannot determine the bounding box, set vlm_bbox to null.
 """
 
 _INTAKE_SYSTEM_PROMPT = """\
