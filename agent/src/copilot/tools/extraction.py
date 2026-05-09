@@ -29,6 +29,7 @@ from langchain_core.tools import StructuredTool
 from ..extraction.bbox_matcher import match_extraction_to_bboxes
 from ..extraction.hl7_oru import parse_hl7_oru_lab
 from ..extraction.vlm import extract_document as vlm_extract_document
+from ..extraction.xlsx_workbook import parse_xlsx_workbook
 from .helpers import _enforce_patient_authorization
 
 _log = logging.getLogger(__name__)
@@ -40,7 +41,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from ..extraction.persistence import DocumentExtractionStore, IntakePersister
 
 
-_VALID_DOC_TYPES: frozenset[str] = frozenset({"lab_pdf", "intake_form", "hl7_oru"})
+_VALID_DOC_TYPES: frozenset[str] = frozenset(
+    {"lab_pdf", "intake_form", "hl7_oru", "xlsx_workbook"}
+)
 
 
 @runtime_checkable
@@ -322,6 +325,7 @@ def make_extraction_tools(
             doc_type=doc_type,
         )
 
+        workbook = None
         if doc_type == "hl7_oru":
             try:
                 extraction = parse_hl7_oru_lab(
@@ -330,6 +334,16 @@ def make_extraction_tools(
                 )
             except ValueError as exc:
                 return _error_envelope(f"hl7_oru_parse_failed: {exc}", _ms(started))
+            bboxes = []
+            pages_processed = 0
+        elif doc_type == "xlsx_workbook":
+            try:
+                workbook, extraction = parse_xlsx_workbook(
+                    file_data,
+                    document_id=f"DocumentReference/{document_id}",
+                )
+            except ValueError as exc:
+                return _error_envelope(f"xlsx_workbook_parse_failed: {exc}", _ms(started))
             bboxes = []
             pages_processed = 0
         else:
@@ -365,7 +379,7 @@ def make_extraction_tools(
                 )
             pages_processed = result.pages_processed
 
-        if doc_type in {"lab_pdf", "hl7_oru"}:
+        if doc_type in {"lab_pdf", "hl7_oru", "xlsx_workbook"}:
             try:
                 extraction_id = await store.save_lab_extraction(
                     extraction=extraction,  # type: ignore[arg-type]
@@ -374,6 +388,7 @@ def make_extraction_tools(
                     patient_id=patient_id,
                     filename=filename,
                     content_sha256=resolved_sha256,
+                    doc_type=doc_type,
                 )
             except Exception as exc:
                 return _error_envelope(
@@ -399,7 +414,7 @@ def make_extraction_tools(
                     f"persistence_failed: {exc.__class__.__name__}", _ms(started)
                 )
 
-        return {
+        envelope = {
             "ok": True,
             "cache_hit": False,
             "cache_key": f"document_id:{document_id}",
@@ -413,16 +428,21 @@ def make_extraction_tools(
             "pages_processed": pages_processed,
             "latency_ms": _ms(started),
         }
+        if workbook is not None:
+            envelope["workbook"] = workbook.model_dump(mode="json")
+        return envelope
 
     return [
         StructuredTool.from_function(
             coroutine=attach_document,
             name="attach_document",
             description=(
-                "Upload a local file (PDF, PNG, JPEG, or HL7 ORU) to OpenEMR's document "
+                "Upload a local file (PDF, PNG, JPEG, HL7 ORU, or XLSX workbook) "
+                "to OpenEMR's document "
                 "store for a patient. Returns the document_id you can pass to "
                 "extract_document. Args: patient_id, file_path (absolute path "
-                "on the agent host), doc_type ('lab_pdf', 'intake_form', or 'hl7_oru')."
+                "on the agent host), doc_type ('lab_pdf', 'intake_form', "
+                "'hl7_oru', or 'xlsx_workbook')."
             ),
         ),
         StructuredTool.from_function(
@@ -445,7 +465,8 @@ def make_extraction_tools(
                 "forms additionally write allergies/medications/medical "
                 "problems to OpenEMR via the Standard API. Args: patient_id, "
                 "document_id (from attach_document or list_patient_documents), "
-                "doc_type ('lab_pdf', 'intake_form', or 'hl7_oru')."
+                "doc_type ('lab_pdf', 'intake_form', 'hl7_oru', "
+                "or 'xlsx_workbook')."
             ),
         ),
     ]
