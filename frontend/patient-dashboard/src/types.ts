@@ -74,6 +74,8 @@ export interface PatientDashboardConfig {
   readonly modernDashboardUrl: string;
   /** CSRF token for form submissions. */
   readonly csrfToken: string;
+  /** CSRF token for same-origin OpenEMR LocalApi/FHIR calls. */
+  readonly apiCsrfToken: string;
   /** CareTeam edit metadata (optional — absent if user lacks ACL). */
   readonly careTeamEdit?: CareTeamEditConfig;
 }

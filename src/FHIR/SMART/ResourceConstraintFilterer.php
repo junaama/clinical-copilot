@@ -28,6 +28,10 @@ class ResourceConstraintFilterer {
     use SystemLoggerAwareTrait;
 
     public function canAccessResource(FHIRDomainResource $resource, HttpRestRequest $request): bool {
+        if ($request->isLocalApi()) {
+            return true;
+        }
+
         $endpointScope = $request->getRequestRequiredScope();
         // TODO: @adunsulag we could move this all into the HttpRestRequest class... but it seems heavy, is there a better
         // class with more cohesion to put this logic into?
