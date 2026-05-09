@@ -1,10 +1,10 @@
 """VLM extraction pipeline.
 
-Converts a PDF or image (PNG/JPEG) into a validated ``LabExtraction`` or
+Converts a PDF or image (PNG/JPEG/TIFF) into a validated ``LabExtraction`` or
 ``IntakeExtraction`` payload by:
 
 1. Rendering the document to per-page PNG bytes (PyMuPDF for PDFs, raw
-   passthrough for single-page images).
+   passthrough for single-page PNG/JPEG images, PyMuPDF for multipage TIFFs).
 2. Calling Claude Sonnet 4 with a structured-output prompt that targets the
    appropriate Pydantic schema. Confidence (high/medium/low) is part of the
    prompt instruction so values that are partially obscured / handwritten /
@@ -45,7 +45,7 @@ from copilot.extraction.schemas import (
 
 _log = logging.getLogger(__name__)
 
-DocType = Literal["lab_pdf", "intake_form"]
+DocType = Literal["lab_pdf", "intake_form", "tiff_fax"]
 
 # Mimetypes the VLM pipeline accepts. Anything else short-circuits with a
 # typed error before we render.
@@ -55,11 +55,13 @@ _IMAGE_MIMETYPES: dict[str, str] = {
     "image/jpeg": "image/jpeg",
     "image/jpg": "image/jpeg",
 }
+_TIFF_MIMETYPES = frozenset({"image/tiff", "image/tif"})
 
 # DPI for PDF page rendering. 200 is a good balance: high enough that
 # typed lab values are crisp, low enough that the resulting PNG fits inside
 # Anthropic's per-image upload limit comfortably.
 _RENDER_DPI = 200
+_TIFF_RENDER_DPI = 150
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,41 @@ Rules:
   * Quote the literal value as it appears (preserve units, decimal places).
   * source_citation.source_type must be "lab_pdf" and source_id will be filled by the caller.
   * Never invent values. If a row is unreadable, omit it from results.
+  * For each result row, provide vlm_bbox with the bounding box of that
+    result row on the page in normalized coordinates:
+    {"page": <page_number>, "bbox": [x0, y0, x1, y1]}
+    where each coordinate is in [0, 1] range (0,0 = top-left corner of
+    the page, 1,1 = bottom-right corner). The bbox should tightly enclose
+    the entire result row (test name through unit/reference range).
+    If you cannot determine the bounding box, set vlm_bbox to null.
+"""
+
+_TIFF_FAX_SYSTEM_PROMPT = """\
+You extract clinical lab results from one page of a multipage fax packet.
+The packet may include a cover sheet, referral request, face sheet, and
+lab report pages. Return a JSON object that matches the LabExtraction
+schema for THIS PAGE ONLY.
+
+Confidence:
+
+  high   = value is clearly typed/printed and unambiguous
+  medium = legible but partially obscured / fax artifacts affect readability
+  low    = faint, noisy, skewed, handwritten, or you're guessing — flag rather than omit
+
+Rules:
+  * Extract lab result rows only; if this page is not a lab report page,
+    return an empty results list and any clearly readable top-level patient
+    identifiers.
+  * test_name, value, unit, abnormal_flag, confidence are required for every result row.
+  * abnormal_flag must be one of: high, low, critical_high, critical_low, normal, unknown.
+  * If the document marks a value abnormal (H, L, *), set abnormal_flag accordingly.
+  * If reference range is shown, populate reference_range; otherwise null.
+  * Quote the literal value as it appears (preserve units, decimal places).
+  * source_citation.source_type must be "tiff_fax" and source_id will be filled by the caller.
+  * source_citation.page_or_section must identify the current page, e.g. "page 4".
+  * Never invent values. If a row is unreadable, omit it from results.
+  * Use confidence="low" for clinically important values affected by fax
+    noise or ambiguous glyphs; do not assert uncertain scans as high confidence.
   * For each result row, provide vlm_bbox with the bounding box of that
     result row on the page in normalized coordinates:
     {"page": <page_number>, "bbox": [x0, y0, x1, y1]}
@@ -171,6 +208,14 @@ async def extract_document(
             model=model,
             extraction_model_name=extraction_model_name,
         )
+    if doc_type == "tiff_fax":
+        return await extract_tiff_fax(
+            file_data,
+            mimetype,
+            document_id=document_id,
+            model=model,
+            extraction_model_name=extraction_model_name,
+        )
     return _failure(
         error=f"unknown doc_type: {doc_type!r}",
         raw_responses=[],
@@ -219,6 +264,28 @@ async def extract_intake(
         target_schema=IntakeExtraction,
         system_prompt=_INTAKE_SYSTEM_PROMPT,
         source_type="intake_form",
+        extraction_model_name=extraction_model_name,
+    )
+
+
+async def extract_tiff_fax(
+    file_data: bytes,
+    mimetype: str,
+    *,
+    document_id: str,
+    model: BaseChatModel,
+    extraction_model_name: str = "claude-sonnet-4-6",
+) -> ExtractionResult:
+    """Extract lab rows from a multipage TIFF fax packet."""
+
+    return await _extract(
+        file_data=file_data,
+        mimetype=mimetype,
+        document_id=document_id,
+        model=model,
+        target_schema=LabExtraction,
+        system_prompt=_TIFF_FAX_SYSTEM_PROMPT,
+        source_type="tiff_fax",
         extraction_model_name=extraction_model_name,
     )
 
@@ -363,6 +430,8 @@ def _render_pages(file_data: bytes, mimetype: str) -> list[bytes]:
         # Single-page image — return as-is. The Anthropic API accepts PNG and
         # JPEG natively; we don't need to re-encode.
         return [file_data]
+    if normalized in _TIFF_MIMETYPES:
+        return _render_tiff(file_data)
     raise _RenderError(f"unsupported mimetype {mimetype!r}")
 
 
@@ -381,6 +450,27 @@ def _render_pdf(file_data: bytes) -> list[bytes]:
     try:
         for page in doc:
             pix = page.get_pixmap(dpi=_RENDER_DPI)
+            pages.append(pix.tobytes("png"))
+    finally:
+        doc.close()
+    return pages
+
+
+def _render_tiff(file_data: bytes) -> list[bytes]:
+    try:
+        import pymupdf  # type: ignore[import-not-found]
+    except ImportError as exc:  # pragma: no cover — dev install issue only
+        raise _RenderError(f"pymupdf not installed: {exc}") from exc
+
+    try:
+        doc = pymupdf.open(stream=file_data, filetype="tiff")
+    except Exception as exc:
+        raise _RenderError(f"TIFF parse failed: {exc}") from exc
+
+    pages: list[bytes] = []
+    try:
+        for page in doc:
+            pix = page.get_pixmap(dpi=_TIFF_RENDER_DPI)
             pages.append(pix.tobytes("png"))
     finally:
         doc.close()
@@ -486,7 +576,10 @@ def _merge_pages(
     timestamp = datetime.now(UTC).isoformat()
 
     if target_schema is LabExtraction:
-        merged_data = _merge_lab(parsed_pages)
+        merged_data = _merge_lab(
+            parsed_pages,
+            stamp_page_citations=source_type == "tiff_fax",
+        )
         _restamp_lab_result_citations(
             merged_data["results"],
             document_id=document_id,
@@ -525,7 +618,11 @@ def _merge_pages(
     return target_schema.model_validate(merged_data)
 
 
-def _merge_lab(parsed_pages: list[BaseModel]) -> dict[str, Any]:
+def _merge_lab(
+    parsed_pages: list[BaseModel],
+    *,
+    stamp_page_citations: bool = False,
+) -> dict[str, Any]:
     """Concatenate ``results``, prefer first non-None top-level fields."""
 
     merged: dict[str, Any] = {
@@ -535,12 +632,19 @@ def _merge_lab(parsed_pages: list[BaseModel]) -> dict[str, Any]:
         "lab_name": None,
         "results": [],
     }
-    for page in parsed_pages:
+    for page_index, page in enumerate(parsed_pages, start=1):
         page_dict = page.model_dump()
         for key in ("patient_name", "collection_date", "ordering_provider", "lab_name"):
             if merged[key] is None and page_dict.get(key) is not None:
                 merged[key] = page_dict[key]
         page_results = page_dict.get("results") or []
+        if stamp_page_citations:
+            for result in page_results:
+                citation = result.get("source_citation")
+                if isinstance(citation, dict):
+                    citation = dict(citation)
+                    citation["page_or_section"] = f"page {page_index}"
+                    result["source_citation"] = citation
         merged["results"].extend(page_results)
     return merged
 

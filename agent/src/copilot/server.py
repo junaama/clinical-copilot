@@ -1831,11 +1831,13 @@ async def upload(
     persistence_status = "not_applicable"
     if isinstance(extraction, LabExtraction):
         lab_payload = extraction_dump
-        persistence = await _persist_upload_labs_to_openemr(
-            app,
-            extraction=extraction,
-            patient_id=patient_id,
-        )
+        persistence = None
+        if doc_type != "tiff_fax":
+            persistence = await _persist_upload_labs_to_openemr(
+                app,
+                extraction=extraction,
+                patient_id=patient_id,
+            )
         if persistence is not None:
             persistence_status = persistence.persistence_status
             lab_payload["persistence_status"] = persistence.persistence_status

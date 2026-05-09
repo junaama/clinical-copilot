@@ -44,6 +44,7 @@ from copilot.extraction.vlm import (
     extract_document,
     extract_intake,
     extract_lab,
+    extract_tiff_fax,
 )
 from copilot.llm import build_vision_model
 
@@ -76,6 +77,8 @@ _TINY_JPEG = bytes.fromhex(
 
 _FIXTURE_DIR = Path(__file__).resolve().parent.parent.parent / "example-documents"
 _FIXTURE_LAB_PDF = _FIXTURE_DIR / "lab-results" / "p01-chen-lipid-panel.pdf"
+_WEEK2_ASSETS = Path(__file__).resolve().parents[2] / "cohort-5-week-2-assets-v2"
+_FIXTURE_TIFF_FAX = _WEEK2_ASSETS / "tiff" / "p01-chen-fax-packet.tiff"
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +240,16 @@ def test_render_real_pdf_produces_per_page_pngs() -> None:
     assert all(p.startswith(b"\x89PNG\r\n\x1a\n") for p in pages)
 
 
+@pytest.mark.skipif(not _FIXTURE_TIFF_FAX.exists(), reason="fixture TIFF missing")
+def test_render_real_multipage_tiff_produces_ordered_png_pages() -> None:
+    file_data = _FIXTURE_TIFF_FAX.read_bytes()
+    pages = _render_pages(file_data, "image/tiff")
+
+    assert len(pages) == 4
+    assert all(p.startswith(b"\x89PNG\r\n\x1a\n") for p in pages)
+    assert len(set(pages)) == 4
+
+
 # ---------------------------------------------------------------------------
 # extract_lab — happy paths
 # ---------------------------------------------------------------------------
@@ -375,6 +388,63 @@ def test_extract_lab_low_confidence_preserved() -> None:
     assert result.extraction.results[0].confidence == "low"
 
 
+@pytest.mark.skipif(not _FIXTURE_TIFF_FAX.exists(), reason="fixture TIFF missing")
+def test_extract_tiff_fax_preserves_page_order_and_low_confidence_citations() -> None:
+    empty_page = _make_lab_extraction(patient_name=None, results=[])
+    lab_page = _make_lab_extraction(
+        patient_name="Margaret Chen",
+        results=[
+            LabResult(
+                test_name="LDL Cholesterol",
+                value="142",
+                unit="mg/dL",
+                reference_range="<100",
+                collection_date="2026-04-12",
+                abnormal_flag="high",
+                confidence="low",
+                source_citation=SourceCitation(
+                    source_type="lab_pdf",
+                    source_id="DocumentReference/wrong",
+                    page_or_section=None,
+                    field_or_chunk_id="results[0].value",
+                    quote_or_value="142",
+                ),
+            )
+        ],
+    )
+    stub = _StubVisionModel(
+        [
+            _StubReply(parsed=empty_page),
+            _StubReply(parsed=empty_page),
+            _StubReply(parsed=empty_page),
+            _StubReply(parsed=lab_page),
+        ]
+    )
+
+    result = asyncio.run(
+        extract_tiff_fax(
+            _FIXTURE_TIFF_FAX.read_bytes(),
+            mimetype="image/tiff",
+            document_id="DocumentReference/fax-1",
+            model=stub,  # type: ignore[arg-type]
+        )
+    )
+
+    assert result.ok is True
+    assert result.pages_processed == 4
+    assert len(stub.invocations) == 4
+    for page_number, messages in enumerate(stub.invocations, start=1):
+        text_part = messages[1].content[0]
+        assert text_part["text"].startswith(f"This is page {page_number}.")
+    assert result.extraction is not None
+    assert isinstance(result.extraction, LabExtraction)
+    [ldl] = result.extraction.results
+    assert ldl.confidence == "low"
+    assert ldl.source_citation.source_type == "tiff_fax"
+    assert ldl.source_citation.source_id == "DocumentReference/fax-1"
+    assert ldl.source_citation.page_or_section == "page 4"
+
+
 # ---------------------------------------------------------------------------
 # extract_intake
 # ---------------------------------------------------------------------------
@@ -509,6 +579,31 @@ def test_extract_document_dispatches_intake() -> None:
     )
     assert result.ok is True
     assert isinstance(result.extraction, IntakeExtraction)
+
+
+@pytest.mark.skipif(not _FIXTURE_TIFF_FAX.exists(), reason="fixture TIFF missing")
+def test_extract_document_dispatches_tiff_fax() -> None:
+    expected = _make_lab_extraction(results=[])
+    stub = _StubVisionModel(
+        [
+            _StubReply(parsed=expected),
+            _StubReply(parsed=expected),
+            _StubReply(parsed=expected),
+            _StubReply(parsed=expected),
+        ]
+    )
+    result = asyncio.run(
+        extract_document(
+            _FIXTURE_TIFF_FAX.read_bytes(),
+            mimetype="image/tiff",
+            doc_type="tiff_fax",
+            document_id="DocumentReference/fax-1",
+            model=stub,  # type: ignore[arg-type]
+        )
+    )
+    assert result.ok is True
+    assert isinstance(result.extraction, LabExtraction)
+    assert result.pages_processed == 4
 
 
 # ---------------------------------------------------------------------------
