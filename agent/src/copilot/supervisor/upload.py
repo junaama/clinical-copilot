@@ -19,7 +19,15 @@ from langchain_core.messages import SystemMessage
 # 002 / 004). New types must be added here AND to the classifier prompt
 # enumeration in ``prompts.py`` so the classifier's instructions stay
 # in sync.
-_ALLOWED_DOC_TYPES: frozenset[str] = frozenset({"lab_pdf", "intake_form"})
+_ALLOWED_DOC_TYPES: frozenset[str] = frozenset({
+    "lab_pdf",
+    "intake_form",
+    "hl7_oru",
+    "hl7_adt",
+    "xlsx_workbook",
+    "docx_referral",
+    "tiff_fax",
+})
 
 
 def build_document_upload_message(

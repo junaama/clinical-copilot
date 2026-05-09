@@ -14,6 +14,25 @@
 
 import type { DocType, ExtractionResponse } from './extraction';
 
+function _buildPromptText(docType: DocType, filename: string): string {
+  switch (docType) {
+    case 'lab_pdf':
+    case 'hl7_oru':
+      return `I just uploaded ${filename}. In short sections, tell me what changed, what I should pay attention to, and what source evidence backs it up.`;
+    case 'docx_referral':
+      return `I just uploaded ${filename}. Summarize the referral: who is referring, the reason, pertinent history, and requested actions.`;
+    case 'xlsx_workbook':
+      return `I just uploaded ${filename}. Summarize the key clinical data: patient info, medications, lab trends, and any care gaps.`;
+    case 'hl7_adt':
+      return `I just uploaded ${filename}. Summarize the patient registration or encounter update details.`;
+    case 'tiff_fax':
+      return `I just uploaded ${filename}. Summarize the fax content, noting any low-confidence values from the scan.`;
+    case 'intake_form':
+    default:
+      return `I just uploaded ${filename}. In short sections, summarize what changed, what I should pay attention to, and what source evidence backs it up.`;
+  }
+}
+
 export type UploadHandoffPlan =
   | {
       readonly kind: 'render-and-discuss';
@@ -35,9 +54,6 @@ export function planUploadHandoff(
     return { kind: 'suppress', reason: 'not-discussable' };
   }
   const effectiveType: DocType = response.effective_type ?? response.doc_type;
-  const promptText =
-    effectiveType === 'lab_pdf'
-      ? `I just uploaded ${response.filename}. In short sections, tell me what changed, what I should pay attention to, and what source evidence backs it up.`
-      : `I just uploaded ${response.filename}. In short sections, summarize what changed, what I should pay attention to, and what source evidence backs it up.`;
+  const promptText = _buildPromptText(effectiveType, response.filename);
   return { kind: 'render-and-discuss', extraction: response, promptText };
 }

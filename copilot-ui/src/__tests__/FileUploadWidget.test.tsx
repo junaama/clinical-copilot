@@ -87,7 +87,7 @@ describe('FileUploadWidget', () => {
     );
 
     expect(
-      await screen.findByText(/Only PDF, PNG, and JPEG/i),
+      await screen.findByText(/Supported formats/i),
     ).toBeInTheDocument();
     expect(uploadFn).not.toHaveBeenCalled();
     expect(onUploaded).not.toHaveBeenCalled();

@@ -26,7 +26,15 @@ from typing import Literal
 
 import fitz  # PyMuPDF
 
-DocType = Literal["lab_pdf", "intake_form"]
+DocType = Literal[
+    "lab_pdf",
+    "intake_form",
+    "hl7_oru",
+    "hl7_adt",
+    "xlsx_workbook",
+    "docx_referral",
+    "tiff_fax",
+]
 Confidence = Literal["high", "medium", "low"]
 
 
@@ -125,6 +133,18 @@ _INTAKE_TEXT_CUES: tuple[str, ...] = (
 )
 
 
+# Non-PDF document kinds that carry an unambiguous format identity.
+# The mismatch guard does not apply to these — their document kind is
+# determined by the source format, not by PDF text cue analysis.
+_FORMAT_DETERMINED_DOC_TYPES: frozenset[str] = frozenset({
+    "hl7_oru",
+    "hl7_adt",
+    "xlsx_workbook",
+    "docx_referral",
+    "tiff_fax",
+})
+
+
 def detect_doc_type(
     file_data: bytes,
     filename: str,
@@ -135,6 +155,9 @@ def detect_doc_type(
     The contract is intentionally narrow: callers compare ``detected_type``
     against the user's selected type and only act on a ``high``-confidence
     disagreement. ``low`` confidence means "we don't know — trust the user".
+
+    For non-PDF document kinds (HL7, DOCX, XLSX, TIFF), the mismatch guard
+    is not applicable — the document kind is inherent to the format.
     """
     name_lower = filename.lower()
     fname_evidence: list[str] = []

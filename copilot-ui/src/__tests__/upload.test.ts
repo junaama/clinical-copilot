@@ -51,8 +51,49 @@ describe('validateFileForUpload', () => {
     const ok = makeFile({ name: 'scan.PDF', type: '' });
     expect(validateFileForUpload(ok)).toBeNull();
 
-    const bad = makeFile({ name: 'scan.docx', type: '' });
+    // DOCX is now a supported format (week-2 multi-format upload).
+    const docx = makeFile({ name: 'referral.docx', type: '' });
+    expect(validateFileForUpload(docx)).toBeNull();
+
+    const bad = makeFile({ name: 'archive.zip', type: '' });
     expect(validateFileForUpload(bad)).toMatchObject({ code: 'invalid_type' });
+  });
+
+  // Week-2 multi-format upload support
+  it('accepts TIFF files', () => {
+    const file = makeFile({ name: 'fax.tiff', type: 'image/tiff' });
+    expect(validateFileForUpload(file)).toBeNull();
+  });
+
+  it('accepts DOCX files', () => {
+    const file = makeFile({
+      name: 'referral.docx',
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    });
+    expect(validateFileForUpload(file)).toBeNull();
+  });
+
+  it('accepts XLSX files', () => {
+    const file = makeFile({
+      name: 'workbook.xlsx',
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    expect(validateFileForUpload(file)).toBeNull();
+  });
+
+  it('accepts HL7 files by extension when MIME is empty', () => {
+    const file = makeFile({ name: 'labs.hl7', type: '' });
+    expect(validateFileForUpload(file)).toBeNull();
+  });
+
+  it('accepts .tif extension when MIME is empty', () => {
+    const file = makeFile({ name: 'scan.tif', type: '' });
+    expect(validateFileForUpload(file)).toBeNull();
+  });
+
+  it('rejects unsupported extension when MIME is empty', () => {
+    const file = makeFile({ name: 'data.csv', type: '' });
+    expect(validateFileForUpload(file)).toMatchObject({ code: 'invalid_type' });
   });
 });
 
