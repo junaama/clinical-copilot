@@ -219,6 +219,7 @@ class LabResult(_StrictForbid):
     """
 
     test_name: str = Field(min_length=1)
+    loinc_code: str | None = None
     value: str = Field(min_length=1)
     unit: str = Field(min_length=1)
     reference_range: str | None = None

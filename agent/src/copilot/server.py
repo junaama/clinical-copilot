@@ -62,6 +62,11 @@ from .conversations import (
 )
 from .extraction.bbox_matcher import match_extraction_to_bboxes
 from .extraction.document_client import UPLOAD_LANDED_ID_LOST, DocumentClient
+from .extraction.lab_persistence import (
+    LabPersistenceResult,
+    LabResultPersister,
+    OpenEmrLabResultPersister,
+)
 from .extraction.migrate import ensure_schema as ensure_extraction_schema
 from .extraction.persistence import DocumentExtractionStore
 from .extraction.schemas import (
@@ -97,6 +102,7 @@ from .smart import (
     refresh_access_token,
     token_bundle_from_response,
 )
+from .standard_api_client import StandardApiClient
 from .supervisor.upload import build_document_upload_message
 from .title_summarizer import (
     HaikuTitleSummarizer,
@@ -1264,6 +1270,23 @@ def _resolve_upload_vlm_model(req_app: FastAPI) -> Any:
     return model
 
 
+def _resolve_upload_lab_persister(req_app: FastAPI) -> LabResultPersister | None:
+    """Return the configured lab persister, or ``None`` when disabled."""
+    existing = getattr(req_app.state, "lab_result_persister", None)
+    if existing is not None:
+        return existing
+    settings = req_app.state.settings
+    backend = settings.fhir_lab_persistence_backend
+    if backend in {"", "disabled", "none"} or settings.use_fixture_fhir:
+        return None
+    if backend != "openemr_module":
+        _log.warning("unsupported lab persistence backend: %s", backend)
+        return None
+    persister = OpenEmrLabResultPersister(StandardApiClient(settings))
+    req_app.state.lab_result_persister = persister
+    return persister
+
+
 def _resolve_upload_extraction_store(req_app: FastAPI) -> Any | None:
     """Return the upload cache store when configured.
 
@@ -1356,6 +1379,29 @@ async def _persist_upload_extraction_cache(
         _log.warning("upload cache persistence failed: %s", exc)
 
 
+async def _persist_upload_labs_to_openemr(
+    req_app: FastAPI,
+    *,
+    extraction: LabExtraction,
+    patient_id: str,
+) -> LabPersistenceResult | None:
+    persister = _resolve_upload_lab_persister(req_app)
+    if persister is None:
+        return None
+    try:
+        return await persister.persist(
+            patient_id=patient_id,
+            extracted_labs=extraction,
+        )
+    except Exception as exc:  # pragma: no cover - defensive boundary
+        _log.warning("lab persistence failed: %s", exc)
+        return LabPersistenceResult(
+            persistence_status="failed",
+            results=tuple(),
+            error="lab_persistence_exception",
+        )
+
+
 async def _inject_upload_system_message(
     req_app: FastAPI,
     conversation_id: str,
@@ -1416,6 +1462,10 @@ _FAILURE_REASONS: dict[str, str] = {
     "extraction_failed": (
         "We couldn't extract structured data from this document. "
         "Please retry or check the file."
+    ),
+    "persistence_failed": (
+        "We extracted the document but couldn't save the lab results to "
+        "the chart. Please retry or ask support to review the extraction."
     ),
     "unauthorized": (
         "You don't have access to this patient's chart. "
@@ -1665,10 +1715,40 @@ async def upload(
     extraction_dump = extraction.model_dump(mode="json")
     lab_payload: dict[str, Any] | None = None
     intake_payload: dict[str, Any] | None = None
+    persistence_status = "not_applicable"
     if isinstance(extraction, LabExtraction):
         lab_payload = extraction_dump
+        persistence = await _persist_upload_labs_to_openemr(
+            app,
+            extraction=extraction,
+            patient_id=patient_id,
+        )
+        if persistence is not None:
+            persistence_status = persistence.persistence_status
+            lab_payload["persistence_status"] = persistence.persistence_status
+            lab_payload["persistence_results"] = [
+                item.to_dict() for item in persistence.results
+            ]
+            if persistence.error is not None:
+                lab_payload["persistence_error"] = persistence.error
     elif isinstance(extraction, IntakeExtraction):
         intake_payload = extraction_dump
+
+    if isinstance(extraction, LabExtraction) and persistence_status in {"failed", "partial"}:
+        return UploadResponse(
+            status="persistence_failed",
+            requested_type=doc_type,
+            effective_type=doc_type,
+            document_id=document_id,
+            document_reference=f"DocumentReference/{document_id}",
+            doc_type=doc_type,
+            filename=filename,
+            discussable=False,
+            lab=lab_payload,
+            intake=None,
+            failure_reason=_FAILURE_REASONS["persistence_failed"],
+            bboxes=filter_drawable_bboxes(all_bboxes),
+        )
 
     return UploadResponse(
         status="ok",

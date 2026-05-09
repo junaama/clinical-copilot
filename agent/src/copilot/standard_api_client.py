@@ -98,6 +98,41 @@ class StandardApiClient:
         doc_id = str(body.get("id") or body.get("pid") or "")
         return True, doc_id or None, None, latency
 
+    async def create_lab_result(
+        self,
+        patient_id: str,
+        lab_result_data: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any] | None, str | None, int]:
+        """Create native OpenEMR lab-result rows through the Copilot module."""
+        started = time.monotonic()
+        token = self._resolve_token()
+        if not token:
+            return False, None, "no_token", int((time.monotonic() - started) * 1000)
+
+        url = f"{self._base_url}/patient/{strip_fhir_prefix(patient_id)}/lab_result"
+        headers = {**self._headers(token), "Content-Type": "application/json"}
+
+        try:
+            response = await self._client.post(
+                url, headers=headers, json=lab_result_data
+            )
+        except httpx.HTTPError as exc:
+            return False, None, f"transport: {exc.__class__.__name__}", int(
+                (time.monotonic() - started) * 1000
+            )
+
+        latency = int((time.monotonic() - started) * 1000)
+        if response.status_code not in (200, 201, 207):
+            return False, None, f"http_{response.status_code}", latency
+
+        try:
+            body = response.json()
+        except ValueError:
+            return False, None, "invalid_json", latency
+        if not isinstance(body, dict):
+            return False, None, "invalid_response", latency
+        return True, body, None, latency
+
     async def create_allergy(
         self,
         patient_id: str,

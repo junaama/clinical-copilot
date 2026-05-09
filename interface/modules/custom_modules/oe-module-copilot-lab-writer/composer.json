@@ -1,0 +1,27 @@
+{
+    "name": "openemr/oe-module-copilot-lab-writer",
+    "description": "Clinical Co-Pilot lab writer: persists extracted lab values into OpenEMR native procedure tables.",
+    "type": "openemr-module",
+    "license": "GPL-3.0-or-later",
+    "authors": [
+        {
+            "name": "Naama",
+            "email": "naama.paulemont@challenger.gauntletai.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "OpenEMR\\Modules\\CopilotLabWriter\\": "src/"
+        }
+    },
+    "extra": {
+        "openemr": {
+            "type": "custom-module",
+            "directory": "oe-module-copilot-lab-writer"
+        }
+    },
+    "keywords": ["openemr", "module", "lab-results", "clinical-copilot"]
+}
