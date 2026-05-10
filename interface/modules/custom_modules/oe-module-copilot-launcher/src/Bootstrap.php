@@ -17,18 +17,41 @@ namespace OpenEMR\Modules\CopilotLauncher;
 
 use OpenEMR\BC\ServiceContainer;
 use OpenEMR\Common\Auth\AuthHash;
+use OpenEMR\Common\Database\QueryUtils;
+use OpenEMR\Common\Http\HttpRestRequest;
 use OpenEMR\Core\OEGlobalsBag;
 use OpenEMR\Events\PatientDemographics\RenderEvent;
+use OpenEMR\Events\RestApiExtend\RestApiCreateEvent;
+use OpenEMR\Modules\CopilotLabWriter\Controller\LabResultApiController;
+use OpenEMR\Modules\CopilotLabWriter\Service\LabResultWriter;
+use OpenEMR\Modules\CopilotLabWriter\Service\QueryUtilsExecutor as LabWriterQueryUtilsExecutor;
 use OpenEMR\Modules\CopilotLauncher\Listeners\ChartSidebarListener;
 use OpenEMR\Modules\CopilotLauncher\Service\CopilotClientRegistration;
 use OpenEMR\Modules\CopilotLauncher\Service\DemoUserSeeder;
 use OpenEMR\Modules\CopilotLauncher\Service\QueryUtilsExecutor;
+use OpenEMR\RestControllers\Config\RestConfig;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
 
 final class Bootstrap
 {
     public const MODULE_INSTALLATION_PATH = '/interface/modules/custom_modules/oe-module-copilot-launcher';
     public const MODULE_NAME = 'oe-module-copilot-launcher';
+    private const LAB_RESULT_MAP_SQL = <<<'SQL'
+CREATE TABLE IF NOT EXISTS `copilot_lab_result_map` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `patient_id` bigint(20) NOT NULL,
+  `source_document_reference` varchar(128) NOT NULL,
+  `field_path` varchar(255) NOT NULL,
+  `procedure_order_id` bigint(20) NOT NULL,
+  `procedure_report_id` bigint(20) NOT NULL,
+  `procedure_result_id` bigint(20) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `copilot_lab_result_natural_key` (`patient_id`, `source_document_reference`, `field_path`),
+  KEY `procedure_result_id` (`procedure_result_id`)
+) ENGINE=InnoDB
+SQL;
 
     public function __construct(
         private readonly EventDispatcherInterface $eventDispatcher,
@@ -70,6 +93,11 @@ final class Bootstrap
         $this->eventDispatcher->addListener(
             RenderEvent::EVENT_RENDER_POST_PAGELOAD,
             $sidebar->onPatientPagePostLoad(...)
+        );
+
+        $this->eventDispatcher->addListener(
+            RestApiCreateEvent::EVENT_HANDLE,
+            $this->onRestApiCreate(...)
         );
 
         // Best-effort: ensure both SMART clients (EHR-launch + standalone) have
@@ -121,5 +149,23 @@ final class Bootstrap
             // the users/users_secure tables are ready. Logged, not fatal.
             $logger->warning('Co-Pilot demo user seed deferred', ['exception' => $e]);
         }
+    }
+
+    public function onRestApiCreate(RestApiCreateEvent $event): void
+    {
+        $event->addToRouteMap(
+            'POST /api/patient/:pid/lab_result',
+            static function ($pid, HttpRestRequest $request) {
+                RestConfig::request_authorization_check($request, 'patients', 'lab', ['write', 'addonly']);
+                QueryUtils::sqlStatementThrowException(self::LAB_RESULT_MAP_SQL, []);
+                $body = json_decode((string) file_get_contents('php://input'), true);
+                $payload = is_array($body) ? $body : [];
+                $writer = new LabResultWriter(
+                    db: new LabWriterQueryUtilsExecutor(),
+                    uuidGenerator: static fn (): string => random_bytes(16),
+                );
+                return (new LabResultApiController($writer))->post($pid, $payload);
+            }
+        );
     }
 }

@@ -145,6 +145,16 @@ def _patient_demographics_fields(resource: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _condition_is_active(resource: dict[str, Any]) -> bool:
+    codings = (resource.get("clinicalStatus") or {}).get("coding") or []
+    if not codings:
+        return True
+    return any(
+        str(coding.get("code") or coding.get("display") or "").lower() == "active"
+        for coding in codings
+    )
+
+
 def _condition_fields(resource: dict[str, Any]) -> dict[str, Any]:
     return {
         "code": _coding_display((resource.get("code") or {}).get("coding")),

@@ -110,6 +110,39 @@ async def test_run_panel_triage_change_counts_are_marked_non_citeable() -> None:
     assert any(ref.startswith("count-summary:") for ref in refs)
 
 
+async def test_run_panel_triage_tolerates_document_reference_policy_denial() -> None:
+    """DocumentReference is an optional change-signal channel; a policy 403
+    should zero its count, not make the whole panel unavailable."""
+    set_active_user_id(PRACTITIONER_DR_SMITH)
+    tool = _tool()
+
+    from copilot.fhir import FhirClient
+
+    original_search = FhirClient.search
+
+    async def deny_document_reference(self, resource_type, params):
+        if resource_type == "DocumentReference":
+            return (
+                False,
+                [],
+                "http_403: Organization policy does not have permit access resource",
+                12,
+            )
+        return await original_search(self, resource_type, params)
+
+    with patch.object(FhirClient, "search", deny_document_reference):
+        result = await tool.ainvoke({})
+
+    assert result["ok"] is True
+    assert result["error"] is None
+    doc_rows = [
+        row for row in result["rows"]
+        if row["resource_type"] == "DocumentReference"
+    ]
+    assert doc_rows
+    assert {row["fields"]["count"] for row in doc_rows} == {0}
+
+
 # ---------------------------------------------------------------------------
 # Panel-bounded scoping
 # ---------------------------------------------------------------------------

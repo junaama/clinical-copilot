@@ -61,19 +61,18 @@ _HL7_MAGIC = b"MSH|"            # HL7 v2 message segment header
 # OpenEMR's Standard API document upload routes the category through
 # ``?path=<category-name>`` (see ``apis/routes/_rest_routes_standard.inc.php``
 # ``POST /api/patient/:pid/document``). The category must already exist in
-# the ``categories`` tree. Default categories include "Lab Report" and
-# "Medical Record" (sql/database.sql:305-308). We map our ``doc_type`` to
-# those defaults so a fresh OpenEMR install accepts uploads without
-# operator-side category creation.
-_DEFAULT_CATEGORY_PATH = "Medical Record"
+# the ``categories`` tree and be writable by the token policy. Production
+# rejects uploads to the broad "Medical Record" category as insecure, while
+# the concrete "Lab Report" category round-trips successfully.
+_DEFAULT_CATEGORY_PATH = "Lab Report"
 _DOC_TYPE_TO_CATEGORY_PATH: dict[str, str] = {
     "lab_pdf": "Lab Report",
-    "intake_form": "Medical Record",
+    "intake_form": "Lab Report",
     "hl7_oru": "Lab Report",
-    "hl7_adt": "Medical Record",
-    "xlsx_workbook": "Medical Record",
-    "docx_referral": "Medical Record",
-    "tiff_fax": "Medical Record",
+    "hl7_adt": "Lab Report",
+    "xlsx_workbook": "Lab Report",
+    "docx_referral": "Lab Report",
+    "tiff_fax": "Lab Report",
 }
 
 # Same retry transport contract used by FhirClient / StandardApiClient: 3

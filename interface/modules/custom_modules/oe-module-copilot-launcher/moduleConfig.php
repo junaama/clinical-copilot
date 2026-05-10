@@ -27,6 +27,7 @@ return [
 
     'tables' => [
         'agent_audit',
+        'copilot_lab_result_map',
     ],
 
     'globals' => [

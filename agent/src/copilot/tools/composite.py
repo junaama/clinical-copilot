@@ -23,6 +23,8 @@ from .helpers import (
     get_active_user_id,
 )
 
+BRIEF_CONTEXT_HOURS = 720
+
 
 def make_composite_tools(
     gate: CareTeamGate,
@@ -116,7 +118,7 @@ def make_composite_tools(
             get_active_medications(patient_id),
             get_recent_vitals(patient_id, hours),
             get_recent_labs(patient_id, hours),
-            get_recent_encounters(patient_id, hours),
+            get_recent_encounters(patient_id, max(hours, BRIEF_CONTEXT_HOURS)),
             get_clinical_notes(patient_id, hours),
         )
         elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -247,7 +249,7 @@ def make_composite_tools(
             description=(
                 "Composite per-patient brief: fans out demographics, active "
                 "problems, active medications, recent vitals (24h), recent "
-                "labs (24h), recent encounters (24h), and clinical notes "
+                "labs (24h), recent encounters (30d context), and clinical notes "
                 "(24h) in PARALLEL and "
                 "returns one merged envelope. Prefer this tool over the "
                 "granular reads whenever the user asks for an overview, a "

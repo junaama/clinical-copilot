@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
-# Deploy OpenEMR (with copilot-launcher module) to Railway.
-# Stages the PHP module into the build context, then deploys.
+# Deploy OpenEMR (with Co-Pilot modules) to Railway.
+# Stages the PHP modules into the build context, then deploys.
 # Run from anywhere: bash scripts/deploy-openemr.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CTX="${REPO_ROOT}/docker/openemr-railway"
-SRC="${REPO_ROOT}/interface/modules/custom_modules/oe-module-copilot-launcher"
-DEST="${CTX}/oe-module-copilot-launcher"
+MODULE_SRC_ROOT="${REPO_ROOT}/interface/modules/custom_modules"
+MODULE_DEST_ROOT="${CTX}/custom_modules"
 DASHBOARD_FRONTEND="${REPO_ROOT}/frontend/patient-dashboard"
 DASHBOARD_ASSETS="${REPO_ROOT}/public/assets/patient-dashboard"
 
-# Stage the copilot-launcher module into the build context.
-if [[ -d "${SRC}" ]]; then
-    rm -rf "${DEST}"
-    cp -R "${SRC}" "${DEST}"
-    echo "==> Staged copilot-launcher module"
+# Stage the Co-Pilot custom modules into the build context.
+if compgen -G "${MODULE_SRC_ROOT}/oe-module-copilot-*" > /dev/null; then
+    rm -rf "${MODULE_DEST_ROOT}"
+    mkdir -p "${MODULE_DEST_ROOT}"
+    for module in "${MODULE_SRC_ROOT}"/oe-module-copilot-*; do
+        cp -R "${module}" "${MODULE_DEST_ROOT}/$(basename "${module}")"
+    done
+    echo "==> Staged Co-Pilot custom modules"
 else
-    echo "WARN: copilot-launcher source not found at ${SRC}" >&2
-    echo "      Deploying without module update." >&2
+    echo "WARN: Co-Pilot module sources not found at ${MODULE_SRC_ROOT}/oe-module-copilot-*" >&2
+    echo "      Deploying without module updates." >&2
 fi
 
 if [[ -d "${DASHBOARD_FRONTEND}" ]]; then

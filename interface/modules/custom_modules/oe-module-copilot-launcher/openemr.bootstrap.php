@@ -23,6 +23,16 @@ $classLoader->registerNamespaceIfNotExists(
     __DIR__ . DIRECTORY_SEPARATOR . 'src'
 );
 
+$labWriterSrc = dirname(__DIR__) . DIRECTORY_SEPARATOR
+    . 'oe-module-copilot-lab-writer' . DIRECTORY_SEPARATOR
+    . 'src';
+if (is_dir($labWriterSrc)) {
+    $classLoader->registerNamespaceIfNotExists(
+        'OpenEMR\\Modules\\CopilotLabWriter\\',
+        $labWriterSrc
+    );
+}
+
 $eventDispatcher = OEGlobalsBag::getInstance()->getKernel()->getEventDispatcher();
 $bootstrap = new Bootstrap($eventDispatcher);
 $bootstrap->subscribeToEvents();

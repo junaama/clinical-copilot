@@ -40,6 +40,30 @@ CREATE TABLE `agent_audit` (
 #EndIf
 
 -- ============================================================================
+-- copilot_lab_result_map — idempotency and round-trip pointers for extracted
+-- lab Observations persisted into OpenEMR's native procedure_* tables.
+-- Kept in the launcher install path so the lab-result API route is available
+-- wherever the already-enabled Co-Pilot launcher module is deployed.
+-- ============================================================================
+
+#IfNotTable copilot_lab_result_map
+CREATE TABLE `copilot_lab_result_map` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `patient_id` bigint(20) NOT NULL,
+  `source_document_reference` varchar(128) NOT NULL,
+  `field_path` varchar(255) NOT NULL,
+  `procedure_order_id` bigint(20) NOT NULL,
+  `procedure_report_id` bigint(20) NOT NULL,
+  `procedure_result_id` bigint(20) NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `copilot_lab_result_natural_key` (`patient_id`, `source_document_reference`, `field_path`),
+  KEY `procedure_result_id` (`procedure_result_id`)
+) ENGINE=InnoDB;
+#EndIf
+
+-- ============================================================================
 -- SMART client registration — idempotent. The actual scope/secret values are
 -- written by Service\CopilotClientRegistration on module enable; this row
 -- exists only as a stub so the FK-style references resolve immediately.

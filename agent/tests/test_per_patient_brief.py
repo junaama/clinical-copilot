@@ -154,6 +154,105 @@ async def test_run_per_patient_brief_runs_fanout_in_parallel() -> None:
     )
 
 
+async def test_run_per_patient_brief_tolerates_document_reference_policy_denial() -> None:
+    """OpenEMR can deny optional DocumentReference search while allowing
+    demographics, problems, medications, vitals, labs, and encounters."""
+    set_active_user_id(PRACTITIONER_DR_SMITH)
+    tool = _tool()
+
+    from copilot.fhir import FhirClient
+
+    original_search = FhirClient.search
+
+    async def deny_document_reference(self, resource_type, params):
+        if resource_type == "DocumentReference":
+            return (
+                False,
+                [],
+                "http_403: Organization policy does not have permit access resource",
+                12,
+            )
+        return await original_search(self, resource_type, params)
+
+    with patch.object(FhirClient, "search", deny_document_reference):
+        result = await tool.ainvoke({"patient_id": "fixture-1"})
+
+    assert result["ok"] is True
+    assert result["error"] is None
+    assert "DocumentReference" in result["sources_checked"]
+    resource_types = {row["resource_type"] for row in result["rows"]}
+    assert "Patient" in resource_types
+    assert "DocumentReference" not in resource_types
+
+
+async def test_run_per_patient_brief_uses_openemr_supported_condition_search() -> None:
+    """OpenEMR prod does not support ``Condition?clinical-status=active``."""
+    set_active_user_id(PRACTITIONER_DR_SMITH)
+    tool = _tool()
+
+    from copilot.fhir import FhirClient
+
+    original_search = FhirClient.search
+    condition_params: list[dict[str, str]] = []
+
+    async def capture_condition_search(self, resource_type, params):
+        if resource_type == "Condition":
+            condition_params.append(dict(params))
+            return (
+                True,
+                [
+                    {
+                        "resourceType": "Condition",
+                        "id": "active-1",
+                        "clinicalStatus": {"coding": [{"code": "active"}]},
+                        "code": {"coding": [{"display": "Heart failure"}]},
+                    },
+                    {
+                        "resourceType": "Condition",
+                        "id": "resolved-1",
+                        "clinicalStatus": {"coding": [{"code": "resolved"}]},
+                        "code": {"coding": [{"display": "Resolved pneumonia"}]},
+                    },
+                ],
+                None,
+                1,
+            )
+        return await original_search(self, resource_type, params)
+
+    with patch.object(FhirClient, "search", capture_condition_search):
+        result = await tool.ainvoke({"patient_id": "fixture-1"})
+
+    assert condition_params
+    assert all("clinical-status" not in params for params in condition_params)
+    condition_rows = [
+        row for row in result["rows"] if row["resource_type"] == "Condition"
+    ]
+    assert [row["fhir_ref"] for row in condition_rows] == ["Condition/active-1"]
+
+
+async def test_run_per_patient_brief_uses_30_day_encounter_context() -> None:
+    """The one-click brief needs recent admission context, not only overnight rows."""
+    set_active_user_id(PRACTITIONER_DR_SMITH)
+    tool = _tool()
+
+    from copilot.fhir import FhirClient
+
+    original_search = FhirClient.search
+    encounter_dates: list[str] = []
+
+    async def capture_encounter_window(self, resource_type, params):
+        if resource_type == "Encounter":
+            encounter_dates.append(str(params.get("date") or ""))
+        return await original_search(self, resource_type, params)
+
+    with patch.object(FhirClient, "search", capture_encounter_window):
+        result = await tool.ainvoke({"patient_id": "fixture-1", "hours": 24})
+
+    assert result["ok"] is True
+    assert encounter_dates
+    assert any(date.startswith("ge2026-04-") for date in encounter_dates)
+
+
 # ---------------------------------------------------------------------------
 # Gate enforcement (per nested call, not just at entry)
 # ---------------------------------------------------------------------------

@@ -1,0 +1,62 @@
+# Railway upload exclusions for ``railway up``. Keeps the agent deploy
+# context to the few directories the Dockerfile actually copies
+# (agent/ + copilot-ui/) plus repo metadata.
+#
+# IMPORTANT: leading slash anchors patterns to the repo root so we don't
+# accidentally exclude agent/src or agent/tests when targeting OpenEMR's
+# top-level src/ and tests/ directories.
+
+# OpenEMR PHP surface — not used by the agent build.
+/vendor/
+/Documentation/
+/src/
+/interface/
+/contrib/
+/swagger/
+/sql/
+/public/
+/library/
+/tests/
+/templates/
+/modules/
+/ccdaservice/
+/docker/
+/sites/
+/node_modules/
+/.phpstan/
+/tmp-phpstan/
+/phpunit-runner/
+
+# Big local-only dirs.
+/example-documents/
+/example-documents.zip
+/audit-raw/
+/data/synthea-data/
+
+# Python virtualenvs / caches (anywhere under the tree).
+**/.venv
+**/.venv-*
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+agent/logs/
+
+# Node.
+copilot-ui/node_modules/
+copilot-ui/dist/
+
+# Local secrets.
+**/.env
+**/.env.*
+!**/.env.example
+
+# VCS metadata is uploaded separately; skip.
+.git/
+.github/
+.idea/
+.vscode/
+
+# Working notes / loose CSVs.
+agentforge-docs/audit-raw/
+*.csv
