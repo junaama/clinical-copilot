@@ -102,6 +102,26 @@ describe('App', () => {
     });
   });
 
+  it('renders an external link to the Copilot agent', async () => {
+    window.__OPENEMR_PATIENT_DASHBOARD__ = FIXTURE_CONFIG;
+    mockFetchSuccess();
+
+    render(<App />);
+    const link = screen.getByTestId('copilot-agent-link');
+    expect(link).toHaveAttribute(
+      'href',
+      'https://copilot-agent-production-3776.up.railway.app/',
+    );
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noreferrer');
+    expect(link).toHaveTextContent('Open Patient in Copilot');
+
+    // Wait for async state updates to settle
+    await waitFor(() => {
+      expect(screen.getByTestId('patient-header')).toBeInTheDocument();
+    });
+  });
+
   it('renders the patient header with FHIR data', async () => {
     window.__OPENEMR_PATIENT_DASHBOARD__ = FIXTURE_CONFIG;
     mockFetchSuccess();

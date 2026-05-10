@@ -6,12 +6,19 @@ import MedicationCard from './components/MedicationCard';
 import EncounterHistoryCard from './components/EncounterHistoryCard';
 import CareTeamCard from './components/CareTeamCard';
 
+const DEFAULT_COPILOT_AGENT_URL = 'https://copilot-agent-production-3776.up.railway.app/';
+
 function getConfig(): PatientDashboardConfig | null {
   return window.__OPENEMR_PATIENT_DASHBOARD__ ?? null;
 }
 
+function getCopilotAgentUrl(): string {
+  return import.meta.env.VITE_COPILOT_AGENT_URL || DEFAULT_COPILOT_AGENT_URL;
+}
+
 export default function App() {
   const config = getConfig();
+  const copilotAgentUrl = getCopilotAgentUrl();
 
   if (!config) {
     return (
@@ -32,6 +39,15 @@ export default function App() {
             data-testid="legacy-dashboard-link"
           >
             View Legacy Dashboard
+          </a>
+          <a
+            href={copilotAgentUrl}
+            className="agent-link"
+            target="_blank"
+            rel="noreferrer"
+            data-testid="copilot-agent-link"
+          >
+            Open Patient in Copilot
           </a>
         </nav>
       </header>
