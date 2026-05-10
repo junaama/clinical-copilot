@@ -288,12 +288,6 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
           </div>
         </div>
         <div className="agent-hd-r">
-          <button className="agent-icon" title="History" aria-label="history">
-            ⟲
-          </button>
-          <button className="agent-icon" title="Settings" aria-label="settings">
-            ⋯
-          </button>
           <button
             className="agent-icon close"
             title="Close"
