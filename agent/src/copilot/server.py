@@ -1216,6 +1216,7 @@ _VALID_UPLOAD_DOC_TYPES: frozenset[str] = frozenset({
     "docx_referral",
     "tiff_fax",
 })
+_AUTO_UPLOAD_DOC_TYPE = "auto"
 
 # Mirror copilot-ui/src/api/upload.ts so the server-side cap matches the
 # client-side cap. DocumentClient also re-checks at the storage boundary.
@@ -1331,6 +1332,45 @@ def _sniff_mimetype(file_data: bytes, fallback: str | None) -> str:
     if sniffed != "application/octet-stream":
         return sniffed
     return fallback or "application/octet-stream"
+
+
+def _infer_upload_doc_type(
+    file_data: bytes,
+    filename: str,
+    mimetype: str,
+) -> tuple[str, str, tuple[str, ...]]:
+    """Infer the upload extraction path from bytes, extension, and content cues."""
+
+    lower_name = filename.lower()
+    stripped = file_data.lstrip(b"\xef\xbb\xbf \t\r\n")
+    if stripped.startswith(b"MSH|"):
+        first_segment = stripped.splitlines()[0].decode("latin-1", errors="ignore")
+        fields = first_segment.split("|")
+        message_type = fields[8].split("^", 1)[0] if len(fields) > 8 else ""
+        if message_type == "ORU":
+            return ("hl7_oru", "high", ("HL7 MSH-9 is ORU",))
+        if message_type == "ADT":
+            return ("hl7_adt", "high", ("HL7 MSH-9 is ADT",))
+        return ("hl7_oru", "low", ("HL7 message type was not recognized",))
+
+    if mimetype == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+        return ("xlsx_workbook", "high", ("OOXML workbook signature",))
+    if mimetype == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return ("docx_referral", "high", ("OOXML document signature",))
+    if lower_name.endswith(".xlsx"):
+        return ("xlsx_workbook", "high", ("filename ends with .xlsx",))
+    if lower_name.endswith(".docx"):
+        return ("docx_referral", "high", ("filename ends with .docx",))
+    if mimetype == "image/tiff" or lower_name.endswith((".tif", ".tiff")):
+        return ("tiff_fax", "high", ("TIFF image signature",))
+
+    detection = detect_doc_type(file_data, filename, mimetype)
+    if detection.detected_type is not None:
+        return (detection.detected_type, detection.confidence, detection.evidence)
+
+    if mimetype in {"image/png", "image/jpeg"}:
+        return ("intake_form", "low", ("image upload default",))
+    return ("lab_pdf", "low", ("generic clinical-document default",))
 
 
 def _compute_upload_bboxes(
@@ -1599,12 +1639,16 @@ async def upload(
     6. Returns an ``UploadResponse`` mirroring the UI's TypeScript shape.
     """
 
-    if doc_type not in _VALID_UPLOAD_DOC_TYPES:
+    requested_doc_type = doc_type or _AUTO_UPLOAD_DOC_TYPE
+    if (
+        requested_doc_type != _AUTO_UPLOAD_DOC_TYPE
+        and requested_doc_type not in _VALID_UPLOAD_DOC_TYPES
+    ):
         raise HTTPException(
             status_code=400,
             detail=(
                 f"invalid doc_type '{doc_type}'. "
-                f"Expected one of: {sorted(_VALID_UPLOAD_DOC_TYPES)}"
+                f"Expected 'auto' or one of: {sorted(_VALID_UPLOAD_DOC_TYPES)}"
             ),
         )
     if not patient_id:
@@ -1632,26 +1676,52 @@ async def upload(
     # ``confirm_doc_type=true``.
     filename = file.filename or "upload.bin"
     sniffed_mimetype = _sniff_mimetype(file_data, file.content_type)
+    inferred_doc_type, inferred_confidence, inferred_evidence = _infer_upload_doc_type(
+        file_data,
+        filename,
+        sniffed_mimetype,
+    )
+    doc_type = (
+        inferred_doc_type
+        if requested_doc_type == _AUTO_UPLOAD_DOC_TYPE
+        else requested_doc_type
+    )
     detection = detect_doc_type(file_data, filename, sniffed_mimetype)
+    detected_type = (
+        inferred_doc_type
+        if inferred_confidence == "high"
+        else detection.detected_type
+    )
+    detection_confidence = (
+        inferred_confidence
+        if inferred_confidence == "high"
+        else detection.confidence
+    )
+    detection_evidence = (
+        inferred_evidence
+        if inferred_confidence == "high"
+        else detection.evidence
+    )
     confirmed = confirm_doc_type.lower() in _TRUTHY_FORM_VALUES
     if (
-        not confirmed
-        and detection.detected_type is not None
-        and detection.detected_type != doc_type
-        and detection.confidence == "high"
+        requested_doc_type != _AUTO_UPLOAD_DOC_TYPE
+        and not confirmed
+        and detected_type is not None
+        and detected_type != doc_type
+        and detection_confidence == "high"
     ):
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "doc_type_mismatch",
                 "message": (
-                    f"This file looks like a {detection.detected_type}, "
+                    f"This file looks like a {detected_type}, "
                     f"not a {doc_type}. Switch the document type or confirm to upload anyway."
                 ),
                 "requested_type": doc_type,
-                "detected_type": detection.detected_type,
-                "confidence": detection.confidence,
-                "evidence": list(detection.evidence),
+                "detected_type": detected_type,
+                "confidence": detection_confidence,
+                "evidence": list(detection_evidence),
             },
         )
 

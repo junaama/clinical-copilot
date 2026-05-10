@@ -61,7 +61,7 @@ describe('FileUploadWidget', () => {
     expect(uploadFn).toHaveBeenCalledTimes(1);
     const passedArgs = uploadFn.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(passedArgs['patientId']).toBe('pat-1');
-    expect(passedArgs['docType']).toBe('lab_pdf');
+    expect(passedArgs['docType']).toBe('auto');
   });
 
   it('shows a validation error for unsupported types and never calls upload', async () => {
@@ -207,7 +207,7 @@ describe('FileUploadWidget', () => {
     expect(onUploaded).not.toHaveBeenCalled();
   });
 
-  it('switches doc_type when the radio toggle is selected', async () => {
+  it('uses auto document classification for uploads', async () => {
     const uploadFn = vi.fn().mockResolvedValue({ ok: true, response: SAMPLE_RESPONSE });
 
     render(
@@ -219,15 +219,14 @@ describe('FileUploadWidget', () => {
       />,
     );
 
-    await userEvent.click(screen.getByLabelText(/intake form/i));
     const input = screen.getByLabelText('choose document') as HTMLInputElement;
     await userEvent.upload(input, makeFile({}));
 
     await waitFor(() => expect(uploadFn).toHaveBeenCalled());
-    expect(uploadFn.mock.calls[0]?.[0]).toMatchObject({ docType: 'intake_form' });
+    expect(uploadFn.mock.calls[0]?.[0]).toMatchObject({ docType: 'auto' });
   });
 
-  it('shows the active document type prominently before a file is picked', () => {
+  it('shows auto document classification before a file is picked', () => {
     render(
       <FileUploadWidget
         patientId="pat-1"
@@ -236,22 +235,7 @@ describe('FileUploadWidget', () => {
       />,
     );
     const indicator = screen.getByTestId('upload-widget-active-type');
-    expect(indicator).toHaveTextContent(/Selected document type/i);
-    expect(indicator).toHaveTextContent(/Lab PDF/i);
-  });
-
-  it('updates the prominent active-type label when the radio changes', async () => {
-    render(
-      <FileUploadWidget
-        patientId="pat-1"
-        patientName="—"
-        onUploaded={() => {}}
-      />,
-    );
-    await userEvent.click(screen.getByLabelText(/intake form/i));
-    expect(screen.getByTestId('upload-widget-active-type')).toHaveTextContent(
-      /Intake form/i,
-    );
+    expect(indicator).toHaveTextContent(/agent will classify/i);
   });
 
   it('runs the same upload path for drag-and-drop as for the file picker', async () => {
