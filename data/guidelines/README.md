@@ -23,6 +23,8 @@ the upstream source for full text and current updates.
 | `jnc8-hypertension-2014.pdf` | JNC 8 — Eighth Joint National Committee report on hypertension management in adults | https://jamanetwork.com/journals/jama/fullarticle/1791497 |
 | `ada-diabetes-glycemic-2024.pdf` | ADA Standards of Care, glycemic targets section | https://diabetesjournals.org/care/issue/47/Supplement_1 |
 | `kdigo-ckd-2024.pdf` | KDIGO 2024 Clinical Practice Guideline for the Evaluation and Management of CKD | https://kdigo.org/guidelines/ckd-evaluation-and-management/ |
+| `implementing-an-antibiotic-stewardship-program-guidelines-by-the-infectious-diseases-society-of-america-and-the-society-for-healthcare-epidemiology-of-america.pdf` | IDSA/SHEA guideline for implementing an antibiotic stewardship program | https://academic.oup.com/cid/article/62/10/e51/2462845 |
+| `Heidenreich-et-al_2022_AHA-ACC-HFSA-Guideline-for-the-Management-of-Heart-Failure-A-Report-of-the-American-College-of-Cardiology-American-Heart-Association-Joint-Committee-on-Clinical-Practice-Guidelines.pdf` | 2022 AHA/ACC/HFSA guideline for the management of heart failure | https://www.ahajournals.org/doi/10.1161/CIR.0000000000001063 |
 
 ## Adding a new guideline
 
