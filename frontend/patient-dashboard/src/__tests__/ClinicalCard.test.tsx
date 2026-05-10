@@ -46,13 +46,14 @@ describe('ClinicalCard', () => {
     expect(link).toHaveAttribute('href', '/openemr/interface/allergy.php');
   });
 
-  it('shows empty state when no children and not loading', () => {
+  it('does not render when empty and not loading', () => {
     render(
       <ClinicalCard title="Allergies" loading={false} error={null} editUrl="/edit" isEmpty={true}>
         {null}
       </ClinicalCard>,
     );
 
-    expect(screen.getByText(/no .* recorded/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('card-allergies')).not.toBeInTheDocument();
+    expect(screen.queryByText(/no .* recorded/i)).not.toBeInTheDocument();
   });
 });

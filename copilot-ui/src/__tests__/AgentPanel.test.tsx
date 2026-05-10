@@ -154,6 +154,19 @@ describe('AgentPanel header subtitle (issue 043 + 039)', () => {
     const subtitle = screen.getByTestId('agent-subtitle');
     expect(subtitle.textContent ?? '').toMatch(/Robert Hayes's record/);
   });
+
+  it('cleans synthetic numeric suffixes from the patient-record subtitle', () => {
+    render(
+      <PanelHarness
+        focusPatientId="pat-1"
+        hasPanelSurface={true}
+        patientName="Adela471 Upton904"
+      />,
+    );
+    const subtitle = screen.getByTestId('agent-subtitle');
+    expect(subtitle.textContent ?? '').toMatch(/Adela Upton's record/);
+    expect(subtitle.textContent ?? '').not.toMatch(/471|904/);
+  });
 });
 
 describe('AgentPanel Welcome wiring (issue 043)', () => {

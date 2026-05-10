@@ -1,5 +1,6 @@
 import type { JSX } from 'react';
 import type { CohortRow } from '../api/types';
+import { cleanSyntheticNameSuffixes } from '../lib/displayName';
 import { ScoreBar } from './ScoreBar';
 
 interface CohortBlockProps {
@@ -15,7 +16,7 @@ export function CohortBlock({ cohort, onJumpToVitals }: CohortBlockProps): JSX.E
           <div className="agent-pat-rank">{idx + 1}</div>
           <div className="agent-pat-body">
             <div className="agent-pat-hd">
-              <span className="agent-pat-name">{p.name}</span>
+              <span className="agent-pat-name">{cleanSyntheticNameSuffixes(p.name)}</span>
               <span className="agent-pat-meta">
                 {p.age}y · {p.room}
               </span>

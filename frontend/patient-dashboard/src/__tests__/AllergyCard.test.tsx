@@ -26,7 +26,7 @@ const FIXTURE_BUNDLE: FhirBundle<FhirAllergyIntolerance> = {
       resource: {
         resourceType: 'AllergyIntolerance',
         id: 'a2',
-        code: { text: 'Peanuts' },
+        code: { text: 'Peanuts (substance)' },
         clinicalStatus: { coding: [{ code: 'active' }] },
         category: ['food'],
         criticality: 'low',
@@ -60,17 +60,19 @@ describe('AllergyCard', () => {
     });
 
     expect(screen.getByText('Peanuts')).toBeInTheDocument();
+    expect(screen.getByText('substance')).toHaveClass('clinical-card__badge--qualifier');
     // "Hives" is inside "Reaction: Hives" — use substring matcher
     expect(screen.getByText(/Hives/)).toBeInTheDocument();
   });
 
-  it('shows empty state when bundle has no entries', async () => {
+  it('does not render when bundle has no entries', async () => {
     mockFetch(EMPTY_BUNDLE);
 
     render(<AllergyCard fhirBaseUrl={FHIR_BASE} patientUuid={PATIENT_UUID} webRoot={WEB_ROOT} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/no allergies recorded/i)).toBeInTheDocument();
+      expect(screen.queryByTestId('card-allergies')).not.toBeInTheDocument();
+      expect(screen.queryByText(/no allergies recorded/i)).not.toBeInTheDocument();
     });
   });
 

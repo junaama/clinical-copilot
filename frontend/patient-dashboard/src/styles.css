@@ -200,7 +200,16 @@ body {
 }
 
 .clinical-card__body {
+  height: 15rem;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: var(--dashboard-border-strong) transparent;
+  scrollbar-width: thin;
   padding: 1rem;
+}
+
+.clinical-card__body:empty {
+  display: none;
 }
 
 .clinical-card__loading,
@@ -240,6 +249,14 @@ body {
   gap: 0.75rem;
 }
 
+.clinical-card__item-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
 .clinical-card__item-title {
   margin: 0;
   color: var(--dashboard-text);
@@ -270,6 +287,11 @@ body {
 .clinical-card__badge--resolved,
 .clinical-card__badge--completed {
   background: var(--dashboard-surface-muted);
+}
+
+.clinical-card__badge--qualifier {
+  background: var(--dashboard-surface-muted);
+  color: var(--dashboard-text-muted);
 }
 
 .clinical-card__item-details {
@@ -353,5 +375,9 @@ body {
 
   .dashboard-cards {
     grid-template-columns: 1fr;
+  }
+
+  .clinical-card__body {
+    height: 13rem;
   }
 }

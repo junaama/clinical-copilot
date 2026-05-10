@@ -3,11 +3,12 @@
  */
 
 import type { FhirCondition, FhirBundle } from '../fhir-types';
-import { extractCodeableDisplay } from './allergy-adapter';
+import { extractCodeableDisplay, splitTrailingQualifier } from './allergy-adapter';
 
 export interface ProblemItem {
   readonly id: string;
   readonly title: string;
+  readonly titleQualifier: string | null;
   readonly clinicalStatus: string;
   readonly onsetDate: string | null;
   readonly recordedDate: string | null;
@@ -22,9 +23,12 @@ export function adaptConditions(bundle: FhirBundle<FhirCondition>): ProblemItem[
 }
 
 function adaptOneCondition(condition: FhirCondition): ProblemItem {
+  const display = splitTrailingQualifier(extractCodeableDisplay(condition.code));
+
   return {
     id: condition.id ?? '',
-    title: extractCodeableDisplay(condition.code),
+    title: display.title,
+    titleQualifier: display.qualifier,
     clinicalStatus: condition.clinicalStatus?.coding?.[0]?.code ?? 'unknown',
     onsetDate: condition.onsetDateTime ?? null,
     recordedDate: condition.recordedDate ?? null,

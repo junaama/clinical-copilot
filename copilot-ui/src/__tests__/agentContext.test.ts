@@ -195,6 +195,15 @@ describe('derivePatientPromptPills (issue 044)', () => {
         'What happened overnight for Robert Hayes?',
       );
     });
+
+    it('cleans synthetic numeric suffixes from patient names', () => {
+      const pills = derivePatientPromptPills('Patricia625 Raquel318 Covarrubias273');
+
+      expect(pills[0]?.label).toBe('Get brief on Patricia Raquel Covarrubias');
+      expect(pills[0]?.promptText).toBe(
+        'Give me a brief on Patricia Raquel Covarrubias.',
+      );
+    });
   });
 
   describe('without a patient name (or empty string)', () => {

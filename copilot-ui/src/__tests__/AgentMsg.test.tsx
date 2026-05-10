@@ -39,7 +39,8 @@ describe('AgentMsg block dispatch', () => {
         onJumpToVitals={vi.fn()}
       />,
     );
-    expect(screen.getByText('Wade235 Bednar518')).toBeInTheDocument();
+    expect(screen.getByText('Wade Bednar')).toBeInTheDocument();
+    expect(screen.queryByText('Wade235 Bednar518')).not.toBeInTheDocument();
     expect(screen.getByText('Maritza Calderón')).toBeInTheDocument();
     expect(screen.getByText('Jump to vitals →')).toBeInTheDocument();
   });

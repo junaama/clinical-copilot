@@ -31,6 +31,7 @@ describe('adaptConditions', () => {
     expect(result[0]).toEqual<ProblemItem>({
       id: 'cond-001',
       title: 'Type 2 Diabetes Mellitus',
+      titleQualifier: null,
       clinicalStatus: 'active',
       onsetDate: '2020-03-10',
       recordedDate: '2020-03-15',
@@ -77,6 +78,17 @@ describe('adaptConditions', () => {
     };
     const [item] = adaptConditions(makeBundle([condition]));
     expect(item.title).toBe('Chronic kidney disease stage 3');
+  });
+
+  it('splits a trailing semantic tag into a title qualifier', () => {
+    const condition: FhirCondition = {
+      resourceType: 'Condition',
+      code: { text: 'Hypertension (finding)' },
+    };
+    const [item] = adaptConditions(makeBundle([condition]));
+
+    expect(item.title).toBe('Hypertension');
+    expect(item.titleQualifier).toBe('finding');
   });
 
   it('returns "Unknown" title when code is absent', () => {

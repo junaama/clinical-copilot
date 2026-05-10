@@ -35,7 +35,14 @@ export default function AllergyCard({ fhirBaseUrl, patientUuid, webRoot }: Aller
         {items.map((item) => (
           <li key={item.id || item.title} className="clinical-card__list-item">
             <div className="clinical-card__item-header">
-              <strong>{item.title}</strong>
+              <div className="clinical-card__item-heading">
+                <strong>{item.title}</strong>
+                {item.titleQualifier && (
+                  <span className="clinical-card__badge clinical-card__badge--qualifier">
+                    {item.titleQualifier}
+                  </span>
+                )}
+              </div>
               {item.criticality !== 'unknown' && (
                 <span className={`clinical-card__badge clinical-card__badge--${item.criticality}`}>
                   {item.criticality}

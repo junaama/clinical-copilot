@@ -13,6 +13,7 @@
 
 import { useEffect, useState, type JSX } from 'react';
 import { fetchPanel, type PanelPatient, type PanelResponse } from '../api/panel';
+import { formatPanelPatientListName } from '../lib/displayName';
 
 interface PanelViewProps {
   readonly onPatientClick?: (patient: PanelPatient) => void;
@@ -78,7 +79,7 @@ export function PanelView({ onPatientClick }: PanelViewProps): JSX.Element {
               onClick={() => onPatientClick?.(p)}
             >
               <div className="panel-view__name">
-                {p.family_name}, {p.given_name}
+                {formatPanelPatientListName(p.given_name, p.family_name)}
               </div>
               <div className="panel-view__meta">
                 <span>DOB {p.birth_date || '—'}</span>

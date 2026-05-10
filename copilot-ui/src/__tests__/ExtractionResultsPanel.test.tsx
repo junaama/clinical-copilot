@@ -243,14 +243,15 @@ describe('ExtractionResultsPanel', () => {
     expect(screen.getByText('BLUE SHIELD OF CALIFORNIA PPO')).toBeInTheDocument();
   });
 
-  it('shows an empty-state when lab has no results', () => {
+  it('does not render a table or empty-state copy when lab has no results', () => {
     const fixture = labFixture();
     const empty: ExtractionResponse = {
       ...fixture,
       lab: { ...fixture.lab!, results: [] },
     };
     render(<ExtractionResultsPanel extraction={empty} />);
-    expect(screen.getByText(/No values found/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No values found/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
   it('renders intake form sections (demographics, medications, allergies)', () => {

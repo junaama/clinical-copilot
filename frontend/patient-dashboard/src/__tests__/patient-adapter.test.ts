@@ -85,6 +85,16 @@ describe('adaptPatient', () => {
       expect(result.fullName).toBe('Dr. Eduardo Chen III');
     });
 
+    it('cleans synthetic numeric suffixes from display names', () => {
+      const patient: FhirPatient = {
+        resourceType: 'Patient',
+        name: [{ family: 'Covarrubias273', given: ['Patricia625', 'Raquel318'] }],
+      };
+      const result = adaptPatient(patient);
+
+      expect(result.fullName).toBe('Patricia Raquel Covarrubias');
+    });
+
     it('falls back to first name when no official use', () => {
       const patient: FhirPatient = {
         resourceType: 'Patient',
