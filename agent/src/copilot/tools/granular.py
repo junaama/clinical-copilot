@@ -20,6 +20,7 @@ from ..fhir import FhirClient, Row, ToolResult
 from ..fixtures import CARE_TEAM_PANEL
 from .helpers import (
     _condition_fields,
+    _condition_is_active,
     _diagnostic_report_fields,
     _document_fields,
     _encounter_fields,
@@ -36,6 +37,18 @@ from .helpers import (
     get_active_registry,
     get_active_user_id,
 )
+
+
+def _is_document_reference_policy_denial(error: str | None) -> bool:
+    """Return true when OpenEMR denies optional DocumentReference reads.
+
+    Some deployed OpenEMR org policies deny FHIR DocumentReference search
+    while still allowing the rest of the patient's clinical chart. Clinical
+    notes are useful when present, but they should not fail an otherwise
+    valid chart brief or panel change-signal probe.
+    """
+    normalized = (error or "").lower()
+    return "403" in normalized or "organization policy" in normalized
 
 
 def make_granular_tools(
@@ -172,11 +185,10 @@ def make_granular_tools(
     async def get_active_problems(patient_id: str) -> dict[str, Any]:
         if (denied := await _enforce_patient_authorization(gate, patient_id)) is not None:
             return denied
-        ok, entries, err, ms = await client.search(
-            "Condition", {"patient": patient_id, "clinical-status": "active"}
-        )
+        ok, entries, err, ms = await client.search("Condition", {"patient": patient_id})
+        active_entries = [entry for entry in entries if _condition_is_active(entry)]
         return _result_from_entries(
-            entries,
+            active_entries,
             resource_type="Condition",
             field_extractor=_condition_fields,
             sources=("Condition (active)",),
@@ -351,8 +363,13 @@ def make_granular_tools(
             ok, entries, err, ms = await client.search(resource_type, channel_params)
             latency_total += ms
             if not ok:
-                ok_overall = False
-                last_err = err
+                document_policy_denial = (
+                    resource_type == "DocumentReference"
+                    and _is_document_reference_policy_denial(err)
+                )
+                if not document_policy_denial:
+                    ok_overall = False
+                    last_err = err
             rows_list.append(
                 Row(
                     fhir_ref=(
@@ -438,6 +455,14 @@ def make_granular_tools(
             "DocumentReference",
             {"patient": patient_id, "date": _hours_window(hours)},
         )
+        if not ok and _is_document_reference_policy_denial(err):
+            return ToolResult(
+                ok=True,
+                rows=(),
+                sources_checked=("DocumentReference",),
+                error=None,
+                latency_ms=ms,
+            ).to_payload()
         return _result_from_entries(
             entries,
             resource_type="DocumentReference",

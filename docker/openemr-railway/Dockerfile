@@ -1,8 +1,8 @@
-# Production OpenEMR image extended with the Co-Pilot launcher module
+# Production OpenEMR image extended with the Co-Pilot custom modules
 # and the local fork's PHP trees (src/, library/, apis/).
 #
 # Build base is openemr/openemr:latest from Docker Hub. We then overlay:
-#   - oe-module-copilot-launcher/ (the custom module)
+#   - custom_modules/ (the Co-Pilot custom modules)
 #   - patches/ — a mirror of the local fork's src/, library/, apis/
 #     trees, staged into the build context by scripts/deploy-openemr.sh
 #     before `railway up`. This is intentionally a whole-tree overlay
@@ -23,15 +23,15 @@
 
 FROM openemr/openemr:latest
 
-# Drop our PHP module into the path OpenEMR's module loader scans.
+# Drop our PHP modules into the path OpenEMR's module loader scans.
 # (See ModulesClassLoader + custom_modules discovery in upstream OpenEMR.)
 #
 # --chown=apache:root matches the ownership upstream uses for
 # /var/www/localhost/htdocs/openemr/. Without this, COPY defaults to
 # root:root, and the upstream entrypoint's `chmod 400` hardening then
 # makes the files unreadable to Apache (which runs as `apache`).
-COPY --chown=apache:root oe-module-copilot-launcher \
-     /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/oe-module-copilot-launcher
+COPY --chown=apache:root custom_modules/ \
+     /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/
 
 # Overlay the local fork's PHP trees on top of the upstream image. The
 # patches/ directory mirrors openemr's layout — patches/src/...,
