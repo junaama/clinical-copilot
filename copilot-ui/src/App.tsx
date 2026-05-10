@@ -27,7 +27,6 @@ import { ExtractionResultsPanel } from './components/ExtractionResultsPanel';
 import { FileUploadWidget } from './components/FileUploadWidget';
 import { Launcher } from './components/Launcher';
 import { LoginPage } from './components/LoginPage';
-import { PanelView } from './components/PanelView';
 import type { PanelPatient } from './api/panel';
 import { fetchConversationMessages } from './api/conversations';
 import type { ExtractionResponse } from './api/extraction';
@@ -350,6 +349,7 @@ function StandaloneApp(): JSX.Element {
           refreshToken={sidebarRefresh}
           onSelect={handleSelectConversation}
           onCreate={handleCreateConversation}
+          onPatientClick={handlePatientClickWithFocus}
         />
         <div className="standalone-main">
           <AgentPanel
@@ -374,16 +374,6 @@ function StandaloneApp(): JSX.Element {
               navigateToRoot();
             }}
             onCite={() => {}}
-            evidenceSlot={
-              <ExtractionResultsPanel
-                extraction={extraction}
-                sourceFile={extractionSourceFile}
-                onDismiss={() => {
-                  setExtraction(null);
-                  setExtractionSourceFile(null);
-                }}
-              />
-            }
             composerSlot={
               <FileUploadWidget
                 patientId={focusPatient?.id ?? ''}
@@ -398,9 +388,21 @@ function StandaloneApp(): JSX.Element {
             }
           />
         </div>
-        <aside className="standalone-aside" aria-label="care team panel">
-          <PanelView onPatientClick={handlePatientClickWithFocus} />
-        </aside>
+        {extraction ? (
+          <aside
+            className="standalone-document-aside"
+            aria-label="document extraction panel"
+          >
+            <ExtractionResultsPanel
+              extraction={extraction}
+              sourceFile={extractionSourceFile}
+              onDismiss={() => {
+                setExtraction(null);
+                setExtractionSourceFile(null);
+              }}
+            />
+          </aside>
+        ) : null}
       </div>
     </AppShell>
   );

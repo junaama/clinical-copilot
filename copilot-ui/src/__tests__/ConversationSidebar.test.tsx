@@ -10,10 +10,20 @@ interface MockResponse {
   readonly body: unknown;
 }
 
-function installFetchMock(responses: readonly MockResponse[]): ReturnType<typeof vi.fn> {
+function installFetchMock(
+  responses: readonly MockResponse[],
+  panelBody: unknown = { user_id: 42, patients: [] },
+): ReturnType<typeof vi.fn> {
   const mock = vi.fn();
   let i = 0;
-  mock.mockImplementation(async () => {
+  mock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url.endsWith('/panel')) {
+      return {
+        ok: true,
+        json: async () => panelBody,
+      } as Response;
+    }
     const r = responses[Math.min(i, responses.length - 1)];
     i += 1;
     return {
@@ -23,6 +33,14 @@ function installFetchMock(responses: readonly MockResponse[]): ReturnType<typeof
   });
   globalThis.fetch = mock as unknown as typeof globalThis.fetch;
   return mock;
+}
+
+function countConversationFetches(mock: ReturnType<typeof vi.fn>): number {
+  return mock.mock.calls.filter((call) => {
+    const input = call[0] as RequestInfo | URL;
+    const url = input instanceof Request ? input.url : String(input);
+    return url.endsWith('/conversations');
+  }).length;
 }
 
 describe('ConversationSidebar', () => {
@@ -236,7 +254,7 @@ describe('ConversationSidebar', () => {
     );
 
     await screen.findByText(/No conversations yet/i);
-    expect(mock).toHaveBeenCalledTimes(1);
+    expect(countConversationFetches(mock)).toBe(1);
 
     rerender(
       <ConversationSidebar
@@ -248,7 +266,7 @@ describe('ConversationSidebar', () => {
     );
 
     expect(await screen.findByText('New conv')).toBeInTheDocument();
-    expect(mock).toHaveBeenCalledTimes(2);
+    expect(countConversationFetches(mock)).toBe(2);
   });
 
   it('shows the error state when /conversations fails', async () => {
@@ -266,5 +284,43 @@ describe('ConversationSidebar', () => {
     expect(
       await screen.findByText(/Couldn’t load conversations/i),
     ).toBeInTheDocument();
+  });
+
+  it('renders the care team roster in a collapsible section', async () => {
+    installFetchMock(
+      [{ ok: true, body: { conversations: [] } }],
+      {
+        user_id: 42,
+        patients: [
+          {
+            patient_id: 'fixture-1',
+            given_name: 'Eduardo',
+            family_name: 'Perez',
+            birth_date: '1958-03-12',
+            last_admission: null,
+            room: '4B',
+          },
+        ],
+      },
+    );
+
+    render(
+      <ConversationSidebar
+        activeConversationId={null}
+        refreshToken={0}
+        onSelect={() => {}}
+        onCreate={() => {}}
+      />,
+    );
+
+    expect(await screen.findByText('Perez, Eduardo')).toBeInTheDocument();
+
+    const toggle = screen.getByRole('button', { name: /Care team/i });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    await userEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Perez, Eduardo')).not.toBeInTheDocument();
   });
 });

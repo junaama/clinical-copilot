@@ -977,12 +977,82 @@ body {
 
 /* ─── Conversation sidebar (issue 004) ───────────────────────── */
 .conv-sidebar {
-  width: 240px;
+  width: 300px;
   border-right: 1px solid var(--line);
   background: oklch(0.985 0.003 240);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  flex-shrink: 0;
+}
+.conv-sidebar__care {
+  border-bottom: 1px solid var(--line-2);
+  flex-shrink: 0;
+}
+.conv-sidebar__section-toggle {
+  width: 100%;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.conv-sidebar__section-toggle:hover {
+  background: oklch(0.97 0.004 240);
+}
+.conv-sidebar__chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink-2);
+  font-size: 16px;
+  line-height: 1;
+}
+.conv-sidebar__care-body {
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+.conv-sidebar__care-body .panel-view {
+  max-width: none;
+  padding: 0 14px 6px;
+}
+.conv-sidebar__care-body .panel-view--loading,
+.conv-sidebar__care-body .panel-view--error,
+.conv-sidebar__care-body .panel-view--empty {
+  text-align: left;
+  padding-top: 0;
+}
+.conv-sidebar__care-body .panel-view--empty h2 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+.conv-sidebar__care-body .panel-view__title {
+  margin-bottom: 8px;
+}
+.conv-sidebar__care-body .panel-view__list {
+  gap: 6px;
+}
+.conv-sidebar__care-body .panel-view__row-btn {
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.conv-sidebar__care-body .panel-view__meta {
+  gap: 8px;
 }
 .conv-sidebar__header {
   display: flex;
@@ -990,6 +1060,7 @@ body {
   justify-content: space-between;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line-2);
+  flex-shrink: 0;
 }
 .conv-sidebar__title {
   margin: 0;
@@ -1026,11 +1097,15 @@ body {
   font-size: 12px;
   color: var(--ink-3);
 }
+.conv-sidebar__history {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
 .conv-sidebar__list {
   list-style: none;
   margin: 0;
   padding: 6px 0;
-  overflow-y: auto;
 }
 .conv-sidebar__row {
   margin: 0;
@@ -1070,21 +1145,23 @@ body {
   color: var(--ink-3);
 }
 
-/* ─── Standalone aside column ────────────────────────────────── */
-/* Right sidebar (care team panel) — mirrors .conv-sidebar on the left. */
-.standalone-aside {
-  width: 300px;
+/* ─── Standalone document extraction column ─────────────────── */
+.standalone-document-aside {
+  width: 340px;
   flex-shrink: 0;
   border-left: 1px solid var(--line);
   background: oklch(0.985 0.003 240);
   display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow-y: auto;
+  padding: 14px;
+  box-sizing: border-box;
 }
-/* Tighten PanelView when it lives in the sidebar (override centered max-width). */
-.standalone-aside .panel-view {
-  max-width: none;
-  padding: 14px 14px 12px;
+.standalone-document-aside .extraction-panel {
+  flex: 1;
+  min-height: 0;
+  box-shadow: 0 12px 32px -24px rgba(31, 31, 50, 0.42);
 }
 
 /* Composer-slot upload affordance — sits inside the chat window, just
