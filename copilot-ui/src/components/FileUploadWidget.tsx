@@ -29,6 +29,7 @@ import {
   uploadDocument,
   validateFileForUpload,
   type DocTypeMismatch,
+  type UploadDocType,
   type UploadResult,
 } from '../api/upload';
 import type { DocType, ExtractionResponse } from '../api/extraction';
@@ -75,6 +76,10 @@ const DOC_TYPE_LABEL: Record<DocType, string> = {
   tiff_fax: 'TIFF Fax',
 };
 
+function docTypeLabel(docType: UploadDocType): string {
+  return docType === 'auto' ? 'Auto-detect' : DOC_TYPE_LABEL[docType];
+}
+
 export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | null {
   const {
     patientId,
@@ -85,14 +90,13 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
   } = props;
 
   const [state, setState] = useState<UploadState>({ kind: 'idle' });
-  const [docType, setDocType] = useState<DocType>('lab_pdf');
   const [dragActive, setDragActive] = useState<boolean>(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const runUpload = useCallback(
     async (
       file: File,
-      effectiveDocType: DocType,
+      effectiveDocType: UploadDocType,
       confirmDocType: boolean,
     ): Promise<void> => {
       setState({ kind: 'uploading', fileName: file.name });
@@ -132,9 +136,9 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
         setState({ kind: 'invalid', detail: invalid.detail });
         return;
       }
-      await runUpload(file, docType, false);
+      await runUpload(file, 'auto', false);
     },
-    [docType, runUpload],
+    [runUpload],
   );
 
   const onPick = useCallback(
@@ -169,7 +173,6 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
   const onSwitchType = useCallback((): void => {
     if (state.kind !== 'mismatch') return;
     const next = state.mismatch.detectedType;
-    setDocType(next);
     void runUpload(state.file, next, false);
   }, [state, runUpload]);
 
@@ -198,19 +201,7 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
       </div>
 
       <div className="upload-widget__doctype">
-        {(Object.keys(DOC_TYPE_LABEL) as DocType[]).map((dt) => (
-          <label key={dt}>
-            <input
-              type="radio"
-              name="doc_type"
-              value={dt}
-              checked={docType === dt}
-              onChange={() => setDocType(dt)}
-              disabled={disabled}
-            />
-            {DOC_TYPE_LABEL[dt]}
-          </label>
-        ))}
+        <span>Auto-detect document type</span>
       </div>
 
       <div
@@ -218,7 +209,7 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
         data-testid="upload-widget-active-type"
         aria-live="polite"
       >
-        Selected document type: <strong>{DOC_TYPE_LABEL[docType]}</strong>
+        The agent will classify the document after upload.
       </div>
 
       <div
@@ -257,7 +248,7 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
           </span>
         ) : (
           <span className="upload-widget__hint">
-            Drop a PDF, PNG, or JPEG here · 20 MB max
+            Drop a clinical document here · PDF, image, HL7, DOCX, XLSX, or TIFF · 20 MB max
           </span>
         )}
       </div>
@@ -290,8 +281,8 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
           aria-labelledby="upload-mismatch-title"
         >
           <p id="upload-mismatch-title" className="upload-widget__mismatch-title">
-            This file looks like a {DOC_TYPE_LABEL[state.mismatch.detectedType]},
-            but you selected {DOC_TYPE_LABEL[state.mismatch.requestedType]}.
+            This file looks like a {docTypeLabel(state.mismatch.detectedType)},
+            but you selected {docTypeLabel(state.mismatch.requestedType)}.
           </p>
           <p className="upload-widget__mismatch-message">{state.mismatch.message}</p>
           <div className="upload-widget__mismatch-actions">
@@ -300,14 +291,14 @@ export function FileUploadWidget(props: FileUploadWidgetProps): JSX.Element | nu
               onClick={onSwitchType}
               data-testid="upload-mismatch-switch"
             >
-              Switch to {DOC_TYPE_LABEL[state.mismatch.detectedType]} and upload
+              Switch to {docTypeLabel(state.mismatch.detectedType)} and upload
             </button>
             <button
               type="button"
               onClick={onConfirmAnyway}
               data-testid="upload-mismatch-confirm"
             >
-              Upload as {DOC_TYPE_LABEL[state.mismatch.requestedType]} anyway
+              Upload as {docTypeLabel(state.mismatch.requestedType)} anyway
             </button>
             <button
               type="button"

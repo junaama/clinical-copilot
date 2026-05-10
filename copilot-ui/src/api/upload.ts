@@ -9,6 +9,8 @@
 import { resolveAgentUrl } from './client';
 import type { DocType, ExtractionResponse } from './extraction';
 
+export type UploadDocType = DocType | 'auto';
+
 export const ALLOWED_MIME_TYPES: readonly string[] = [
   'application/pdf',
   'image/png',
@@ -37,7 +39,7 @@ export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024; // 20 MB
 export interface DocTypeMismatch {
   readonly code: 'doc_type_mismatch';
   readonly message: string;
-  readonly requestedType: DocType;
+  readonly requestedType: UploadDocType;
   readonly detectedType: DocType;
   readonly confidence: 'high' | 'medium' | 'low';
   readonly evidence: readonly string[];
@@ -58,7 +60,7 @@ export type UploadResult =
 export interface UploadOptions {
   readonly file: File;
   readonly patientId: string;
-  readonly docType: DocType;
+  readonly docType: UploadDocType;
   readonly conversationId?: string;
   readonly confirmDocType?: boolean;
   readonly fetcher?: typeof fetch;
@@ -199,7 +201,7 @@ function parseMismatchDetail(bodyText: string): DocTypeMismatch | null {
   const detected = d['detected_type'];
   const confidence = d['confidence'];
   if (
-    !_isValidDocType(requested) ||
+    !_isValidUploadDocType(requested) ||
     !_isValidDocType(detected) ||
     (confidence !== 'high' && confidence !== 'medium' && confidence !== 'low')
   ) {
@@ -247,7 +249,7 @@ function isExtractionResponse(x: unknown): x is ExtractionResponse {
     status === 'unauthorized';
   if (!validStatus) return false;
   if (typeof obj['discussable'] !== 'boolean') return false;
-  if (!_isValidDocType(obj['requested_type'])) {
+  if (!_isValidUploadDocType(obj['requested_type'])) {
     return false;
   }
   // ``bboxes`` is the issue-031 drawable-only contract: must be an array
@@ -273,4 +275,8 @@ function _isValidDocType(value: unknown): value is DocType {
     value === 'docx_referral' ||
     value === 'tiff_fax'
   );
+}
+
+function _isValidUploadDocType(value: unknown): value is UploadDocType {
+  return value === 'auto' || _isValidDocType(value);
 }

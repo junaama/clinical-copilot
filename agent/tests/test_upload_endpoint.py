@@ -20,6 +20,7 @@ import hashlib
 import io
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -559,10 +560,13 @@ def test_upload_skips_system_message_when_no_conversation_id(
 
 
 def _read_fixture(rel: str) -> bytes:
-    from pathlib import Path
-
     fixtures = Path(__file__).resolve().parents[2] / "example-documents"
     return (fixtures / rel).read_bytes()
+
+
+def _read_week2_asset(rel: str) -> bytes:
+    assets = Path(__file__).resolve().parents[2] / "cohort-5-week-2-assets-v2"
+    return (assets / rel).read_bytes()
 
 
 def test_upload_returns_409_when_intake_pdf_uploaded_as_lab(
@@ -660,6 +664,74 @@ def test_upload_happy_path_intake_intake_does_not_trigger_guard(
         data={"patient_id": "p-1", "doc_type": "intake_form"},
     )
     assert response.status_code == 200, response.text
+
+
+def test_upload_auto_detects_intake_form(
+    upload_client: TestClient,
+) -> None:
+    intake_bytes = _read_fixture("intake-forms/p02-whitaker-intake.pdf")
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": ("p02-whitaker-intake.pdf", io.BytesIO(intake_bytes), "application/pdf"),
+        },
+        data={"patient_id": "p-1", "doc_type": "auto"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["requested_type"] == "intake_form"
+    assert body["effective_type"] == "intake_form"
+    assert body["doc_type"] == "intake_form"
+    assert body["intake"] is not None
+
+
+def test_upload_auto_detects_hl7_oru(
+    upload_client: TestClient,
+) -> None:
+    hl7_bytes = _read_week2_asset("hl7v2/p02-whitaker-oru-r01.hl7")
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": (
+                "p02-whitaker-oru-r01.hl7",
+                io.BytesIO(hl7_bytes),
+                "x-application/hl7-v2+er7",
+            ),
+        },
+        data={"patient_id": "p-1", "doc_type": "auto"},
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["requested_type"] == "hl7_oru"
+    assert body["effective_type"] == "hl7_oru"
+    assert body["doc_type"] == "hl7_oru"
+    assert body["lab"]["results"][0]["test_name"] == "Hemoglobin [Mass/volume] in Blood"
+
+
+def test_upload_explicit_hl7_oru_returns_mismatch_for_adt_payload(
+    upload_client: TestClient,
+) -> None:
+    hl7_bytes = _read_week2_asset("hl7v2/p02-whitaker-adt-a08.hl7")
+    response = upload_client.post(
+        "/upload",
+        files={
+            "file": (
+                "p02-whitaker-adt-a08.hl7",
+                io.BytesIO(hl7_bytes),
+                "x-application/hl7-v2+er7",
+            ),
+        },
+        data={"patient_id": "p-1", "doc_type": "hl7_oru"},
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "doc_type_mismatch"
+    assert detail["requested_type"] == "hl7_oru"
+    assert detail["detected_type"] == "hl7_adt"
+    assert detail["confidence"] == "high"
 
 
 # ---------------------------------------------------------------------------
