@@ -115,7 +115,7 @@ describe('CareTeamCard', () => {
       expect(screen.getByText(/Caregiver/)).toBeInTheDocument();
     });
 
-    it('shows empty state when bundle has no entries', async () => {
+    it('does not render when bundle has no entries', async () => {
       mockFetch(EMPTY_BUNDLE);
 
       render(
@@ -129,7 +129,8 @@ describe('CareTeamCard', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByText(/no care team recorded/i)).toBeInTheDocument();
+        expect(screen.queryByTestId('card-care-team')).not.toBeInTheDocument();
+        expect(screen.queryByText(/no care team recorded/i)).not.toBeInTheDocument();
       });
     });
 

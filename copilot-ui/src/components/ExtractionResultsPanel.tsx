@@ -291,31 +291,31 @@ function LabPanel({
         ) : null}
       </dl>
 
-      {lab.results.length === 0 ? (
-        <p className="extraction-panel__empty">No values found.</p>
-      ) : (
-        <table className="extraction-panel__table">
-          <thead>
-            <tr>
-              <th scope="col">Test</th>
-              <th scope="col">Value</th>
-              <th scope="col">Reference</th>
-              <th scope="col">Confidence</th>
-              <th scope="col" aria-label="source" />
-            </tr>
-          </thead>
-          <tbody>
-            {lab.results.map((r, i) => (
-              <LabRow
-                key={`${r.test_name}-${i}`}
-                result={r}
-                fieldPath={`results[${i}].value`}
-                sourceCtx={sourceCtx}
-              />
-            ))}
-          </tbody>
-        </table>
-      )}
+      {lab.results.length > 0 ? (
+        <div className="extraction-panel__table-wrap">
+          <table className="extraction-panel__table">
+            <thead>
+              <tr>
+                <th scope="col">Test</th>
+                <th scope="col">Value</th>
+                <th scope="col">Reference</th>
+                <th scope="col">Confidence</th>
+                <th scope="col" aria-label="source" />
+              </tr>
+            </thead>
+            <tbody>
+              {lab.results.map((r, i) => (
+                <LabRow
+                  key={`${r.test_name}-${i}`}
+                  result={r}
+                  fieldPath={`results[${i}].value`}
+                  sourceCtx={sourceCtx}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -654,20 +654,22 @@ function ReferralPanel({
 
       {referral.pertinent_labs.length > 0 ? (
         <Section title={`Pertinent labs (${referral.pertinent_labs.length})`}>
-          <table className="extraction-panel__table">
-            <thead>
-              <tr>
-                <th scope="col">Test</th>
-                <th scope="col">Value</th>
-                <th scope="col">Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {referral.pertinent_labs.map((lab, i) => (
-                <ReferralLabRow key={`${lab.name}-${i}`} lab={lab} />
-              ))}
-            </tbody>
-          </table>
+          <div className="extraction-panel__table-wrap">
+            <table className="extraction-panel__table">
+              <thead>
+                <tr>
+                  <th scope="col">Test</th>
+                  <th scope="col">Value</th>
+                  <th scope="col">Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {referral.pertinent_labs.map((lab, i) => (
+                  <ReferralLabRow key={`${lab.name}-${i}`} lab={lab} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Section>
       ) : null}
 

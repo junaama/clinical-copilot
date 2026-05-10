@@ -3,6 +3,7 @@
  */
 
 import type { FhirPatient } from '../fhir-types';
+import { cleanSyntheticNameSuffixes } from '../display-name';
 
 /** UI DTO for the patient identity header. */
 export interface PatientHeaderData {
@@ -48,7 +49,7 @@ function extractFullName(patient: FhirPatient): string {
 
   // If text is provided, use it directly
   if (name.text) {
-    return name.text;
+    return cleanSyntheticNameSuffixes(name.text);
   }
 
   const parts: string[] = [];
@@ -65,7 +66,7 @@ function extractFullName(patient: FhirPatient): string {
     parts.push(name.suffix.join(' '));
   }
 
-  return parts.length > 0 ? parts.join(' ') : 'Unknown Patient';
+  return parts.length > 0 ? cleanSyntheticNameSuffixes(parts.join(' ')) : 'Unknown Patient';
 }
 
 /** Format FHIR gender code into display text. */

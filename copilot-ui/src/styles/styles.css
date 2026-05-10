@@ -172,8 +172,18 @@ body {
 .emr-count { color: var(--ink-3); font-size: 12px; }
 
 /* tables */
+.emr-table-scroll {
+  height: 220px;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(46, 65, 82, 0.28) transparent;
+}
 .emr-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .emr-tbl thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   text-align: left; font-weight: 600; font-size: 12px; color: var(--ink-2);
   padding: 8px 8px; border-bottom: 1px solid var(--line); background: var(--card);
 }
@@ -380,7 +390,15 @@ body {
   margin: 6px 0; padding-left: 8px;
   border-left: 2px solid var(--line); color: var(--ink-2);
 }
-.agent-lead-md table { border-collapse: collapse; margin: 6px 0; font-size: 12px; }
+.agent-lead-md table {
+  display: block;
+  max-height: 220px;
+  overflow: auto;
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 12px;
+  scrollbar-width: thin;
+}
 .agent-lead-md th, .agent-lead-md td { border: 1px solid var(--line); padding: 4px 6px; text-align: left; }
 .agent-caret { display: inline-block; margin-left: 1px; color: var(--accent); animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
@@ -1217,11 +1235,28 @@ body {
   border-collapse: collapse;
   font-size: 12px;
 }
+.extraction-panel__table-wrap {
+  height: 220px;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: #fff;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(46, 65, 82, 0.28) transparent;
+}
 .extraction-panel__table th,
 .extraction-panel__table td {
   text-align: left;
   padding: 6px 8px;
   border-bottom: 1px solid var(--line-2);
+}
+.extraction-panel__table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+  box-shadow: 0 1px 0 var(--line-2);
 }
 .extraction-panel__value {
   font-variant-numeric: tabular-nums;

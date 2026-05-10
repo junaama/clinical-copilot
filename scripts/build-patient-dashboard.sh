@@ -29,6 +29,6 @@ if [[ -z "${container_id}" ]]; then
     exit 0
 fi
 
-docker exec "${container_id}" mkdir -p "${OPENEMR_ASSETS_DIR}"
+docker exec "${container_id}" sh -c "rm -rf '${OPENEMR_ASSETS_DIR}' && mkdir -p '${OPENEMR_ASSETS_DIR}'"
 docker cp "${DASHBOARD_ASSETS}/." "${container_id}:${OPENEMR_ASSETS_DIR}/"
 echo "synced patient dashboard assets into development OpenEMR container."

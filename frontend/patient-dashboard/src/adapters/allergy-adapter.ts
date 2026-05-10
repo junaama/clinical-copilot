@@ -7,11 +7,17 @@ import type { FhirAllergyIntolerance, FhirBundle, FhirCodeableConcept } from '..
 export interface AllergyItem {
   readonly id: string;
   readonly title: string;
+  readonly titleQualifier: string | null;
   readonly clinicalStatus: string;
   readonly category: string;
   readonly criticality: string;
   readonly recordedDate: string | null;
   readonly reaction: string | null;
+}
+
+interface DisplayParts {
+  readonly title: string;
+  readonly qualifier: string | null;
 }
 
 /** Extract display text from a CodeableConcept, preferring text over coding. */
@@ -20,6 +26,19 @@ export function extractCodeableDisplay(concept: FhirCodeableConcept | undefined)
   if (concept.text) return concept.text;
   const display = concept.coding?.[0]?.display;
   return display ?? 'Unknown';
+}
+
+/** Split SNOMED-style semantic tags like "Peanut (substance)" for UI display. */
+export function splitTrailingQualifier(display: string): DisplayParts {
+  const match = display.match(/^(.+?)\s+\(([^()]+)\)$/);
+  if (!match) {
+    return { title: display, qualifier: null };
+  }
+
+  return {
+    title: match[1]?.trim() ?? display,
+    qualifier: match[2]?.trim() ?? null,
+  };
 }
 
 /** Extract the first coding code from a CodeableConcept. */
@@ -36,9 +55,12 @@ export function adaptAllergies(bundle: FhirBundle<FhirAllergyIntolerance>): Alle
 }
 
 function adaptOneAllergy(allergy: FhirAllergyIntolerance): AllergyItem {
+  const display = splitTrailingQualifier(extractCodeableDisplay(allergy.code));
+
   return {
     id: allergy.id ?? '',
-    title: extractCodeableDisplay(allergy.code),
+    title: display.title,
+    titleQualifier: display.qualifier,
     clinicalStatus: extractCodingCode(allergy.clinicalStatus),
     category: allergy.category?.[0] ?? 'unknown',
     criticality: allergy.criticality ?? 'unknown',

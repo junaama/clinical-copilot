@@ -68,7 +68,7 @@ describe('MedicationCard', () => {
     expect(screen.getByText('Lisinopril 10mg')).toBeInTheDocument();
   });
 
-  it('shows empty state when bundle has no entries', async () => {
+  it('does not render when bundle has no entries', async () => {
     mockFetch(EMPTY_BUNDLE);
 
     render(
@@ -81,7 +81,8 @@ describe('MedicationCard', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/no medications recorded/i)).toBeInTheDocument();
+      expect(screen.queryByTestId('card-medications')).not.toBeInTheDocument();
+      expect(screen.queryByText(/no medications recorded/i)).not.toBeInTheDocument();
     });
   });
 

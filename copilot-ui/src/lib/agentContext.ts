@@ -25,6 +25,8 @@
  * separately.
  */
 
+import { cleanSyntheticNameSuffixes } from './displayName';
+
 export type AgentContextKind = 'no-patient' | 'panel-capable' | 'patient-focused';
 
 export interface AgentContextInputs {
@@ -120,7 +122,7 @@ const PANEL_DISABLED_REASON =
 export function derivePatientPromptPills(
   patientName: string | undefined,
 ): readonly PromptPill[] {
-  const trimmed = patientName?.trim() ?? '';
+  const trimmed = cleanSyntheticNameSuffixes(patientName?.trim() ?? '');
   const hasClinicalName = trimmed.length > 0 && !trimmed.startsWith('Patient/');
   if (hasClinicalName) {
     return [
@@ -176,7 +178,7 @@ export function deriveAgentContext(
   );
 
   if (hasPatient) {
-    const name = inputs.focusPatientName?.trim();
+    const name = cleanSyntheticNameSuffixes(inputs.focusPatientName?.trim() ?? '');
     const hasClinicalName = !!name && name.length > 0 && !name.startsWith('Patient/');
     const subjectPossessive = hasClinicalName ? `${name}'s` : "the patient's";
     return {

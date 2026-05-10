@@ -36,6 +36,7 @@ import { TweaksPanel } from './components/Tweaks/TweaksPanel';
 import { TweakButton, TweakColor, TweakRadio, TweakSection, TweakToggle } from './components/Tweaks/controls';
 import { useTweaks, type TweakValues } from './components/Tweaks/useTweaks';
 import { useSession } from './hooks/useSession';
+import { formatPanelPatientName } from './lib/displayName';
 import { parseSmartLaunch, type SmartLaunchContext } from './api/smart';
 import type { ChatResponse, Citation } from './api/types';
 import { planCitationClick } from './api/citations';
@@ -291,7 +292,7 @@ function StandaloneApp(): JSX.Element {
       // returns and confirms patient_id.
       setFocusPatient({
         id: patient.patient_id,
-        name: `${patient.given_name} ${patient.family_name}`,
+        name: formatPanelPatientName(patient.given_name, patient.family_name),
       });
       setExtraction(null);
       setExtractionSourceFile(null);

@@ -117,20 +117,23 @@ describe('App', () => {
     expect(screen.getByTestId('patient-mrn')).toHaveTextContent('MRN-10042');
   });
 
-  it('renders the six clinical cards including encounter history and care team', async () => {
+  it('omits clinical cards when their search bundles are empty', async () => {
     window.__OPENEMR_PATIENT_DASHBOARD__ = FIXTURE_CONFIG;
     mockFetchSuccess();
 
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('card-allergies')).toBeInTheDocument();
+      expect(screen.getByTestId('patient-header')).toBeInTheDocument();
     });
 
-    expect(screen.getByTestId('card-problem-list')).toBeInTheDocument();
-    expect(screen.getByTestId('card-medications')).toBeInTheDocument();
-    expect(screen.getByTestId('card-prescriptions')).toBeInTheDocument();
-    expect(screen.getByTestId('card-encounter-history')).toBeInTheDocument();
-    expect(screen.getByTestId('card-care-team')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByTestId('card-allergies')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('card-problem-list')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('card-medications')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('card-prescriptions')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('card-encounter-history')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('card-care-team')).not.toBeInTheDocument();
+    });
   });
 });

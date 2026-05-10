@@ -41,6 +41,7 @@ describe('adaptAllergies', () => {
     expect(result[0]).toEqual<AllergyItem>({
       id: 'allergy-001',
       title: 'Penicillin',
+      titleQualifier: null,
       clinicalStatus: 'active',
       category: 'medication',
       criticality: 'high',
@@ -76,6 +77,17 @@ describe('adaptAllergies', () => {
     };
     const [item] = adaptAllergies(makeBundle([allergy]));
     expect(item.title).toBe('Sulfonamide antibiotics');
+  });
+
+  it('splits a trailing semantic tag into a title qualifier', () => {
+    const allergy: FhirAllergyIntolerance = {
+      resourceType: 'AllergyIntolerance',
+      code: { text: 'Peanut (substance)' },
+    };
+    const [item] = adaptAllergies(makeBundle([allergy]));
+
+    expect(item.title).toBe('Peanut');
+    expect(item.titleQualifier).toBe('substance');
   });
 
   it('falls back to coding display when text is missing', () => {

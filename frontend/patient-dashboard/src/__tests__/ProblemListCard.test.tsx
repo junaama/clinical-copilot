@@ -14,7 +14,7 @@ const FIXTURE_BUNDLE: FhirBundle<FhirCondition> = {
       resource: {
         resourceType: 'Condition',
         id: 'c1',
-        code: { text: 'Type 2 Diabetes Mellitus' },
+        code: { text: 'Type 2 Diabetes Mellitus (finding)' },
         clinicalStatus: { coding: [{ code: 'active' }] },
         onsetDateTime: '2020-03-10',
       },
@@ -53,16 +53,18 @@ describe('ProblemListCard', () => {
     await waitFor(() => {
       expect(screen.getByText('Type 2 Diabetes Mellitus')).toBeInTheDocument();
     });
+    expect(screen.getByText('finding')).toHaveClass('clinical-card__badge--qualifier');
     expect(screen.getByText('Hypertension')).toBeInTheDocument();
   });
 
-  it('shows empty state when bundle has no entries', async () => {
+  it('does not render when bundle has no entries', async () => {
     mockFetch(EMPTY_BUNDLE);
 
     render(<ProblemListCard fhirBaseUrl={FHIR_BASE} patientUuid={PATIENT_UUID} webRoot={WEB_ROOT} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/no problem list recorded/i)).toBeInTheDocument();
+      expect(screen.queryByTestId('card-problem-list')).not.toBeInTheDocument();
+      expect(screen.queryByText(/no problem list recorded/i)).not.toBeInTheDocument();
     });
   });
 

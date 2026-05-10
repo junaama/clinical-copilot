@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEven
 import { sendChat } from '../api/client';
 import type { ChatResponse, Citation } from '../api/types';
 import { deriveAgentContext } from '../lib/agentContext';
+import { cleanSyntheticNameSuffixes } from '../lib/displayName';
 import { AgentMsg, AgentErrorBubble, type AgentMessage } from './AgentMsg';
 import { Launcher } from './Launcher';
 import { Thinking } from './Thinking';
@@ -249,7 +250,7 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
   }, [messages]);
   const fallbackSubtitleLabel =
     agentContext.kind === 'patient-focused'
-      ? `Reading ${patientName}'s record`
+      ? `Reading ${cleanSyntheticNameSuffixes(patientName)}'s record`
       : agentContext.kind === 'panel-capable'
         ? 'Reviewing your panel'
         : 'No patient selected';

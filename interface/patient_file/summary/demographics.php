@@ -213,11 +213,13 @@ $cssFile = '';
 if (is_dir($assetsDir)) {
     $jsFiles = glob($assetsDir . '/index-*.js');
     if (!empty($jsFiles)) {
+        usort($jsFiles, static fn(string $left, string $right): int => filemtime($right) <=> filemtime($left));
         $jsFile = $assetsPath . '/assets/' . basename($jsFiles[0]);
     }
 
     $cssFiles = glob($assetsDir . '/index-*.css');
     if (!empty($cssFiles)) {
+        usort($cssFiles, static fn(string $left, string $right): int => filemtime($right) <=> filemtime($left));
         $cssFile = $assetsPath . '/assets/' . basename($cssFiles[0]);
     }
 }

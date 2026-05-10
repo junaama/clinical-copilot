@@ -54,6 +54,29 @@ describe('PanelView', () => {
     expect(screen.getByText(/Last admit 2026-04-30/)).toBeInTheDocument();
   });
 
+  it('cleans synthetic numeric suffixes from roster display names', async () => {
+    mockFetchOnce({
+      user_id: 42,
+      patients: [
+        {
+          patient_id: 'fixture-1',
+          given_name: 'Patricia625 Raquel318',
+          family_name: 'Covarrubias273',
+          birth_date: '1958-03-12',
+          last_admission: null,
+          room: null,
+        },
+      ],
+    });
+
+    render(<PanelView />);
+
+    expect(
+      await screen.findByText('Covarrubias, Patricia Raquel'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Covarrubias273/)).not.toBeInTheDocument();
+  });
+
   it('shows the empty-state copy when the panel is empty', async () => {
     mockFetchOnce({ user_id: 42, patients: [] });
 

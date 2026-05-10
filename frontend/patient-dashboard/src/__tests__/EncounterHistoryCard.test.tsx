@@ -65,13 +65,14 @@ describe('EncounterHistoryCard', () => {
     expect(screen.getByText(/Hypertension follow-up/)).toBeInTheDocument();
   });
 
-  it('shows empty state when bundle has no entries', async () => {
+  it('does not render when bundle has no entries', async () => {
     mockFetch(EMPTY_BUNDLE);
 
     render(<EncounterHistoryCard fhirBaseUrl={FHIR_BASE} patientUuid={PATIENT_UUID} webRoot={WEB_ROOT} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/no encounter history recorded/i)).toBeInTheDocument();
+      expect(screen.queryByTestId('card-encounter-history')).not.toBeInTheDocument();
+      expect(screen.queryByText(/no encounter history recorded/i)).not.toBeInTheDocument();
     });
   });
 

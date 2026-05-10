@@ -22,6 +22,10 @@ export default function ClinicalCard({
   isEmpty,
   children,
 }: ClinicalCardProps) {
+  if (!loading && !error && isEmpty) {
+    return null;
+  }
+
   return (
     <section className="clinical-card" data-testid={`card-${title.toLowerCase().replace(/\s+/g, '-')}`}>
       <div className="clinical-card__header">
@@ -40,9 +44,6 @@ export default function ClinicalCard({
           <div className="clinical-card__error" role="alert">
             <span>Unable to load {title.toLowerCase()}: {error}</span>
           </div>
-        )}
-        {!loading && !error && isEmpty && (
-          <p className="clinical-card__empty">No {title.toLowerCase()} recorded.</p>
         )}
         {!loading && !error && !isEmpty && children}
       </div>
