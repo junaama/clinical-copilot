@@ -355,7 +355,7 @@ function StandaloneApp(): JSX.Element {
             showCitations={true}
             accent="#4abfac"
             conversationId={conversationId}
-            patientId=""
+            patientId={focusPatient?.id ?? ''}
             userId=""
             smartAccessToken=""
             patientName={focusPatient?.name ?? ''}
