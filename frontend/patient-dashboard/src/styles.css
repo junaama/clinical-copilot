@@ -62,6 +62,7 @@ body {
 }
 
 .legacy-link,
+.agent-link,
 .clinical-card__edit-link,
 .care-team__edit-btn {
   color: var(--dashboard-accent);
@@ -71,6 +72,7 @@ body {
 }
 
 .legacy-link:hover,
+.agent-link:hover,
 .clinical-card__edit-link:hover,
 .care-team__edit-btn:hover {
   color: var(--dashboard-accent-strong);
