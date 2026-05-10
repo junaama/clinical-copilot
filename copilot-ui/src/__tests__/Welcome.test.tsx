@@ -29,13 +29,11 @@ describe('Welcome (issue 043, no-patient gating)', () => {
       expect(brief?.title).toMatch(/select a patient/i);
     });
 
-    it('renders the panel suggestion as disabled when no panel surface (AC3)', () => {
+    it('does not render the panel suggestion while the shortcut is disabled', () => {
       render(<Welcome context={context} onPick={vi.fn()} />);
-      const attention = screen
-        .getByText('Who needs attention first?')
-        .closest('button');
-      expect(attention).not.toBeNull();
-      expect(attention).toBeDisabled();
+      expect(
+        screen.queryByText('Who needs attention first?'),
+      ).not.toBeInTheDocument();
     });
 
     it('disabled patient pill does not invoke onPick when clicked', async () => {
@@ -54,14 +52,11 @@ describe('Welcome (issue 043, no-patient gating)', () => {
       hasPanelSurface: true,
     });
 
-    it('renders the panel suggestion as enabled (AC3)', () => {
+    it('does not render the panel suggestion while the shortcut is disabled', () => {
       render(<Welcome context={context} onPick={vi.fn()} />);
-      const attention = screen
-        .getByText('Who needs attention first?')
-        .closest('button');
-      expect(attention).not.toBeNull();
-      expect(attention).not.toBeDisabled();
-      expect(attention).toHaveAttribute('aria-disabled', 'false');
+      expect(
+        screen.queryByText('Who needs attention first?'),
+      ).not.toBeInTheDocument();
     });
 
     it('keeps the patient pills disabled with a reason (AC2)', () => {
@@ -71,12 +66,13 @@ describe('Welcome (issue 043, no-patient gating)', () => {
       expect(brief?.title).toMatch(/select a patient/i);
     });
 
-    it('forwards the panel suggestion label on click', async () => {
+    it('does not forward the panel suggestion while the shortcut is disabled', () => {
       const onPick = vi.fn();
-      const user = userEvent.setup();
       render(<Welcome context={context} onPick={onPick} />);
-      await user.click(screen.getByText('Who needs attention first?'));
-      expect(onPick).toHaveBeenCalledWith('Who needs attention first?');
+      expect(
+        screen.queryByText('Who needs attention first?'),
+      ).not.toBeInTheDocument();
+      expect(onPick).not.toHaveBeenCalled();
     });
 
     it('does not say "this patient" in the welcome subcopy (AC1)', () => {
@@ -95,16 +91,15 @@ describe('Welcome (issue 043, no-patient gating)', () => {
       hasPanelSurface: true,
     });
 
-    it('enables both the patient and panel suggestions', () => {
+    it('enables patient suggestions while the panel shortcut is disabled', () => {
       render(<Welcome context={context} onPick={vi.fn()} />);
       const brief = screen
         .getByText('Get brief on Robert Hayes')
         .closest('button');
-      const attention = screen
-        .getByText('Who needs attention first?')
-        .closest('button');
       expect(brief).not.toBeDisabled();
-      expect(attention).not.toBeDisabled();
+      expect(
+        screen.queryByText('Who needs attention first?'),
+      ).not.toBeInTheDocument();
     });
 
     it("forwards the brief pill's promptText on click (issue 044)", async () => {

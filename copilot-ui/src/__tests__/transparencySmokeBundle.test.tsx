@@ -317,14 +317,15 @@ describe('transparency-smoke AC5: no-patient welcome + composer gating', () => {
     expect(visible).not.toMatch(/this patient/i);
   });
 
-  it('panel-capable context: panel chip enabled, patient pills disabled with reason', () => {
+  it('panel-capable context: panel chip hidden, patient pills disabled with reason', () => {
     const context = deriveAgentContext({
       focusPatientId: '',
       hasPanelSurface: true,
     });
     render(<Welcome context={context} onPick={vi.fn()} />);
-    const panel = screen.getByText('Who needs attention first?').closest('button');
-    expect(panel).not.toBeDisabled();
+    expect(
+      screen.queryByText('Who needs attention first?'),
+    ).not.toBeInTheDocument();
     const brief = screen.getByText('Get brief on patient').closest('button');
     expect(brief).toBeDisabled();
     expect(brief?.title ?? '').toMatch(/select a patient/i);
