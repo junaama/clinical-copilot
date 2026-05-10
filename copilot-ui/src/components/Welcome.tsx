@@ -21,12 +21,13 @@ export interface SuggestionChip {
   readonly promptText?: string;
 }
 
-/** Panel-wide prompts that the W-1 panel route can answer without a
- *  selected patient. Disabled when the surrounding shell does not mount
- *  a panel surface. */
-export const PANEL_SUGGESTIONS: readonly SuggestionChip[] = [
-  { id: 'attention', label: 'Who needs attention first?', icon: '◐' },
-];
+// Temporarily disabled: the "Who needs attention first?" API path is not
+// reliable enough for the agent panel shortcut yet. Keep the definition close
+// to the render site so the pill can be restored once the backend path is
+// fixed.
+// export const PANEL_SUGGESTIONS: readonly SuggestionChip[] = [
+//   { id: 'attention', label: 'Who needs attention first?', icon: '◐' },
+// ];
 
 interface WelcomeProps {
   readonly context: AgentContextDecision;
@@ -42,6 +43,7 @@ export function Welcome({ context, onPick }: WelcomeProps): JSX.Element {
       <h3>{context.welcomeHeadline}</h3>
       <p>{context.welcomeSubcopy}</p>
       <div className="agent-chips">
+        {/* Temporarily disabled with PANEL_SUGGESTIONS above.
         {PANEL_SUGGESTIONS.map((s) => (
           <SuggestionButton
             key={s.id}
@@ -51,7 +53,7 @@ export function Welcome({ context, onPick }: WelcomeProps): JSX.Element {
             kind="panel"
             onPick={onPick}
           />
-        ))}
+        ))} */}
         {context.patientPromptPills.map((pill: PromptPill) => (
           <SuggestionButton
             key={pill.id}

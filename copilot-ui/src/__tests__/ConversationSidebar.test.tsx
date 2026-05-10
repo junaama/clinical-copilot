@@ -43,6 +43,14 @@ function countConversationFetches(mock: ReturnType<typeof vi.fn>): number {
   }).length;
 }
 
+function countPanelFetches(mock: ReturnType<typeof vi.fn>): number {
+  return mock.mock.calls.filter((call) => {
+    const input = call[0] as RequestInfo | URL;
+    const url = input instanceof Request ? input.url : String(input);
+    return url.endsWith('/panel');
+  }).length;
+}
+
 describe('ConversationSidebar', () => {
   beforeEach(() => {
     globalThis.fetch = vi.fn().mockResolvedValue({
@@ -287,7 +295,7 @@ describe('ConversationSidebar', () => {
   });
 
   it('renders the care team roster in a collapsible section', async () => {
-    installFetchMock(
+    const mock = installFetchMock(
       [{ ok: true, body: { conversations: [] } }],
       {
         user_id: 42,
@@ -321,6 +329,12 @@ describe('ConversationSidebar', () => {
     await userEvent.click(toggle);
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByText('Perez, Eduardo')).not.toBeInTheDocument();
+    expect(screen.getByText('Perez, Eduardo')).not.toBeVisible();
+
+    await userEvent.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Perez, Eduardo')).toBeVisible();
+    expect(countPanelFetches(mock)).toBe(1);
   });
 });

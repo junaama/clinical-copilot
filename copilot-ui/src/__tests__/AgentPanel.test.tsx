@@ -27,7 +27,6 @@ function PanelHarness(props: PanelHarnessProps): JSX.Element {
       hasPanelSurface={props.hasPanelSurface}
       messages={messages}
       setMessages={() => {}}
-      onClose={() => {}}
       onCite={() => {}}
     />
   );
@@ -120,7 +119,6 @@ describe('AgentPanel evidence slot', () => {
         hasPanelSurface={true}
         messages={[]}
         setMessages={() => {}}
-        onClose={() => {}}
         onCite={() => {}}
         evidenceSlot={<section aria-label="uploaded extraction">Lab results</section>}
       />,

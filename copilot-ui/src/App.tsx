@@ -75,10 +75,6 @@ function navigateToConversation(conversationId: string): void {
   window.history.pushState({}, '', `${CONVERSATION_PATH_PREFIX}${conversationId}`);
 }
 
-function navigateToRoot(): void {
-  window.history.pushState({}, '', '/');
-}
-
 /**
  * Detect whether SMART launch params are present in the URL (EHR-launch mode).
  */
@@ -370,9 +366,6 @@ function StandaloneApp(): JSX.Element {
             pendingUserMessage={pendingMessage}
             onPendingMessageHandled={() => setPendingMessage(null)}
             onResponse={handleChatResponse}
-            onClose={() => {
-              navigateToRoot();
-            }}
             onCite={() => {}}
             composerSlot={
               <FileUploadWidget
@@ -497,7 +490,6 @@ function EhrLaunchApp({ smart }: { readonly smart: SmartLaunchContext }): JSX.El
         hasPanelSurface={false}
         messages={messages}
         setMessages={(updater) => setMessages((prev) => updater(prev))}
-        onClose={() => setOpen(false)}
         onCite={onCite}
       />
 

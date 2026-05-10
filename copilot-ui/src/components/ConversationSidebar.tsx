@@ -91,11 +91,13 @@ export function ConversationSidebar(
             {careTeamOpen ? '-' : '+'}
           </span>
         </button>
-        {careTeamOpen ? (
-          <div id="conv-sidebar-care-team" className="conv-sidebar__care-body">
-            <PanelView onPatientClick={onPatientClick} />
-          </div>
-        ) : null}
+        <div
+          id="conv-sidebar-care-team"
+          className="conv-sidebar__care-body"
+          hidden={!careTeamOpen}
+        >
+          <PanelView onPatientClick={onPatientClick} />
+        </div>
       </section>
 
       <div className="conv-sidebar__header">

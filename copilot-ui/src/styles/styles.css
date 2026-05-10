@@ -844,7 +844,9 @@ body {
 .app-shell {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   background: #fff;
 }
 .app-shell__header {
@@ -854,6 +856,7 @@ body {
   padding: 10px 20px;
   border-bottom: 1px solid var(--line);
   background: var(--emr-head-bg);
+  flex-shrink: 0;
 }
 .app-shell__brand {
   font-size: 15px;
@@ -889,6 +892,7 @@ body {
   flex-direction: column;
   position: relative;
   min-height: 0;
+  overflow: hidden;
 }
 /* In standalone mode the agent panel fills the shell body */
 .app-shell__body .agent-panel {
@@ -965,7 +969,9 @@ body {
 .standalone-body {
   flex: 1;
   display: flex;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 .standalone-main {
   flex: 1;
@@ -973,6 +979,7 @@ body {
   flex-direction: column;
   position: relative;
   min-width: 0;
+  min-height: 0;
 }
 
 /* ─── Conversation sidebar (issue 004) ───────────────────────── */
@@ -984,6 +991,7 @@ body {
   flex-direction: column;
   overflow: hidden;
   flex-shrink: 0;
+  min-height: 0;
 }
 .conv-sidebar__care {
   border-bottom: 1px solid var(--line-2);
@@ -1025,6 +1033,7 @@ body {
 .conv-sidebar__care-body {
   max-height: min(42vh, 360px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-bottom: 8px;
 }
 .conv-sidebar__care-body .panel-view {
@@ -1101,6 +1110,7 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .conv-sidebar__list {
   list-style: none;

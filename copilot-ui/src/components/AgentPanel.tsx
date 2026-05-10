@@ -67,7 +67,6 @@ export interface AgentPanelProps {
   readonly setMessages: (
     update: (prev: readonly ChatMessage[]) => readonly ChatMessage[],
   ) => void;
-  readonly onClose: () => void;
   readonly onCite: (citation: Citation) => void;
   readonly pendingUserMessage?: PendingUserMessage | null;
   readonly onPendingMessageHandled?: () => void;
@@ -97,7 +96,6 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
     hasPanelSurface,
     messages,
     setMessages,
-    onClose,
     onCite,
     pendingUserMessage,
     onPendingMessageHandled,
@@ -286,16 +284,6 @@ export function AgentPanel(props: AgentPanelProps): JSX.Element | null {
             <div className="agent-title">Chart Agent</div>
             <div className="agent-sub" data-testid="agent-subtitle">{subtitle}</div>
           </div>
-        </div>
-        <div className="agent-hd-r">
-          <button
-            className="agent-icon close"
-            title="Close"
-            aria-label="close"
-            onClick={onClose}
-          >
-            ✕
-          </button>
         </div>
       </header>
 
