@@ -172,6 +172,27 @@ async def test_cache_hit_returns_cached_row_without_panel_fetch() -> None:
     assert result["patients"][0]["patient_id"] == "fixture-3"
 
 
+async def test_cache_hit_matches_display_cleaned_synthetic_name() -> None:
+    """Display-cleaned names from the UI still resolve against raw roster rows."""
+    set_active_registry(
+        {
+            "fixture-synthetic": {
+                "patient_id": "fixture-synthetic",
+                "given_name": "Chang742",
+                "family_name": "Durgan921",
+                "birth_date": "1972-03-07",
+            }
+        }
+    )
+    tool = _tool()
+
+    result = await tool.ainvoke({"name": "Chang Durgan"})
+
+    assert result["status"] == "resolved"
+    assert result["sources_checked"] == ["CareTeam (cached)"]
+    assert result["patients"][0]["patient_id"] == "fixture-synthetic"
+
+
 async def test_ambiguous_when_multiple_panel_patients_share_substring() -> None:
     """Admin's panel contains all five patients. ``a`` matches multiple
     given/family names, so the resolver returns ambiguous candidates."""

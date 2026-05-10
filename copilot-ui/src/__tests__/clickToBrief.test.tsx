@@ -52,8 +52,8 @@ function installFetchMock(): FetchStub {
           patients: [
             {
               patient_id: 'fixture-3',
-              given_name: 'Robert',
-              family_name: 'Hayes',
+              given_name: 'Robert123',
+              family_name: 'Hayes456',
               birth_date: '1949-11-04',
               last_admission: null,
               room: null,
@@ -149,8 +149,10 @@ describe('patient selection focuses patient without auto-brief (issue 044)', () 
     await waitFor(() => expect(stub.chatBodies.length).toBeGreaterThanOrEqual(1));
     const body = JSON.parse(stub.chatBodies[stub.chatBodies.length - 1] ?? '{}') as {
       message?: string;
+      patient_id?: string;
     };
     expect(body.message).toBe('Give me a brief on Robert Hayes.');
+    expect(body.patient_id).toBe('fixture-3');
   });
 
   it('clicking the medications pill sends the medications prompt (AC3/AC4)', async () => {

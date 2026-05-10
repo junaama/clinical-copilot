@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import contextvars
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -358,24 +359,33 @@ def _result_from_entries(
 # Patient name matching
 # ---------------------------------------------------------------------------
 
+_SYNTHETIC_NAME_TOKEN_RE = re.compile(r"\b([A-Za-zÀ-ÖØ-öø-ÿ'\u2019-]+)\d+\b")
+
+
+def _normalize_patient_name_for_match(value: str) -> str:
+    """Strip synthetic Synthea/OpenEMR suffixes before name matching."""
+    cleaned = _SYNTHETIC_NAME_TOKEN_RE.sub(r"\1", value)
+    return " ".join(cleaned.lower().split())
+
 
 def _patient_matches_name(
     patient: dict[str, Any], name_lower: str
 ) -> bool:
     """Case-insensitive name match: family, given, full-name, or substring."""
-    given = (patient.get("given_name") or "").lower()
-    family = (patient.get("family_name") or "").lower()
+    query = _normalize_patient_name_for_match(name_lower)
+    given = _normalize_patient_name_for_match(patient.get("given_name") or "")
+    family = _normalize_patient_name_for_match(patient.get("family_name") or "")
     full_a = f"{given} {family}".strip()
     full_b = f"{family} {given}".strip()
-    if not name_lower:
+    if not query:
         return False
     return (
-        name_lower == family
-        or name_lower == given
-        or name_lower in full_a
-        or name_lower in full_b
-        or name_lower in family
-        or name_lower in given
+        query == family
+        or query == given
+        or query in full_a
+        or query in full_b
+        or query in family
+        or query in given
     )
 
 
